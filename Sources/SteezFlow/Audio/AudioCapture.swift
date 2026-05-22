@@ -13,10 +13,32 @@ public final class AudioCapture {
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
+    private var audioFile: AVAudioFile?
     private var tapCount = 0
     private var emitCount = 0
 
     public init() {}
+
+    /// Per-recording .wav of the converted (16 kHz mono Float32) stream — exactly
+    /// what the analyzer sees. Lives in Caches; dogfooding + future eval material.
+    private static func openRecordingFile(format: AVAudioFormat) -> AVAudioFile? {
+        guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let dir = cachesDir.appendingPathComponent("SteezFlow/recordings", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
+        let url = dir.appendingPathComponent("\(formatter.string(from: Date())).wav")
+        do {
+            let file = try AVAudioFile(forWriting: url, settings: format.settings)
+            log.info("recording to \(url.lastPathComponent, privacy: .public)")
+            return file
+        } catch {
+            log.error("audio file open failed: \(String(describing: error), privacy: .public)")
+            return nil
+        }
+    }
 
     /// Begin capture. Converts the input node's native format to `targetFormat` via
     /// `AVAudioConverter` and emits converted buffers on `onBuffer`. RMS amplitude is
@@ -40,6 +62,7 @@ public final class AudioCapture {
 
         tapCount = 0
         emitCount = 0
+        audioFile = Self.openRecordingFile(format: targetFormat)
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
@@ -78,6 +101,9 @@ public final class AudioCapture {
             }
 
             self.emitCount += 1
+            if let file = self.audioFile {
+                try? file.write(from: output)
+            }
             self.onBuffer?(output)
         }
 
@@ -101,6 +127,8 @@ public final class AudioCapture {
         engine?.stop()
         engine = nil
         converter = nil
+        // Nil after removeTap so an in-flight tap can't write to a closed file.
+        audioFile = nil
         Self.log.info("capture stopped (taps=\(self.tapCount, privacy: .public) emits=\(self.emitCount, privacy: .public))")
     }
 
