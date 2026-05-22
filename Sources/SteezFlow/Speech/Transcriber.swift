@@ -23,6 +23,7 @@ public final class Transcriber: @unchecked Sendable {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var eventContinuation: AsyncStream<TranscriptEvent>.Continuation?
     private var drainTask: Task<Void, Never>?
+    private var hasReceivedBuffer = false
 
     public init(locale: Locale = Locale(identifier: "en-US")) {
         self.locale = locale
@@ -82,6 +83,7 @@ public final class Transcriber: @unchecked Sendable {
             self.inputContinuation = inputCont
             self.eventContinuation = eventCont
             self.drainTask = drain
+            self.hasReceivedBuffer = false
         }
 
         Self.log.info("session started for locale \(self.locale.identifier, privacy: .public)")
@@ -90,45 +92,50 @@ public final class Transcriber: @unchecked Sendable {
 
     /// Feed a captured audio buffer into the active session. Thread-safe.
     public func accept(_ buffer: AVAudioPCMBuffer) {
-        let continuation = lock.withLock { inputContinuation }
+        let continuation = lock.withLock { () -> AsyncStream<AnalyzerInput>.Continuation? in
+            if inputContinuation != nil { hasReceivedBuffer = true }
+            return inputContinuation
+        }
         continuation?.yield(AnalyzerInput(buffer: buffer))
     }
 
     /// Signal end of input; the session will emit a final result then complete the stream.
-    /// Pass `aborted: true` when no meaningful audio was fed (race between hotkey
-    /// press/release and analyzer start) — `finalizeAndFinishThroughEndOfInput()`
-    /// hangs in that case because there's no input to finalize.
-    public func finish(aborted: Bool = false) async {
-        let (analyzer, inputCont, drain) = lock.withLock {
-            () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?) in
+    /// If no audio buffers ever reached the analyzer this call falls back to
+    /// `cancelAndFinishNow()` — `finalizeAndFinishThroughEndOfInput()` hangs on
+    /// empty input, which can happen on a sub-150 ms fn press where audio.start
+    /// raced ahead of the first tap callback.
+    public func finish() async {
+        let (analyzer, inputCont, drain, hadInput) = lock.withLock {
+            () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?, Bool) in
             let analyzer = self.analyzer
             let inputCont = self.inputContinuation
             let drain = self.drainTask
+            let hadInput = self.hasReceivedBuffer
             self.analyzer = nil
             self.inputContinuation = nil
             self.drainTask = nil
             // Keep eventContinuation alive so the drain Task can finish it.
             self.eventContinuation = nil
-            return (analyzer, inputCont, drain)
+            return (analyzer, inputCont, drain, hadInput)
         }
 
         inputCont?.finish()
 
         if let analyzer {
-            if aborted {
-                await analyzer.cancelAndFinishNow()
-            } else {
+            if hadInput {
                 do {
                     try await analyzer.finalizeAndFinishThroughEndOfInput()
                 } catch {
                     let message = String(describing: error)
                     Self.log.error("finalize failed: \(message, privacy: .public)")
                 }
+            } else {
+                await analyzer.cancelAndFinishNow()
             }
         }
 
         await drain?.value
-        Self.log.info("session finished (aborted=\(aborted, privacy: .public)) locale=\(self.locale.identifier, privacy: .public)")
+        Self.log.info("session finished (hadInput=\(hadInput, privacy: .public)) locale=\(self.locale.identifier, privacy: .public)")
     }
 }
 

@@ -147,7 +147,7 @@ public final class AppCoordinator: ObservableObject {
                 // and cancel so the drain completes immediately — finalize would hang
                 // waiting on input that will never arrive.
                 sessionReady = true
-                await transcriber.finish(aborted: true)
+                await transcriber.finish()
             } else {
                 audio.onBuffer = { buffer in transcriber.accept(buffer) }
                 audio.onAmplitude = { [weak self] amp in
@@ -160,7 +160,7 @@ public final class AppCoordinator: ObservableObject {
                 // had zero callbacks by now, so this is also an abort.
                 if finishRequested {
                     audio.stop()
-                    await transcriber.finish(aborted: true)
+                    await transcriber.finish()
                 }
             }
 
