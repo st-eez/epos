@@ -144,9 +144,10 @@ public final class AppCoordinator: ObservableObject {
 
             if finishRequested {
                 // User released fn before the analyzer was installed. Skip audio entirely
-                // and finalize so the drain completes immediately.
+                // and cancel so the drain completes immediately — finalize would hang
+                // waiting on input that will never arrive.
                 sessionReady = true
-                await transcriber.finish()
+                await transcriber.finish(aborted: true)
             } else {
                 audio.onBuffer = { buffer in transcriber.accept(buffer) }
                 audio.onAmplitude = { [weak self] amp in
@@ -155,10 +156,11 @@ public final class AppCoordinator: ObservableObject {
                 try audio.start(targetFormat: format)
                 sessionReady = true
                 // If finish landed between sessionReady=false and audio.start, finishRecording
-                // skipped its own audio.stop+finish path; cover the gap here.
+                // skipped its own audio.stop+finish path; cover the gap here. Tap may have
+                // had zero callbacks by now, so this is also an abort.
                 if finishRequested {
                     audio.stop()
-                    await transcriber.finish()
+                    await transcriber.finish(aborted: true)
                 }
             }
 

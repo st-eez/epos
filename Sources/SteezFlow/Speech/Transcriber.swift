@@ -95,7 +95,10 @@ public final class Transcriber: @unchecked Sendable {
     }
 
     /// Signal end of input; the session will emit a final result then complete the stream.
-    public func finish() async {
+    /// Pass `aborted: true` when no meaningful audio was fed (race between hotkey
+    /// press/release and analyzer start) — `finalizeAndFinishThroughEndOfInput()`
+    /// hangs in that case because there's no input to finalize.
+    public func finish(aborted: Bool = false) async {
         let (analyzer, inputCont, drain) = lock.withLock {
             () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?) in
             let analyzer = self.analyzer
@@ -112,16 +115,20 @@ public final class Transcriber: @unchecked Sendable {
         inputCont?.finish()
 
         if let analyzer {
-            do {
-                try await analyzer.finalizeAndFinishThroughEndOfInput()
-            } catch {
-                let message = String(describing: error)
-                Self.log.error("finalize failed: \(message, privacy: .public)")
+            if aborted {
+                await analyzer.cancelAndFinishNow()
+            } else {
+                do {
+                    try await analyzer.finalizeAndFinishThroughEndOfInput()
+                } catch {
+                    let message = String(describing: error)
+                    Self.log.error("finalize failed: \(message, privacy: .public)")
+                }
             }
         }
 
         await drain?.value
-        Self.log.info("session finished for locale \(self.locale.identifier, privacy: .public)")
+        Self.log.info("session finished (aborted=\(aborted, privacy: .public)) locale=\(self.locale.identifier, privacy: .public)")
     }
 }
 
