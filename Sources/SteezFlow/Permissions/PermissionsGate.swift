@@ -2,6 +2,7 @@ import AVFoundation
 import ApplicationServices
 import Foundation
 import Speech
+import os
 
 public enum PermissionStatus: Equatable {
     case notDetermined
@@ -17,6 +18,8 @@ public struct PermissionsSnapshot: Equatable {
 
 /// Thread-safe: implementations must protect any internal mutable state.
 public final class PermissionsGate: @unchecked Sendable {
+    private let log = Logger(subsystem: "com.steez.SteezFlow", category: "permissions")
+
     public init() {}
 
     public func snapshot() -> PermissionsSnapshot {
@@ -28,10 +31,23 @@ public final class PermissionsGate: @unchecked Sendable {
     }
 
     public func requestAll() async -> PermissionsSnapshot {
-        // TODO: AVCaptureDevice.requestAccess(for: .audio)
-        // TODO: SFSpeechRecognizer.requestAuthorization
-        // TODO: AXIsProcessTrustedWithOptions prompt
-        snapshot()
+        log.info("requestAll: begin")
+
+        _ = await AVCaptureDevice.requestAccess(for: .audio)
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            SFSpeechRecognizer.requestAuthorization { _ in
+                continuation.resume()
+            }
+        }
+
+        let promptKey = "AXTrustedCheckOptionPrompt" as CFString
+        let options = [promptKey: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(options)
+
+        let result = snapshot()
+        log.info("requestAll: end")
+        return result
     }
 
     private func micStatus() -> PermissionStatus {
