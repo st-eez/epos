@@ -24,8 +24,8 @@ public final class AppCoordinator: ObservableObject {
     private let log = Logger(subsystem: "com.steez.SteezFlow", category: "coordinator")
 
     private var transcriptionTask: Task<Void, Never>?
-
     private var captureFormat: AVAudioFormat?
+    private lazy var indicator = RecordingIndicatorController(coordinator: self)
 
     public init(
         hotkey: FnHotkey = FnHotkey(),
@@ -47,6 +47,12 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
+    /// Synchronous read of current permission grants (no prompts).
+    /// Used by MenuBarView to surface a warning row when something isn't granted.
+    public func snapshotPermissions() -> PermissionsSnapshot {
+        permissions.snapshot()
+    }
+
     /// One-time launch wiring: prompt for permissions, install the locale asset,
     /// and cache the analyzer's preferred audio format. Safe to call repeatedly;
     /// downstream calls are idempotent.
@@ -66,19 +72,86 @@ public final class AppCoordinator: ObservableObject {
 
     public func startRecording() {
         guard state == .idle else { return }
+        guard let format = captureFormat else {
+            log.error("cannot start: capture format unavailable (bootstrap incomplete?)")
+            return
+        }
         state = .recording
         partialTranscript = ""
+        amplitude = 0
+        indicator.show()
         log.info("recording start")
-        // TODO: spawn Task that calls transcriber.start() -> drains stream into partialTranscript;
-        // wire audio.onBuffer -> transcriber.accept; audio.start(targetFormat: captureFormat).
+
+        let transcriber = transcriber
+        let audio = audio
+        let injector = injector
+
+        transcriptionTask = Task { [weak self] in
+            await self?.runSession(
+                transcriber: transcriber,
+                audio: audio,
+                injector: injector,
+                format: format
+            )
+        }
     }
 
     public func finishRecording() {
         guard state == .recording else { return }
         state = .finalizing
         log.info("recording finalize")
-        // TODO: audio.stop, transcriber.finish, await final event from stream,
-        // injector.paste(final), transcriptionTask = nil, state = .idle.
+        audio.stop()
+        let transcriber = transcriber
+        Task { await transcriber.finish() }
+        // runSession's stream drain unblocks once finish() lets the analyzer complete;
+        // it does the paste + state reset on the way out.
+    }
+
+    /// Drives one recording: starts transcription, plumbs audio buffers in, drains the
+    /// event stream into the published UI state, and on stream completion pastes the
+    /// final text and resets to idle. Always returns to `.idle` even on error.
+    private func runSession(
+        transcriber: Transcriber,
+        audio: AudioCapture,
+        injector: TextInjector,
+        format: AVAudioFormat
+    ) async {
+        var finalText = ""
+        do {
+            let events = try await transcriber.start()
+            audio.onBuffer = { buffer in transcriber.accept(buffer) }
+            audio.onAmplitude = { [weak self] amp in
+                Task { @MainActor in self?.amplitude = amp }
+            }
+            try audio.start(targetFormat: format)
+
+            for await event in events {
+                switch event {
+                case .partial(let text):
+                    partialTranscript = text
+                case .final(let text):
+                    finalText = text
+                case .failed(let message):
+                    log.error("transcription failed: \(message, privacy: .public)")
+                }
+            }
+        } catch {
+            log.error("session error: \(String(describing: error), privacy: .public)")
+            audio.stop()
+        }
+
+        audio.onBuffer = nil
+        audio.onAmplitude = nil
+
+        if !finalText.isEmpty {
+            injector.paste(finalText)
+        }
+
+        indicator.hide()
+        amplitude = 0
+        partialTranscript = ""
+        transcriptionTask = nil
         state = .idle
+        log.info("recording done (finalChars=\(finalText.count))")
     }
 }
