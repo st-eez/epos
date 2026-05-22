@@ -12,8 +12,14 @@ public enum CoordinatorState: Equatable {
 @MainActor
 public final class AppCoordinator: ObservableObject {
     @Published public private(set) var state: CoordinatorState = .idle
-    @Published public private(set) var partialTranscript: String = ""
+    @Published public private(set) var finalText: String = ""
+    @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
+
+    /// Running display: committed finals + in-progress partial. The partial replaces
+    /// only the tail because `SpeechTranscriber` emits volatile partials for the
+    /// in-progress segment alongside committed per-segment finals.
+    public var displayText: String { finalText + partial }
 
     private let hotkey: FnHotkey
     private let audio: AudioCapture
@@ -22,6 +28,8 @@ public final class AppCoordinator: ObservableObject {
     private let permissions: PermissionsGate
     private let assets: AssetManager
     private let settings: Settings
+    // Dogfood `.wav` capture — temporary, remove with DogfoodTap.swift + AudioCapture.onRawBuffer.
+    private let dogfood = DogfoodTap()
     private let log = Logger(subsystem: "com.steez.SteezFlow", category: "coordinator")
 
     private var transcriptionTask: Task<Void, Never>?
@@ -32,11 +40,6 @@ public final class AppCoordinator: ObservableObject {
         controller.attach(content: RecordingIndicator(coordinator: self))
         return controller
     }()
-
-    // Race coordination between finishRecording and runSession. Both run on @MainActor
-    // so plain Bools are safe; the race we're guarding is one happening across awaits.
-    private var sessionReady = false
-    private var finishRequested = false
 
     public init(
         hotkey: FnHotkey = FnHotkey(),
@@ -93,99 +96,74 @@ public final class AppCoordinator: ObservableObject {
             return
         }
         state = .recording
-        partialTranscript = ""
+        finalText = ""
+        partial = ""
         amplitude = 0
-        sessionReady = false
-        finishRequested = false
         indicator.show()
         log.info("recording start")
 
         let transcriber = transcriber
         let audio = audio
-        let injector = injector
+        let dogfood = dogfood
+
+        let events: AsyncStream<TranscriptEvent>
+        do {
+            events = try transcriber.start()
+            audio.onBuffer = { buffer in transcriber.accept(buffer) }
+            audio.onAmplitude = { [weak self] amp in
+                Task { @MainActor in self?.amplitude = amp }
+            }
+            audio.onRawBuffer = { buffer in dogfood.write(buffer) }
+            try audio.start(targetFormat: format)
+        } catch {
+            log.error("recording setup failed: \(String(describing: error), privacy: .public)")
+            audio.onBuffer = nil
+            audio.onAmplitude = nil
+            audio.onRawBuffer = nil
+            dogfood.stop()
+            Task { await transcriber.finish() }
+            indicator.hide()
+            state = .idle
+            return
+        }
 
         transcriptionTask = Task { [weak self] in
-            await self?.runSession(
-                transcriber: transcriber,
-                audio: audio,
-                injector: injector,
-                format: format
-            )
+            await self?.drainEvents(events)
         }
     }
 
     public func finishRecording() {
         guard state == .recording else { return }
         state = .finalizing
-        log.info("recording finalize (sessionReady=\(self.sessionReady))")
-        finishRequested = true
-        if sessionReady {
-            audio.stop()
-            let transcriber = transcriber
-            Task { await transcriber.finish() }
-        }
-        // If the session isn't ready yet, runSession will see finishRequested and
-        // short-circuit immediately after start() resumes. Either way runSession
-        // drives the cleanup + state -> .idle.
+        log.info("recording finalize")
+        audio.stop()
+        let transcriber = transcriber
+        Task { await transcriber.finish() }
     }
 
-    /// Drives one recording: starts transcription, plumbs audio buffers in, drains the
-    /// event stream into the published UI state, and on stream completion pastes the
-    /// final text and resets to idle. Always returns to `.idle` even on error.
-    private func runSession(
-        transcriber: Transcriber,
-        audio: AudioCapture,
-        injector: TextInjector,
-        format: AVAudioFormat
-    ) async {
-        var finalText = ""
-        do {
-            let events = try await transcriber.start()
-
-            if finishRequested {
-                // User released fn before the analyzer was installed. Skip audio entirely
-                // and cancel so the drain completes immediately — finalize would hang
-                // waiting on input that will never arrive.
-                sessionReady = true
-                await transcriber.finish()
-            } else {
-                audio.onBuffer = { buffer in transcriber.accept(buffer) }
-                audio.onAmplitude = { [weak self] amp in
-                    Task { @MainActor in self?.amplitude = amp }
-                }
-                try audio.start(targetFormat: format)
-                sessionReady = true
-                // If finish landed between sessionReady=false and audio.start, finishRecording
-                // skipped its own audio.stop+finish path; cover the gap here. Tap may have
-                // had zero callbacks by now, so this is also an abort.
-                if finishRequested {
-                    audio.stop()
-                    await transcriber.finish()
-                }
+    /// Drains the transcription event stream into published UI state. On stream
+    /// completion, pastes the accumulated final text and resets to idle.
+    private func drainEvents(_ events: AsyncStream<TranscriptEvent>) async {
+        for await event in events {
+            switch event {
+            case .partial(let text):
+                partial = text
+            case .final(let text):
+                finalText += text
+                partial = ""
+            case .failed(let message):
+                log.error("transcription failed: \(message, privacy: .public)")
             }
-
-            // Apple's SpeechTranscriber emits per-segment finals plus volatile partials
-            // for the in-progress segment. Accumulate finals; partial replaces only the
-            // tail. UI shows the running total so the overlay matches the eventual paste.
-            for await event in events {
-                switch event {
-                case .partial(let text):
-                    partialTranscript = finalText + text
-                case .final(let text):
-                    finalText += text
-                    partialTranscript = finalText
-                case .failed(let message):
-                    log.error("transcription failed: \(message, privacy: .public)")
-                }
-            }
-        } catch {
-            log.error("session error: \(String(describing: error), privacy: .public)")
-            audio.stop()
-            await transcriber.finish()
         }
 
+        // Defensive teardown: finishRecording owns the happy path, but the analyzer
+        // can also drive the stream to completion on its own (e.g. analyzer.start failure).
+        audio.stop()
         audio.onBuffer = nil
         audio.onAmplitude = nil
+        audio.onRawBuffer = nil
+        dogfood.stop()
+        await transcriber.finish()
 
         if !finalText.isEmpty {
             injector.paste(finalText)
@@ -193,11 +171,9 @@ public final class AppCoordinator: ObservableObject {
 
         indicator.hide()
         amplitude = 0
-        partialTranscript = ""
-        sessionReady = false
-        finishRequested = false
+        partial = ""
         transcriptionTask = nil
         state = .idle
-        log.info("recording done (finalChars=\(finalText.count))")
+        log.info("recording done (finalChars=\(self.finalText.count))")
     }
 }

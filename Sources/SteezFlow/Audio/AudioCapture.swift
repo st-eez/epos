@@ -6,39 +6,19 @@ import OSLog
 /// downstream `SpeechTranscriber` expects (obtained from `Transcriber.bestAudioFormat`).
 /// Callbacks fire on the engine's audio thread; consumers must be thread-safe.
 public final class AudioCapture {
+    /// Converted buffer in `targetFormat`. Fires on the engine's audio thread.
     public var onBuffer: ((AVAudioPCMBuffer) -> Void)?
+    /// Pre-conversion buffer in the mic's native format. Fires on the engine's audio
+    /// thread. Temporary hook for the dogfood `.wav` capture — remove with that feature.
+    public var onRawBuffer: ((AVAudioPCMBuffer) -> Void)?
     public var onAmplitude: ((Float) -> Void)?
 
     private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "audio")
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
-    private var audioFile: AVAudioFile?
-    private var tapCount = 0
-    private var emitCount = 0
 
     public init() {}
-
-    /// Per-recording .wav of the converted (16 kHz mono Float32) stream — exactly
-    /// what the analyzer sees. Lives in Caches; dogfooding + future eval material.
-    private static func openRecordingFile(format: AVAudioFormat) -> AVAudioFile? {
-        guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
-            return nil
-        }
-        let dir = cachesDir.appendingPathComponent("SteezFlow/recordings", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
-        let url = dir.appendingPathComponent("\(formatter.string(from: Date())).wav")
-        do {
-            let file = try AVAudioFile(forWriting: url, settings: format.settings)
-            log.info("recording to \(url.lastPathComponent, privacy: .public)")
-            return file
-        } catch {
-            log.error("audio file open failed: \(String(describing: error), privacy: .public)")
-            return nil
-        }
-    }
 
     /// Begin capture. Converts the input node's native format to `targetFormat` via
     /// `AVAudioConverter` and emits converted buffers on `onBuffer`. RMS amplitude is
@@ -60,21 +40,10 @@ public final class AudioCapture {
 
         let rateRatio = targetFormat.sampleRate / inputFormat.sampleRate
 
-        tapCount = 0
-        emitCount = 0
-        // Capture the raw mic format (not the downsampled target). AVAudioFile's
-        // WAV writer aborts in AudioToolbox if the buffer format requires an
-        // internal conversion to reach the file's settings; matching formats avoids
-        // that, and the higher-fidelity capture is better future eval material.
-        audioFile = Self.openRecordingFile(format: inputFormat)
-
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
-            self.tapCount += 1
 
-            if let file = self.audioFile {
-                try? file.write(from: buffer)
-            }
+            self.onRawBuffer?(buffer)
 
             if let amplitude = Self.rms(of: buffer) {
                 self.onAmplitude?(amplitude)
@@ -108,7 +77,6 @@ public final class AudioCapture {
                 return
             }
 
-            self.emitCount += 1
             self.onBuffer?(output)
         }
 
@@ -123,7 +91,7 @@ public final class AudioCapture {
 
         self.engine = engine
         self.converter = converter
-        Self.log.info("capture started: input \(inputFormat.sampleRate, privacy: .public)Hz/\(inputFormat.channelCount, privacy: .public)ch -> target \(targetFormat.sampleRate, privacy: .public)Hz/\(targetFormat.channelCount, privacy: .public)ch commonFormat=\(targetFormat.commonFormat.rawValue, privacy: .public)")
+        Self.log.info("capture started: input \(inputFormat.sampleRate, privacy: .public)Hz/\(inputFormat.channelCount, privacy: .public)ch -> target \(targetFormat.sampleRate, privacy: .public)Hz/\(targetFormat.channelCount, privacy: .public)ch")
     }
 
     /// Tear down the engine fully so the next `start` builds a fresh one.
@@ -132,9 +100,7 @@ public final class AudioCapture {
         engine?.stop()
         engine = nil
         converter = nil
-        // Nil after removeTap so an in-flight tap can't write to a closed file.
-        audioFile = nil
-        Self.log.info("capture stopped (taps=\(self.tapCount, privacy: .public) emits=\(self.emitCount, privacy: .public))")
+        Self.log.info("capture stopped")
     }
 
     /// RMS amplitude across the first channel, clamped to 0...1. Float32 buffers only.

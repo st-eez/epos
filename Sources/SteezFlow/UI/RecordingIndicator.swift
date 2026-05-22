@@ -17,7 +17,7 @@ public struct RecordingIndicator: View {
             Capsule()
                 .fill(.tint)
                 .frame(width: max(4, CGFloat(coordinator.amplitude) * 120), height: 4)
-            Text(coordinator.partialTranscript.isEmpty ? "Listening…" : coordinator.partialTranscript)
+            Text(coordinator.displayText.isEmpty ? "Listening…" : coordinator.displayText)
                 .lineLimit(1)
                 .truncationMode(.head)
                 .frame(maxWidth: 280, alignment: .leading)

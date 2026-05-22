@@ -13,6 +13,9 @@ public enum TranscriptEvent: Equatable {
 /// Wraps `SpeechAnalyzer` + a `SpeechTranscriber` module.
 /// `start()` builds a fresh analyzer + module per call; do not reuse a single session.
 /// `accept(_:)` is safe to call from the audio thread.
+/// `finish()` is idempotent and safe to call concurrently with — or immediately after —
+/// `start()`. Buffers accepted before the underlying analyzer is ready queue in the input
+/// stream and are consumed once `analyzer.start(inputSequence:)` resolves.
 public final class Transcriber: @unchecked Sendable {
     public let locale: Locale
 
@@ -23,6 +26,7 @@ public final class Transcriber: @unchecked Sendable {
     private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
     private var eventContinuation: AsyncStream<TranscriptEvent>.Continuation?
     private var drainTask: Task<Void, Never>?
+    private var startTask: Task<Void, Error>?
     private var hasReceivedBuffer = false
 
     public init(locale: Locale = Locale(identifier: "en-US")) {
@@ -36,16 +40,17 @@ public final class Transcriber: @unchecked Sendable {
         return await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe])
     }
 
-    /// Begin a new transcription session. Returns an async stream of partial + final results.
-    /// Caller feeds PCM buffers via `accept(_:)` and ends the session with `finish()`.
+    /// Begin a new transcription session. Returns synchronously with an async stream of
+    /// partial + final results. The analyzer is started in the background; buffers
+    /// passed to `accept(_:)` before the analyzer is ready queue in the input stream.
     /// Throws `TranscriberError.alreadyRunning` if a prior session hasn't been `finish`ed.
-    public func start() async throws -> AsyncStream<TranscriptEvent> {
-        let alreadyRunning = lock.withLock { self.analyzer != nil }
+    public func start() throws -> AsyncStream<TranscriptEvent> {
+        let alreadyRunning = lock.withLock {
+            self.analyzer != nil || self.startTask != nil
+        }
         if alreadyRunning {
             throw TranscriberError.alreadyRunning
         }
-        // `init(inputSequence:modules:)` is sync — it only stores references.
-        // The analyzer does not begin consuming the sequence until `start(inputSequence:)`.
         let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
 
         let (inputStream, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
@@ -53,7 +58,7 @@ public final class Transcriber: @unchecked Sendable {
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
 
-        // Drain must subscribe BEFORE analyzer.start, otherwise early results are dropped.
+        // Drain subscribes to transcriber.results immediately so early results aren't dropped.
         let drain = Task {
             var count = 0
             do {
@@ -67,26 +72,37 @@ public final class Transcriber: @unchecked Sendable {
                     }
                 }
                 Self.log.info("results stream completed (results=\(count, privacy: .public))")
-                eventCont.finish()
             } catch {
                 let message = String(describing: error)
                 Self.log.error("results stream failed after \(count, privacy: .public): \(message, privacy: .public)")
                 eventCont.yield(.failed(message))
-                eventCont.finish()
             }
+            eventCont.finish()
         }
 
-        try await analyzer.start(inputSequence: inputStream)
+        // analyzer.start runs in the background; finish() awaits this Task before tearing down.
+        let startT = Task<Void, Error> {
+            do {
+                try await analyzer.start(inputSequence: inputStream)
+            } catch {
+                let message = String(describing: error)
+                Self.log.error("analyzer start failed: \(message, privacy: .public)")
+                eventCont.yield(.failed(message))
+                eventCont.finish()
+                throw error
+            }
+        }
 
         lock.withLock {
             self.analyzer = analyzer
             self.inputContinuation = inputCont
             self.eventContinuation = eventCont
             self.drainTask = drain
+            self.startTask = startT
             self.hasReceivedBuffer = false
         }
 
-        Self.log.info("session started for locale \(self.locale.identifier, privacy: .public)")
+        Self.log.info("session starting for locale \(self.locale.identifier, privacy: .public)")
         return eventStream
     }
 
@@ -99,25 +115,27 @@ public final class Transcriber: @unchecked Sendable {
         continuation?.yield(AnalyzerInput(buffer: buffer))
     }
 
-    /// Signal end of input; the session will emit a final result then complete the stream.
-    /// If no audio buffers ever reached the analyzer this call falls back to
-    /// `cancelAndFinishNow()` — `finalizeAndFinishThroughEndOfInput()` hangs on
-    /// empty input, which can happen on a sub-150 ms fn press where audio.start
-    /// raced ahead of the first tap callback.
+    /// End the session. Idempotent — repeat calls after the first are no-ops.
+    /// Falls back to `cancelAndFinishNow()` when no audio buffers ever reached the
+    /// analyzer; `finalizeAndFinishThroughEndOfInput()` hangs on empty input.
     public func finish() async {
-        let (analyzer, inputCont, drain, hadInput) = lock.withLock {
-            () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?, Bool) in
+        let (analyzer, inputCont, drain, startT, hadInput) = lock.withLock {
+            () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?, Task<Void, Error>?, Bool) in
             let analyzer = self.analyzer
             let inputCont = self.inputContinuation
             let drain = self.drainTask
+            let startT = self.startTask
             let hadInput = self.hasReceivedBuffer
             self.analyzer = nil
             self.inputContinuation = nil
             self.drainTask = nil
-            // Keep eventContinuation alive so the drain Task can finish it.
+            self.startTask = nil
             self.eventContinuation = nil
-            return (analyzer, inputCont, drain, hadInput)
+            return (analyzer, inputCont, drain, startT, hadInput)
         }
+
+        // Wait for any in-flight analyzer.start to settle before tearing down.
+        _ = try? await startT?.value
 
         inputCont?.finish()
 

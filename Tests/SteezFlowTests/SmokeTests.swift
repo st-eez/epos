@@ -7,7 +7,9 @@ final class SmokeTests: XCTestCase {
         // autoStart: false so the global NSEvent monitor isn't installed during tests.
         let coordinator = AppCoordinator(autoStart: false)
         XCTAssertEqual(coordinator.state, .idle)
-        XCTAssertEqual(coordinator.partialTranscript, "")
+        XCTAssertEqual(coordinator.finalText, "")
+        XCTAssertEqual(coordinator.partial, "")
+        XCTAssertEqual(coordinator.displayText, "")
     }
 
     func testPermissionsSnapshotReturns() {
