@@ -7,18 +7,12 @@ let package = Package(
         .macOS("26.0")
     ],
     products: [
-        .library(name: "SteezFlow", targets: ["SteezFlow"]),
-        .executable(name: "SteezFlowMacApp", targets: ["SteezFlowMacApp"])
+        .library(name: "SteezFlow", targets: ["SteezFlow"])
     ],
     targets: [
         .target(
             name: "SteezFlow",
             path: "Sources/SteezFlow"
-        ),
-        .executableTarget(
-            name: "SteezFlowMacApp",
-            dependencies: ["SteezFlow"],
-            path: "Sources/SteezFlowMacApp"
         ),
         .testTarget(
             name: "SteezFlowTests",
