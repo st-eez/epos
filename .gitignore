@@ -1,0 +1,15 @@
+.DS_Store
+*.swp
+
+.build/
+build/
+dist/
+.swiftpm/
+
+# XcodeGen output; generated locally, not tracked.
+SteezFlow.xcodeproj/
+SteezFlow.xcworkspace/
+
+# Local editor / agent state
+.claude/settings.local.json
+prompt.md
