@@ -162,12 +162,16 @@ public final class AppCoordinator: ObservableObject {
                 }
             }
 
+            // Apple's SpeechTranscriber emits per-segment finals plus volatile partials
+            // for the in-progress segment. Accumulate finals; partial replaces only the
+            // tail. UI shows the running total so the overlay matches the eventual paste.
             for await event in events {
                 switch event {
                 case .partial(let text):
-                    partialTranscript = text
+                    partialTranscript = finalText + text
                 case .final(let text):
-                    finalText = text
+                    finalText += text
+                    partialTranscript = finalText
                 case .failed(let message):
                     log.error("transcription failed: \(message, privacy: .public)")
                 }
