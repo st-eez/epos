@@ -27,6 +27,11 @@ public final class AppCoordinator: ObservableObject {
     private var captureFormat: AVAudioFormat?
     private lazy var indicator = RecordingIndicatorController(coordinator: self)
 
+    // Race coordination between finishRecording and runSession. Both run on @MainActor
+    // so plain Bools are safe; the race we're guarding is one happening across awaits.
+    private var sessionReady = false
+    private var finishRequested = false
+
     public init(
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
@@ -79,6 +84,8 @@ public final class AppCoordinator: ObservableObject {
         state = .recording
         partialTranscript = ""
         amplitude = 0
+        sessionReady = false
+        finishRequested = false
         indicator.show()
         log.info("recording start")
 
@@ -99,12 +106,16 @@ public final class AppCoordinator: ObservableObject {
     public func finishRecording() {
         guard state == .recording else { return }
         state = .finalizing
-        log.info("recording finalize")
-        audio.stop()
-        let transcriber = transcriber
-        Task { await transcriber.finish() }
-        // runSession's stream drain unblocks once finish() lets the analyzer complete;
-        // it does the paste + state reset on the way out.
+        log.info("recording finalize (sessionReady=\(self.sessionReady))")
+        finishRequested = true
+        if sessionReady {
+            audio.stop()
+            let transcriber = transcriber
+            Task { await transcriber.finish() }
+        }
+        // If the session isn't ready yet, runSession will see finishRequested and
+        // short-circuit immediately after start() resumes. Either way runSession
+        // drives the cleanup + state -> .idle.
     }
 
     /// Drives one recording: starts transcription, plumbs audio buffers in, drains the
@@ -119,11 +130,26 @@ public final class AppCoordinator: ObservableObject {
         var finalText = ""
         do {
             let events = try await transcriber.start()
-            audio.onBuffer = { buffer in transcriber.accept(buffer) }
-            audio.onAmplitude = { [weak self] amp in
-                Task { @MainActor in self?.amplitude = amp }
+
+            if finishRequested {
+                // User released fn before the analyzer was installed. Skip audio entirely
+                // and finalize so the drain completes immediately.
+                sessionReady = true
+                await transcriber.finish()
+            } else {
+                audio.onBuffer = { buffer in transcriber.accept(buffer) }
+                audio.onAmplitude = { [weak self] amp in
+                    Task { @MainActor in self?.amplitude = amp }
+                }
+                try audio.start(targetFormat: format)
+                sessionReady = true
+                // If finish landed between sessionReady=false and audio.start, finishRecording
+                // skipped its own audio.stop+finish path; cover the gap here.
+                if finishRequested {
+                    audio.stop()
+                    await transcriber.finish()
+                }
             }
-            try audio.start(targetFormat: format)
 
             for await event in events {
                 switch event {
@@ -138,6 +164,7 @@ public final class AppCoordinator: ObservableObject {
         } catch {
             log.error("session error: \(String(describing: error), privacy: .public)")
             audio.stop()
+            await transcriber.finish()
         }
 
         audio.onBuffer = nil
@@ -150,6 +177,8 @@ public final class AppCoordinator: ObservableObject {
         indicator.hide()
         amplitude = 0
         partialTranscript = ""
+        sessionReady = false
+        finishRequested = false
         transcriptionTask = nil
         state = .idle
         log.info("recording done (finalChars=\(finalText.count))")

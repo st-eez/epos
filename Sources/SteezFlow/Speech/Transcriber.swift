@@ -37,7 +37,12 @@ public final class Transcriber: @unchecked Sendable {
 
     /// Begin a new transcription session. Returns an async stream of partial + final results.
     /// Caller feeds PCM buffers via `accept(_:)` and ends the session with `finish()`.
+    /// Throws `TranscriberError.alreadyRunning` if a prior session hasn't been `finish`ed.
     public func start() async throws -> AsyncStream<TranscriptEvent> {
+        let alreadyRunning = lock.withLock { self.analyzer != nil }
+        if alreadyRunning {
+            throw TranscriberError.alreadyRunning
+        }
         let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
 
         let (inputStream, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
@@ -112,4 +117,8 @@ public final class Transcriber: @unchecked Sendable {
         await drain?.value
         Self.log.info("session finished for locale \(self.locale.identifier, privacy: .public)")
     }
+}
+
+enum TranscriberError: Error {
+    case alreadyRunning
 }
