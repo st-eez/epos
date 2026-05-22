@@ -1,8 +1,13 @@
+import OSLog
+import ServiceManagement
 import SwiftUI
 
 public struct MenuBarView: View {
     @ObservedObject var coordinator: AppCoordinator
     @State private var permissions: PermissionsSnapshot?
+    @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
+
+    private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "menubar")
 
     public init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -25,12 +30,35 @@ public struct MenuBarView: View {
                 .buttonStyle(.link)
             }
             Divider()
+            Text("Locale: \(coordinator.localeIdentifier)")
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            Toggle("Launch at login", isOn: $launchAtLogin)
+                .onChange(of: launchAtLogin) { _, newValue in
+                    applyLaunchAtLogin(newValue)
+                }
+            Divider()
             Button("Quit SteezFlow") { NSApplication.shared.terminate(nil) }
                 .keyboardShortcut("q")
         }
         .padding(12)
         .frame(width: 260)
         .onAppear { permissions = coordinator.snapshotPermissions() }
+    }
+
+    private func applyLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            var current = Settings.load()
+            current.launchAtLogin = enabled
+            current.save()
+        } catch {
+            Self.log.error("launch-at-login toggle failed: \(String(describing: error), privacy: .public)")
+        }
     }
 
     private func allGranted(_ snapshot: PermissionsSnapshot) -> Bool {

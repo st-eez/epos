@@ -16,8 +16,7 @@ public struct PermissionsSnapshot: Equatable {
     public let accessibility: PermissionStatus
 }
 
-/// Thread-safe: implementations must protect any internal mutable state.
-public final class PermissionsGate: @unchecked Sendable {
+public struct PermissionsGate: Sendable {
     private let log = Logger(subsystem: "com.steez.SteezFlow", category: "permissions")
 
     public init() {}

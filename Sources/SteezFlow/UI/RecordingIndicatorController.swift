@@ -1,34 +1,25 @@
 import AppKit
+import OSLog
 import SwiftUI
 
-/// Floating borderless `NSPanel` that hosts the SwiftUI `RecordingIndicator`.
+/// Floating borderless `NSPanel` that hosts a SwiftUI view supplied by the caller.
 /// A `Window` scene cannot give us non-activating + floats-above-all behavior, so we
 /// manage the panel directly. Centered horizontally, sat ~60pt above the active screen's
 /// bottom edge; position is fixed by design.
 @MainActor
 public final class RecordingIndicatorController {
-    private let coordinator: AppCoordinator
     private var panel: NSPanel?
+    private let log = Logger(subsystem: "com.steez.SteezFlow", category: "indicator")
 
     private static let panelSize = CGSize(width: 420, height: 56)
     private static let bottomInset: CGFloat = 60
 
-    public init(coordinator: AppCoordinator) {
-        self.coordinator = coordinator
-    }
+    public init() {}
 
-    public func show() {
-        let panel = panel ?? makePanel()
-        self.panel = panel
-        repositionToActiveScreen(panel)
-        panel.orderFrontRegardless()
-    }
-
-    public func hide() {
-        panel?.orderOut(nil)
-    }
-
-    private func makePanel() -> NSPanel {
+    /// Build the floating panel and host the supplied SwiftUI content. Idempotent —
+    /// subsequent calls are no-ops; the first content sticks.
+    public func attach<Content: View>(content: Content) {
+        guard panel == nil else { return }
         let frame = NSRect(origin: .zero, size: Self.panelSize)
         let panel = NSPanel(
             contentRect: frame,
@@ -45,11 +36,24 @@ public final class RecordingIndicatorController {
         panel.isOpaque = false
         panel.hasShadow = true
 
-        let host = NSHostingView(rootView: RecordingIndicator(coordinator: coordinator))
+        let host = NSHostingView(rootView: content)
         host.frame = frame
         host.autoresizingMask = [.width, .height]
         panel.contentView = host
-        return panel
+        self.panel = panel
+    }
+
+    public func show() {
+        guard let panel else {
+            log.error("show() called before attach(content:); ignoring")
+            return
+        }
+        repositionToActiveScreen(panel)
+        panel.orderFrontRegardless()
+    }
+
+    public func hide() {
+        panel?.orderOut(nil)
     }
 
     private func repositionToActiveScreen(_ panel: NSPanel) {

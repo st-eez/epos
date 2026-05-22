@@ -12,8 +12,7 @@ public enum AssetStatus: Equatable {
 
 /// Wraps `AssetInventory` reservation + download for the install locale.
 /// Reservation is process-scoped, so call `prepare()` on every app launch.
-/// Thread-safe: implementations must protect any internal mutable state.
-public final class AssetManager: @unchecked Sendable {
+public struct AssetManager: Sendable {
     public let locale: Locale
 
     private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "assets")
@@ -27,10 +26,12 @@ public final class AssetManager: @unchecked Sendable {
         let installed = await SpeechTranscriber.installedLocales
         let reserved = await AssetInventory.reservedLocales
 
-        if contains(installed, locale) && contains(reserved, locale) {
+        let isInstalled = installed.contains { $0.identifier == locale.identifier }
+        let isReserved = reserved.contains { $0.identifier == locale.identifier }
+        if isInstalled && isReserved {
             return .reserved
         }
-        if contains(installed, locale) {
+        if isInstalled {
             return .ready
         }
         switch await AssetInventory.status(forModules: [transcriber]) {
@@ -78,7 +79,4 @@ public final class AssetManager: @unchecked Sendable {
         }
     }
 
-    private func contains(_ locales: [Locale], _ target: Locale) -> Bool {
-        locales.contains { $0.identifier == target.identifier }
-    }
 }

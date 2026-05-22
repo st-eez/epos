@@ -21,11 +21,17 @@ public final class AppCoordinator: ObservableObject {
     private let injector: TextInjector
     private let permissions: PermissionsGate
     private let assets: AssetManager
+    private let settings: Settings
     private let log = Logger(subsystem: "com.steez.SteezFlow", category: "coordinator")
 
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
-    private lazy var indicator = RecordingIndicatorController(coordinator: self)
+    private var didBootstrap = false
+    private lazy var indicator: RecordingIndicatorController = {
+        let controller = RecordingIndicatorController()
+        controller.attach(content: RecordingIndicator(coordinator: self))
+        return controller
+    }()
 
     // Race coordination between finishRecording and runSession. Both run on @MainActor
     // so plain Bools are safe; the race we're guarding is one happening across awaits.
@@ -35,22 +41,25 @@ public final class AppCoordinator: ObservableObject {
     public init(
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
-        transcriber: Transcriber = Transcriber(),
         injector: TextInjector = TextInjector(),
-        permissions: PermissionsGate = PermissionsGate(),
-        assets: AssetManager = AssetManager(),
+        settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
-        self.transcriber = transcriber
         self.injector = injector
-        self.permissions = permissions
-        self.assets = assets
+        self.settings = settings
+        self.permissions = PermissionsGate()
+        self.assets = AssetManager(locale: settings.locale)
+        self.transcriber = Transcriber(locale: settings.locale)
         if autoStart {
             bindHotkey()
         }
     }
+
+    /// Identifier of the locale this coordinator was configured with. Read-only —
+    /// changing locales mid-session is post-baseline.
+    public var localeIdentifier: String { settings.localeIdentifier }
 
     /// Synchronous read of current permission grants (no prompts).
     /// Used by MenuBarView to surface a warning row when something isn't granted.
@@ -62,6 +71,8 @@ public final class AppCoordinator: ObservableObject {
     /// and cache the analyzer's preferred audio format. Safe to call repeatedly;
     /// downstream calls are idempotent.
     public func bootstrap() async {
+        guard !didBootstrap else { return }
+        didBootstrap = true
         log.info("bootstrap begin")
         _ = await permissions.requestAll()
         _ = await assets.prepare()
