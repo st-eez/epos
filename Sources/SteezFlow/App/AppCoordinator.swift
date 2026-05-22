@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import OSLog
 import SwiftUI
@@ -24,13 +25,16 @@ public final class AppCoordinator: ObservableObject {
 
     private var transcriptionTask: Task<Void, Never>?
 
+    private var captureFormat: AVAudioFormat?
+
     public init(
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
         transcriber: Transcriber = Transcriber(),
         injector: TextInjector = TextInjector(),
         permissions: PermissionsGate = PermissionsGate(),
-        assets: AssetManager = AssetManager()
+        assets: AssetManager = AssetManager(),
+        autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
@@ -38,7 +42,20 @@ public final class AppCoordinator: ObservableObject {
         self.injector = injector
         self.permissions = permissions
         self.assets = assets
-        bindHotkey()
+        if autoStart {
+            bindHotkey()
+        }
+    }
+
+    /// One-time launch wiring: prompt for permissions, install the locale asset,
+    /// and cache the analyzer's preferred audio format. Safe to call repeatedly;
+    /// downstream calls are idempotent.
+    public func bootstrap() async {
+        log.info("bootstrap begin")
+        _ = await permissions.requestAll()
+        _ = await assets.prepare()
+        captureFormat = await transcriber.bestAudioFormat()
+        log.info("bootstrap done format=\(String(describing: self.captureFormat))")
     }
 
     private func bindHotkey() {
@@ -52,14 +69,16 @@ public final class AppCoordinator: ObservableObject {
         state = .recording
         partialTranscript = ""
         log.info("recording start")
-        // TODO: audio.start, transcriber.start, stream partials -> partialTranscript
+        // TODO: spawn Task that calls transcriber.start() -> drains stream into partialTranscript;
+        // wire audio.onBuffer -> transcriber.accept; audio.start(targetFormat: captureFormat).
     }
 
     public func finishRecording() {
         guard state == .recording else { return }
         state = .finalizing
         log.info("recording finalize")
-        // TODO: audio.stop, transcriber.finish -> await final, injector.paste(final), reset to idle
+        // TODO: audio.stop, transcriber.finish, await final event from stream,
+        // injector.paste(final), transcriptionTask = nil, state = .idle.
         state = .idle
     }
 }

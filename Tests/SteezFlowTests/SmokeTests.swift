@@ -4,7 +4,8 @@ import XCTest
 final class SmokeTests: XCTestCase {
     @MainActor
     func testCoordinatorStartsIdle() {
-        let coordinator = AppCoordinator()
+        // autoStart: false so the global NSEvent monitor isn't installed during tests.
+        let coordinator = AppCoordinator(autoStart: false)
         XCTAssertEqual(coordinator.state, .idle)
         XCTAssertEqual(coordinator.partialTranscript, "")
     }

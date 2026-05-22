@@ -11,7 +11,8 @@ public enum AssetStatus: Equatable {
 
 /// Wraps `AssetInventory` reservation + download for the install locale.
 /// Reservation is process-scoped, so call `prepare()` on every app launch.
-public final class AssetManager {
+/// Thread-safe: implementations must protect any internal mutable state.
+public final class AssetManager: @unchecked Sendable {
     public let locale: Locale
 
     public init(locale: Locale = Locale(identifier: "en-US")) {

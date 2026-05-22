@@ -8,14 +8,10 @@ public struct SteezFlowApp: App {
     public var body: some Scene {
         MenuBarExtra("SteezFlow", systemImage: "mic.fill") {
             MenuBarView(coordinator: coordinator)
+                .task { await coordinator.bootstrap() }
         }
         .menuBarExtraStyle(.window)
-
-        Window("Recording", id: RecordingIndicator.windowID) {
-            RecordingIndicator(coordinator: coordinator)
-        }
-        .windowStyle(.hiddenTitleBar)
-        .windowResizability(.contentSize)
-        .defaultLaunchBehavior(.suppressed)
+        // The recording indicator is an NSPanel managed by the coordinator;
+        // it intentionally is not a SwiftUI Scene.
     }
 }

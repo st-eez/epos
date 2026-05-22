@@ -15,7 +15,8 @@ public struct PermissionsSnapshot: Equatable {
     public let accessibility: PermissionStatus
 }
 
-public final class PermissionsGate {
+/// Thread-safe: implementations must protect any internal mutable state.
+public final class PermissionsGate: @unchecked Sendable {
     public init() {}
 
     public func snapshot() -> PermissionsSnapshot {
