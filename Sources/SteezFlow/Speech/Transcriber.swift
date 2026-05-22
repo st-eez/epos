@@ -43,18 +43,21 @@ public final class Transcriber: @unchecked Sendable {
         if alreadyRunning {
             throw TranscriberError.alreadyRunning
         }
+        // `init(inputSequence:modules:)` is sync — it only stores references.
+        // The analyzer does not begin consuming the sequence until `start(inputSequence:)`.
         let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
 
         let (inputStream, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
         let (eventStream, eventCont) = AsyncStream<TranscriptEvent>.makeStream()
 
-        let analyzer = SpeechAnalyzer(inputSequence: inputStream, modules: [transcriber])
-        let preferredFormat = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber])
-        try await analyzer.prepareToAnalyze(in: preferredFormat)
+        let analyzer = SpeechAnalyzer(modules: [transcriber])
 
+        // Drain must subscribe BEFORE analyzer.start, otherwise early results are dropped.
         let drain = Task {
+            var count = 0
             do {
                 for try await result in transcriber.results {
+                    count += 1
                     let text = String(result.text.characters)
                     if result.isFinal {
                         eventCont.yield(.final(text))
@@ -62,14 +65,17 @@ public final class Transcriber: @unchecked Sendable {
                         eventCont.yield(.partial(text))
                     }
                 }
+                Self.log.info("results stream completed (results=\(count, privacy: .public))")
                 eventCont.finish()
             } catch {
                 let message = String(describing: error)
-                Self.log.error("results stream failed: \(message, privacy: .public)")
+                Self.log.error("results stream failed after \(count, privacy: .public): \(message, privacy: .public)")
                 eventCont.yield(.failed(message))
                 eventCont.finish()
             }
         }
+
+        try await analyzer.start(inputSequence: inputStream)
 
         lock.withLock {
             self.analyzer = analyzer

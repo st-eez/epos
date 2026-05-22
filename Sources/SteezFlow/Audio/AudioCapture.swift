@@ -13,6 +13,8 @@ public final class AudioCapture {
 
     private var engine: AVAudioEngine?
     private var converter: AVAudioConverter?
+    private var tapCount = 0
+    private var emitCount = 0
 
     public init() {}
 
@@ -30,11 +32,18 @@ public final class AudioCapture {
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw AudioCaptureError.converterUnavailable
         }
+        // Per Apple docs and swift-scribe pattern: skip filter priming so converter state
+        // persists cleanly across per-buffer calls; first samples may be lower quality.
+        converter.primeMethod = .none
 
         let rateRatio = targetFormat.sampleRate / inputFormat.sampleRate
 
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: inputFormat) { [weak self] buffer, _ in
+        tapCount = 0
+        emitCount = 0
+
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
+            self.tapCount += 1
 
             if let amplitude = Self.rms(of: buffer) {
                 self.onAmplitude?(amplitude)
@@ -50,22 +59,25 @@ public final class AudioCapture {
             // Reference type avoids `var` mutation in the @Sendable converter input block.
             let pending = InputBox(buffer)
             var convError: NSError?
+            // Return `.noDataNow` (not `.endOfStream`) so the converter retains its SRC
+            // filter state across calls instead of flushing/resetting every buffer.
             let status = converter.convert(to: output, error: &convError) { _, inputStatus in
                 guard let next = pending.take() else {
-                    inputStatus.pointee = .endOfStream
+                    inputStatus.pointee = .noDataNow
                     return nil
                 }
                 inputStatus.pointee = .haveData
                 return next
             }
 
-            if status == .error || output.frameLength == 0 {
+            if status == .error {
                 if let convError {
                     Self.log.error("convert failed: \(String(describing: convError), privacy: .public)")
                 }
                 return
             }
 
+            self.emitCount += 1
             self.onBuffer?(output)
         }
 
@@ -80,7 +92,7 @@ public final class AudioCapture {
 
         self.engine = engine
         self.converter = converter
-        Self.log.info("capture started: input \(inputFormat.sampleRate)Hz -> target \(targetFormat.sampleRate)Hz")
+        Self.log.info("capture started: input \(inputFormat.sampleRate, privacy: .public)Hz/\(inputFormat.channelCount, privacy: .public)ch -> target \(targetFormat.sampleRate, privacy: .public)Hz/\(targetFormat.channelCount, privacy: .public)ch commonFormat=\(targetFormat.commonFormat.rawValue, privacy: .public)")
     }
 
     /// Tear down the engine fully so the next `start` builds a fresh one.
@@ -89,7 +101,7 @@ public final class AudioCapture {
         engine?.stop()
         engine = nil
         converter = nil
-        Self.log.info("capture stopped")
+        Self.log.info("capture stopped (taps=\(self.tapCount, privacy: .public) emits=\(self.emitCount, privacy: .public))")
     }
 
     /// RMS amplitude across the first channel, clamped to 0...1. Float32 buffers only.
