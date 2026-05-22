@@ -59,7 +59,7 @@ public final class AppCoordinator: ObservableObject {
         guard state == .recording else { return }
         state = .finalizing
         log.info("recording finalize")
-        // TODO: audio.stop, transcriber.finalize -> final, injector.paste(final), reset to idle
+        // TODO: audio.stop, transcriber.finish -> await final, injector.paste(final), reset to idle
         state = .idle
     }
 }
