@@ -67,14 +67,6 @@ Grep it before assuming any symbol exists. macOS 26+ only — no `if #available`
 
 `Logger` interpolations default to `.private` redaction (shows `<private>`). Use `, privacy: .public` for non-PII values you actually need to see.
 
-## Known Structural Debt — Round B
-
-These were called out by a thermo-nuclear review and deliberately deferred until after baseline E2E. Don't "fix" them in isolation without designing the replacement:
-
-- `AppCoordinator` race coordination via `sessionReady` / `finishRequested` bools. Verifier validated correctness; the structural rewrite (TaskGroup with concurrent drain via `AsyncStream<Void>` stop signal) needs careful design and a smoke test.
-- `Transcriber` is a `final class` with `NSLock`-guarded session state — really a hand-rolled actor. Slated for `actor Transcriber` conversion. Don't add more `var` fields to it incrementally.
-- `RecordingIndicatorController` no longer holds the coordinator directly (cycle was broken in commit `60b338a`), but the SwiftUI view still does via `@ObservedObject`. Practical impact nil (coordinator is app-lifetime).
-
 ## Code Change Rules
 
 - Search narrowly first: `fd` for paths, `rg` for content, `rg --files` for file lists.
