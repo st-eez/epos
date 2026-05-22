@@ -62,11 +62,19 @@ public final class AudioCapture {
 
         tapCount = 0
         emitCount = 0
-        audioFile = Self.openRecordingFile(format: targetFormat)
+        // Capture the raw mic format (not the downsampled target). AVAudioFile's
+        // WAV writer aborts in AudioToolbox if the buffer format requires an
+        // internal conversion to reach the file's settings; matching formats avoids
+        // that, and the higher-fidelity capture is better future eval material.
+        audioFile = Self.openRecordingFile(format: inputFormat)
 
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
             self.tapCount += 1
+
+            if let file = self.audioFile {
+                try? file.write(from: buffer)
+            }
 
             if let amplitude = Self.rms(of: buffer) {
                 self.onAmplitude?(amplitude)
@@ -101,9 +109,6 @@ public final class AudioCapture {
             }
 
             self.emitCount += 1
-            if let file = self.audioFile {
-                try? file.write(from: output)
-            }
             self.onBuffer?(output)
         }
 
