@@ -126,7 +126,10 @@ public final class AppCoordinator: ObservableObject {
             events = try await transcriber.start()
             audio.onBuffer = { buffer in transcriber.accept(buffer) }
             audio.onAmplitude = { [weak self] amp in
-                Task { @MainActor in self?.amplitude = amp }
+                Task { @MainActor in
+                    guard let self, self.state == .recording else { return }
+                    self.amplitude = amp
+                }
             }
             audio.onRawBuffer = { buffer in dogfood.write(buffer) }
             try audio.start(targetFormat: format)
