@@ -64,7 +64,7 @@ swiftlint --quiet                            # silent = clean
 
 # 2. Bundled .app — required for any permission-gated work (mic, speech, AX)
 xcodegen generate
-xcodebuild -project SteezFlow.xcodeproj -scheme SteezFlowMacApp -configuration Debug -destination 'platform=macOS' clean build
+xcodebuild -project SteezFlow.xcodeproj -scheme SteezFlowMacApp -configuration Debug -destination 'platform=macOS' build
 open ~/Library/Developer/Xcode/DerivedData/SteezFlow-*/Build/Products/Debug/SteezFlowMacApp.app
 ```
 
