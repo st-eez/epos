@@ -30,6 +30,7 @@ public final class AppCoordinator: ObservableObject {
     private let settings: Settings
     // Dogfood `.wav` capture — temporary, remove with DogfoodTap.swift + AudioCapture.onRawBuffer.
     private let dogfood = DogfoodTap()
+    private let logExporter = LogExporter()
     private let log = Logger(subsystem: "com.steez.SteezFlow", category: "coordinator")
 
     private var transcriptionTask: Task<Void, Never>?
@@ -76,6 +77,7 @@ public final class AppCoordinator: ObservableObject {
     public func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
+        logExporter.start()
         log.info("bootstrap begin")
         _ = await permissions.requestAll()
         _ = await assets.prepare()
