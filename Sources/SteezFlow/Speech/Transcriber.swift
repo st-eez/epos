@@ -99,8 +99,9 @@ public final class Transcriber: @unchecked Sendable {
         do {
             try await startT.value
         } catch {
-            let message = String(describing: error)
-            Self.log.error("analyzer start failed: \(message, privacy: .public)")
+            // Caller (e.g. AppCoordinator.runSession) logs the error with its String(describing:).
+            // finish() handles teardown of the installed state and re-awaits the already-failed
+            // startTask cheaply (a completed Task's value is just a load).
             await finish()
             throw error
         }
