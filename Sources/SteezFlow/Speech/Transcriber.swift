@@ -121,19 +121,20 @@ public final class Transcriber: @unchecked Sendable {
     /// Falls back to `cancelAndFinishNow()` when no audio buffers ever reached the
     /// analyzer; `finalizeAndFinishThroughEndOfInput()` hangs on empty input.
     public func finish() async {
-        let (analyzer, inputCont, drain, startT, hadInput) = lock.withLock {
-            () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?, Task<Void, Error>?, Bool) in
+        let (analyzer, inputCont, drain, startT, eventCont, hadInput) = lock.withLock {
+            () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?, Task<Void, Error>?, AsyncStream<TranscriptEvent>.Continuation?, Bool) in
             let analyzer = self.analyzer
             let inputCont = self.inputContinuation
             let drain = self.drainTask
             let startT = self.startTask
+            let eventCont = self.eventContinuation
             let hadInput = self.hasReceivedBuffer
             self.analyzer = nil
             self.inputContinuation = nil
             self.drainTask = nil
             self.startTask = nil
             self.eventContinuation = nil
-            return (analyzer, inputCont, drain, startT, hadInput)
+            return (analyzer, inputCont, drain, startT, eventCont, hadInput)
         }
 
         // Wait for any in-flight analyzer.start to settle before tearing down.
@@ -149,12 +150,19 @@ public final class Transcriber: @unchecked Sendable {
                     let message = String(describing: error)
                     Self.log.error("finalize failed: \(message, privacy: .public)")
                 }
+                await drain?.value
             } else {
+                // `cancelAndFinishNow()` returns promptly, but Apple's
+                // `SpeechTranscriber.results` AsyncSequence does NOT terminate
+                // when no input was ever fed. Awaiting `drain.value` here would
+                // block forever (rapid-fn-tap hang). Force-close our event
+                // stream and cancel the drain task so finish() always returns.
                 await analyzer.cancelAndFinishNow()
+                eventCont?.finish()
+                drain?.cancel()
             }
         }
 
-        await drain?.value
         Self.log.info("session finished (hadInput=\(hadInput, privacy: .public)) locale=\(self.locale.identifier, privacy: .public)")
     }
 }
