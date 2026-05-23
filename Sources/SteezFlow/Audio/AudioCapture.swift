@@ -15,16 +15,23 @@ public final class AudioCapture {
 
     private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "audio")
 
-    private var engine: AVAudioEngine?
+    /// Long-lived: the engine is created once and never deallocated while operating.
+    /// Releasing an `AVAudioEngine` while CoreAudio's HAL IO thread is still rendering
+    /// nulls the cached IOProc pointer → SIGSEGV on the audio thread (the rapid
+    /// release-during-finalize crash). `stop()` only stops the engine and removes the
+    /// tap; the next `start()` reinstalls a fresh tap + converter on the same engine.
+    private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
+    private var isRunning = false
 
-    public init() {}
+    public init() {
+        Self.log.info("audio engine created")
+    }
 
     /// Begin capture. Converts the input node's native format to `targetFormat` via
     /// `AVAudioConverter` and emits converted buffers on `onBuffer`. RMS amplitude is
     /// computed off the pre-conversion buffer and reported via `onAmplitude`.
     public func start(targetFormat: AVAudioFormat) throws {
-        let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
 
@@ -40,6 +47,9 @@ public final class AudioCapture {
 
         let rateRatio = targetFormat.sampleRate / inputFormat.sampleRate
 
+        // Defensive: clear any tap left by a prior aborted session before reinstalling
+        // (the engine is long-lived now, so a stale tap would survive across calls).
+        inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             guard let self else { return }
 
@@ -91,16 +101,19 @@ public final class AudioCapture {
             throw AudioCaptureError.engineFailed(error)
         }
 
-        self.engine = engine
         self.converter = converter
+        self.isRunning = true
         Self.log.info("capture started: input \(inputFormat.sampleRate, privacy: .public)Hz/\(inputFormat.channelCount, privacy: .public)ch -> target \(targetFormat.sampleRate, privacy: .public)Hz/\(targetFormat.channelCount, privacy: .public)ch")
     }
 
-    /// Tear down the engine fully so the next `start` builds a fresh one.
+    /// Stop capture: halt the engine and remove the tap, keeping the engine allocated
+    /// (see the `engine` property note). Idempotent. The next `start` reinstalls.
     public func stop() {
-        engine?.inputNode.removeTap(onBus: 0)
-        engine?.stop()
-        engine = nil
+        guard isRunning else { return }
+        isRunning = false
+        Self.log.info("capture stopping")
+        engine.stop()                          // synchronous; quiesces the HAL IO thread
+        engine.inputNode.removeTap(onBus: 0)   // safe only after the engine has stopped
         converter = nil
         Self.log.info("capture stopped")
     }
