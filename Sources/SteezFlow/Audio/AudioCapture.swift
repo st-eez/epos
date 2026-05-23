@@ -49,7 +49,9 @@ public final class AudioCapture {
                 self.onAmplitude?(amplitude)
             }
 
-            let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * rateRatio))
+            // +1 frame: the SRC resampler can emit one extra frame on buffers where
+            // accumulated fractional phase rolls over, beyond ceil(in * ratio).
+            let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * rateRatio)) + 1
             guard capacity > 0,
                   let output = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
                 return
