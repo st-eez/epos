@@ -9,23 +9,78 @@ import OSLog
 final class DogfoodTap: @unchecked Sendable {
     private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "dogfood")
 
-    private let lock = NSLock()
+    /// Serial queue that owns `file`. All disk I/O happens here, never on the
+    /// audio thread.
+    private let queue = DispatchQueue(label: "com.steez.SteezFlow.dogfood-write", qos: .utility)
     private var file: AVAudioFile?
 
-    /// Append `buffer` to the current recording. Opens a new file on the first call
-    /// after construction or after `stop()`. Thread-safe; called from the audio thread.
+    /// Append `buffer` to the current recording. Called from the audio thread, so
+    /// it does only a cheap deep-copy of the samples here (the engine reuses
+    /// `buffer` after the callback returns) and hands the copy to the write queue.
+    /// Opens a new file on the first write after construction or after `stop()`.
     func write(_ buffer: AVAudioPCMBuffer) {
-        lock.withLock {
-            if file == nil {
-                file = Self.openFile(format: buffer.format)
+        guard let copy = Self.copy(buffer) else { return }
+        // `copy` is freshly allocated and handed off exclusively to the write queue —
+        // the audio thread never touches it again — so the transfer is safe.
+        // `AVAudioPCMBuffer` is not `Sendable`, hence the explicit opt-out.
+        nonisolated(unsafe) let sendableCopy = copy
+        queue.async {
+            if self.file == nil {
+                self.file = Self.openFile(format: sendableCopy.format)
             }
-            try? file?.write(from: buffer)
+            do {
+                try self.file?.write(from: sendableCopy)
+            } catch {
+                Self.log.error("audio file write failed: \(String(describing: error), privacy: .public)")
+            }
         }
     }
 
-    /// Close the current recording. Next `write` opens a fresh file.
+    /// Close the current recording. Routed through the write queue so any
+    /// already-enqueued writes flush first (serial FIFO). Next `write` opens a
+    /// fresh file.
     func stop() {
-        lock.withLock { file = nil }
+        queue.async { self.file = nil }
+    }
+
+    /// Deep-copy a buffer's samples so it survives past the audio callback. Returns
+    /// nil if the sample format isn't one we know how to copy.
+    private static func copy(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        guard let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: buffer.frameCapacity) else {
+            return nil
+        }
+        copy.frameLength = buffer.frameLength
+        let channelCount = Int(buffer.format.channelCount)
+        let frameLength = Int(buffer.frameLength)
+
+        // The channelData accessors are non-nil for BOTH layouts. Interleaved
+        // formats keep every channel in one shared block (pointer [0], samples
+        // strided by channelCount); deinterleaved formats give one block per
+        // channel. Copy whole blocks accordingly so interleaved data isn't
+        // scrambled by a per-channel stride-1 assumption.
+        let interleaved = buffer.format.isInterleaved
+        let blockCount = interleaved ? 1 : channelCount
+        let samplesPerBlock = interleaved ? frameLength * channelCount : frameLength
+
+        if let src = buffer.floatChannelData, let dst = copy.floatChannelData {
+            let bytes = samplesPerBlock * MemoryLayout<Float>.size
+            for block in 0..<blockCount {
+                memcpy(dst[block], src[block], bytes)
+            }
+        } else if let src = buffer.int16ChannelData, let dst = copy.int16ChannelData {
+            let bytes = samplesPerBlock * MemoryLayout<Int16>.size
+            for block in 0..<blockCount {
+                memcpy(dst[block], src[block], bytes)
+            }
+        } else if let src = buffer.int32ChannelData, let dst = copy.int32ChannelData {
+            let bytes = samplesPerBlock * MemoryLayout<Int32>.size
+            for block in 0..<blockCount {
+                memcpy(dst[block], src[block], bytes)
+            }
+        } else {
+            return nil
+        }
+        return copy
     }
 
     private static func openFile(format: AVAudioFormat) -> AVAudioFile? {
