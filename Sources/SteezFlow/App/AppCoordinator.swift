@@ -102,33 +102,8 @@ public final class AppCoordinator: ObservableObject {
         indicator.show()
         log.info("recording start")
 
-        let transcriber = transcriber
-        let audio = audio
-        let dogfood = dogfood
-
-        let events: AsyncStream<TranscriptEvent>
-        do {
-            events = try transcriber.start()
-            audio.onBuffer = { buffer in transcriber.accept(buffer) }
-            audio.onAmplitude = { [weak self] amp in
-                Task { @MainActor in self?.amplitude = amp }
-            }
-            audio.onRawBuffer = { buffer in dogfood.write(buffer) }
-            try audio.start(targetFormat: format)
-        } catch {
-            log.error("recording setup failed: \(String(describing: error), privacy: .public)")
-            audio.onBuffer = nil
-            audio.onAmplitude = nil
-            audio.onRawBuffer = nil
-            dogfood.stop()
-            Task { await transcriber.finish() }
-            indicator.hide()
-            state = .idle
-            return
-        }
-
         transcriptionTask = Task { [weak self] in
-            await self?.drainEvents(events)
+            await self?.runSession(format: format)
         }
     }
 
@@ -141,9 +116,32 @@ public final class AppCoordinator: ObservableObject {
         Task { await transcriber.finish() }
     }
 
-    /// Drains the transcription event stream into published UI state. On stream
-    /// completion, pastes the accumulated final text and resets to idle.
-    private func drainEvents(_ events: AsyncStream<TranscriptEvent>) async {
+    private func runSession(format: AVAudioFormat) async {
+        let transcriber = self.transcriber
+        let audio = self.audio
+        let dogfood = self.dogfood
+
+        let events: AsyncStream<TranscriptEvent>
+        do {
+            events = try await transcriber.start()
+            audio.onBuffer = { buffer in transcriber.accept(buffer) }
+            audio.onAmplitude = { [weak self] amp in
+                Task { @MainActor in self?.amplitude = amp }
+            }
+            audio.onRawBuffer = { buffer in dogfood.write(buffer) }
+            try audio.start(targetFormat: format)
+        } catch {
+            log.error("recording setup failed: \(String(describing: error), privacy: .public)")
+            audio.onBuffer = nil
+            audio.onAmplitude = nil
+            audio.onRawBuffer = nil
+            dogfood.stop()
+            await transcriber.finish()
+            indicator.hide()
+            state = .idle
+            return
+        }
+
         for await event in events {
             switch event {
             case .partial(let text):
@@ -156,8 +154,6 @@ public final class AppCoordinator: ObservableObject {
             }
         }
 
-        // Defensive teardown: finishRecording owns the happy path, but the analyzer
-        // can also drive the stream to completion on its own (e.g. analyzer.start failure).
         audio.stop()
         audio.onBuffer = nil
         audio.onAmplitude = nil

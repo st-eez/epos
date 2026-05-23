@@ -14,8 +14,8 @@ public enum TranscriptEvent: Equatable {
 /// `start()` builds a fresh analyzer + module per call; do not reuse a single session.
 /// `accept(_:)` is safe to call from the audio thread.
 /// `finish()` is idempotent and safe to call concurrently with — or immediately after —
-/// `start()`. Buffers accepted before the underlying analyzer is ready queue in the input
-/// stream and are consumed once `analyzer.start(inputSequence:)` resolves.
+/// `start()`. The lock-install inside `start()` precedes the `await` on analyzer start,
+/// so a `finish()` racing the in-flight start sees the install and tears down cleanly.
 public final class Transcriber: @unchecked Sendable {
     public let locale: Locale
 
@@ -40,11 +40,12 @@ public final class Transcriber: @unchecked Sendable {
         return await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe])
     }
 
-    /// Begin a new transcription session. Returns synchronously with an async stream of
-    /// partial + final results. The analyzer is started in the background; buffers
-    /// passed to `accept(_:)` before the analyzer is ready queue in the input stream.
+    /// Begin a new transcription session. Awaits `analyzer.start(inputSequence:)` per the
+    /// swift-scribe / WWDC25 sample ordering before returning the event stream. State is
+    /// installed under `lock` BEFORE the await, so a concurrent `finish()` sees the session
+    /// and can drive teardown via `startTask.value`.
     /// Throws `TranscriberError.alreadyRunning` if a prior session hasn't been `finish`ed.
-    public func start() throws -> AsyncStream<TranscriptEvent> {
+    public func start() async throws -> AsyncStream<TranscriptEvent> {
         let alreadyRunning = lock.withLock {
             self.analyzer != nil || self.startTask != nil
         }
@@ -80,19 +81,11 @@ public final class Transcriber: @unchecked Sendable {
             eventCont.finish()
         }
 
-        // analyzer.start runs in the background; finish() awaits this Task before tearing down.
         let startT = Task<Void, Error> {
-            do {
-                try await analyzer.start(inputSequence: inputStream)
-            } catch {
-                let message = String(describing: error)
-                Self.log.error("analyzer start failed: \(message, privacy: .public)")
-                eventCont.yield(.failed(message))
-                eventCont.finish()
-                throw error
-            }
+            try await analyzer.start(inputSequence: inputStream)
         }
 
+        // Install state BEFORE awaiting startT.value so a racing finish() can observe + drive teardown.
         lock.withLock {
             self.analyzer = analyzer
             self.inputContinuation = inputCont
@@ -103,6 +96,14 @@ public final class Transcriber: @unchecked Sendable {
         }
 
         Self.log.info("session starting for locale \(self.locale.identifier, privacy: .public)")
+        do {
+            try await startT.value
+        } catch {
+            let message = String(describing: error)
+            Self.log.error("analyzer start failed: \(message, privacy: .public)")
+            await finish()
+            throw error
+        }
         return eventStream
     }
 
