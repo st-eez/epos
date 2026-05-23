@@ -110,11 +110,11 @@ public final class Transcriber: @unchecked Sendable {
 
     /// Feed a captured audio buffer into the active session. Thread-safe.
     public func accept(_ buffer: AVAudioPCMBuffer) {
-        let continuation = lock.withLock { () -> AsyncStream<AnalyzerInput>.Continuation? in
-            if inputContinuation != nil { hasReceivedBuffer = true }
-            return inputContinuation
+        lock.withLock {
+            guard let continuation = inputContinuation else { return }
+            hasReceivedBuffer = true
+            continuation.yield(AnalyzerInput(buffer: buffer))
         }
-        continuation?.yield(AnalyzerInput(buffer: buffer))
     }
 
     /// End the session. Idempotent — repeat calls after the first are no-ops.
@@ -149,6 +149,11 @@ public final class Transcriber: @unchecked Sendable {
                 } catch {
                     let message = String(describing: error)
                     Self.log.error("finalize failed: \(message, privacy: .public)")
+                    // A failed finalize can leave `transcriber.results` dangling;
+                    // force-close the event stream and cancel the drain so the
+                    // `await drain?.value` below cannot hang.
+                    eventCont?.finish()
+                    drain?.cancel()
                 }
                 await drain?.value
             } else {
