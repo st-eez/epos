@@ -7,6 +7,7 @@ import OSLog
 /// Callbacks fire on the engine's audio thread; consumers must be thread-safe.
 public final class AudioCapture {
     /// Converted buffer in `targetFormat`. Fires on the engine's audio thread.
+    /// Set before `start()`; the value is snapshotted there for the session's tap.
     public var onBuffer: ((AVAudioPCMBuffer) -> Void)?
     /// Pre-conversion buffer in the mic's native format. Fires on the engine's audio
     /// thread. Temporary hook for the dogfood `.wav` capture — remove with that feature.
@@ -47,16 +48,22 @@ public final class AudioCapture {
 
         let rateRatio = targetFormat.sampleRate / inputFormat.sampleRate
 
+        // Snapshot the callbacks now so the realtime audio thread reads stable locals
+        // instead of these mutable properties (written on the main thread), closing
+        // the cross-thread data race on the closure pointers. The tap captures only
+        // value locals — no `self` — so there is nothing to tear out from under it.
+        let onRawBuffer = self.onRawBuffer
+        let onAmplitude = self.onAmplitude
+        let onBuffer = self.onBuffer
+
         // Defensive: clear any tap left by a prior aborted session before reinstalling
         // (the engine is long-lived now, so a stale tap would survive across calls).
         inputNode.removeTap(onBus: 0)
-        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            guard let self else { return }
-
-            self.onRawBuffer?(buffer)
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
+            onRawBuffer?(buffer)
 
             if let amplitude = Self.rms(of: buffer) {
-                self.onAmplitude?(amplitude)
+                onAmplitude?(amplitude)
             }
 
             // +1 frame: the SRC resampler can emit one extra frame on buffers where
@@ -89,7 +96,7 @@ public final class AudioCapture {
                 return
             }
 
-            self.onBuffer?(output)
+            onBuffer?(output)
         }
 
         do {
