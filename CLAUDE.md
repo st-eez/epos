@@ -63,12 +63,13 @@ swift test                                   # 4 smoke tests; should stay green
 swiftlint --quiet                            # silent = clean
 
 # 2. Bundled .app — required for any permission-gated work (mic, speech, AX)
-xcodegen generate
-xcodebuild -project SteezFlow.xcodeproj -scheme SteezFlowMacApp -configuration Debug -destination 'platform=macOS' build
-open ~/Library/Developer/Xcode/DerivedData/SteezFlow-*/Build/Products/Debug/SteezFlowMacApp.app
+export DEVELOPMENT_TEAM=YOURTEAMID
+scripts/build-signed-app.sh
+scripts/install-signed-app.sh
+open /Applications/SteezFlowMacApp.app
 ```
 
-E2E (mic / speech / accessibility / fn key / paste) requires the bundled `.app`. macOS does not persist TCC grants for `swift run` executables.
+E2E (mic / speech / accessibility / fn key / paste) requires the bundled `.app`. macOS does not persist TCC grants for `swift run` executables, and Accessibility grants are unstable for ad-hoc signed app builds. Keep `DEVELOPMENT_TEAM` in local shell config or CI secrets, not committed project config.
 
 ## Build Topology — Do Not Re-introduce the Trap
 
