@@ -7,42 +7,135 @@ public struct MenuBarView: View {
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
 
     private static let log = SteezFlowLogger(category: "menubar")
+    private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
+    private let teal = Color(red: 0.22, green: 0.78, blue: 0.72)
+    private let red = Color(red: 0.9, green: 0.28, blue: 0.3)
+    private let amber = Color(red: 0.86, green: 0.55, blue: 0.18)
 
     public init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Label(stateLabel, systemImage: stateIcon)
-                .font(.headline)
-            if let permissions, !allGranted(permissions) {
-                Divider()
-                permissionRow("Microphone", permissions.microphone)
-                permissionRow("Speech Recognition", permissions.speech)
-                permissionRow("Accessibility", permissions.accessibility)
-                Button("Open System Settings → Privacy") {
-                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .buttonStyle(.link)
+        VStack(alignment: .leading, spacing: 12) {
+            readinessBanner
+            permissionGrid
+            metadataRows
+            actionRow
+        }
+        .padding(14)
+        .frame(width: 310)
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous).fill(panelColor.opacity(0.94))
+        )
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 1))
+        .shadow(color: .black.opacity(0.22), radius: 20, x: 0, y: 12)
+        .onAppear { permissions = coordinator.snapshotPermissions() }
+    }
+
+    private var readinessBanner: some View {
+        HStack(spacing: 11) {
+            Image(systemName: readinessIcon)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(readinessColor)
+                .frame(width: 34, height: 34)
+                .background(readinessColor.opacity(0.18), in: Circle())
+            VStack(alignment: .leading, spacing: 2) {
+                Text(readinessTitle)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(.white)
+                Text(readinessSubtitle)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.white.opacity(0.62))
             }
-            Divider()
-            Text("Locale: \(coordinator.localeIdentifier)")
-                .foregroundStyle(.secondary)
-                .font(.caption)
-            Toggle("Launch at login", isOn: $launchAtLogin)
-                .onChange(of: launchAtLogin) { _, newValue in
-                    applyLaunchAtLogin(newValue)
-                }
-            Divider()
-            Button("Quit SteezFlow") { NSApplication.shared.terminate(nil) }
-                .keyboardShortcut("q")
+            Spacer(minLength: 0)
         }
         .padding(12)
-        .frame(width: 260)
-        .onAppear { permissions = coordinator.snapshotPermissions() }
+        .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(readinessColor.opacity(0.22), lineWidth: 1))
+    }
+
+    private var permissionGrid: some View {
+        HStack(spacing: 8) {
+            permissionTile("Mic", permissions?.microphone)
+            permissionTile("Speech", permissions?.speech)
+            permissionTile("AX", permissions?.accessibility)
+        }
+    }
+
+    private var metadataRows: some View {
+        VStack(spacing: 0) {
+            metaRow("Locale") {
+                Text(coordinator.localeIdentifier)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.78))
+            }
+            Divider().overlay(.white.opacity(0.08))
+            metaRow("Launch at login") {
+                Toggle("", isOn: $launchAtLogin)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(teal)
+                    .scaleEffect(0.74)
+                    .frame(width: 42, height: 22)
+                    .onChange(of: launchAtLogin) { _, newValue in
+                        applyLaunchAtLogin(newValue)
+                    }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 2)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var actionRow: some View {
+        HStack(spacing: 8) {
+            Button { openPrivacySettings() } label: { Label("Privacy", systemImage: "lock.shield") }
+            .buttonStyle(QuietButtonStyle())
+
+            Button {
+                NSApplication.shared.terminate(nil)
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "power")
+                    Text("Quit")
+                    Spacer(minLength: 0)
+                    Text("Q")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.46))
+                }
+            }
+            .buttonStyle(QuietButtonStyle())
+            .keyboardShortcut("q")
+        }
+    }
+
+    private func permissionTile(_ label: String, _ status: PermissionStatus?) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(permissionColor(status))
+                    .frame(width: 7, height: 7)
+                Text(label)
+                    .font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.8))
+            }
+            Text(permissionLabel(status))
+                .font(.system(size: 12, weight: .bold)).foregroundStyle(.white)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 12, style: .continuous).stroke(permissionColor(status).opacity(0.22), lineWidth: 1))
+    }
+
+    private func metaRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
+        HStack {
+            Text(label)
+                .font(.system(size: 12, weight: .medium)).foregroundStyle(.white.opacity(0.62))
+            Spacer(minLength: 12)
+            content()
+        }
+        .frame(height: 34)
     }
 
     private func applyLaunchAtLogin(_ enabled: Bool) {
@@ -60,43 +153,94 @@ public struct MenuBarView: View {
         }
     }
 
-    private func allGranted(_ snapshot: PermissionsSnapshot) -> Bool {
-        snapshot.microphone == .granted
-            && snapshot.speech == .granted
-            && snapshot.accessibility == .granted
-    }
-
-    private func permissionRow(_ label: String, _ status: PermissionStatus) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: status == .granted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                .foregroundStyle(status == .granted ? .green : .orange)
-            Text(label)
-            Spacer()
-            Text(statusLabel(status)).foregroundStyle(.secondary).font(.caption)
+    private func openPrivacySettings() {
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") {
+            NSWorkspace.shared.open(url)
         }
     }
 
-    private func statusLabel(_ status: PermissionStatus) -> String {
-        switch status {
-        case .granted: "Granted"
-        case .denied: "Denied"
-        case .notDetermined: "Not set"
+    private func allGranted(_ snapshot: PermissionsSnapshot?) -> Bool {
+        guard let snapshot else { return false }
+        return snapshot.microphone == .granted && snapshot.speech == .granted && snapshot.accessibility == .granted
+    }
+
+    private func permissionColor(_ status: PermissionStatus?) -> Color {
+        return switch status {
+        case .granted: teal
+        case .denied: red
+        case .notDetermined: amber
+        case nil: .white.opacity(0.34)
         }
     }
 
-    private var stateLabel: String {
-        switch coordinator.state {
-        case .idle: "Idle — hold fn to record"
-        case .recording: "Recording…"
-        case .finalizing: "Finalizing…"
+    private func permissionLabel(_ status: PermissionStatus?) -> String {
+        return switch status {
+        case .granted: "OK"
+        case .denied: "Blocked"
+        case .notDetermined: "Needed"
+        case nil: "..."
         }
     }
 
-    private var stateIcon: String {
-        switch coordinator.state {
+    private var readinessTitle: String {
+        if !allGranted(permissions) {
+            return permissions == nil ? "Checking access" : "Needs permission"
+        }
+        return switch coordinator.state {
+        case .idle: "Ready to dictate"
+        case .recording: "Recording"
+        case .finalizing: "Finishing dictation"
+        }
+    }
+
+    private var readinessSubtitle: String {
+        if !allGranted(permissions) {
+            return permissions == nil ? "Reading current grants" : "Open Privacy to finish setup"
+        }
+        return switch coordinator.state {
+        case .idle: "Hold fn in any text field"
+        case .recording: "Release fn to paste"
+        case .finalizing: "Pasting into the frontmost app"
+        }
+    }
+
+    private var readinessIcon: String {
+        if !allGranted(permissions) {
+            return permissions == nil ? "ellipsis" : "exclamationmark.triangle.fill"
+        }
+        return switch coordinator.state {
         case .idle: "mic"
-        case .recording: "mic.fill"
-        case .finalizing: "waveform"
+        case .recording: "waveform"
+        case .finalizing: "arrow.down.doc"
         }
+    }
+
+    private var readinessColor: Color {
+        if !allGranted(permissions) {
+            return permissions == nil ? .white.opacity(0.56) : amber
+        }
+        return switch coordinator.state {
+        case .idle: teal
+        case .recording: red
+        case .finalizing: teal
+        }
+    }
+}
+
+private struct QuietButtonStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white.opacity(configuration.isPressed ? 0.62 : 0.76))
+            .frame(maxWidth: .infinity, minHeight: 32)
+            .padding(.horizontal, 10)
+            .background(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(.white.opacity(configuration.isPressed ? 0.1 : 0.06))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .stroke(.white.opacity(0.08), lineWidth: 1)
+            )
     }
 }
