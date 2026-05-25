@@ -35,6 +35,9 @@ public struct RecordingIndicator: View {
 }
 
 struct RecordingIndicatorSurface: View {
+    nonisolated private static let maxDisplayLines = 5
+    nonisolated private static let maxDisplayCharacters = 400
+
     let state: CoordinatorState
     let transcript: String
     let amplitude: Float
@@ -105,7 +108,7 @@ struct RecordingIndicatorSurface: View {
         Text(displayText)
             .font(.system(size: 14, weight: hasTranscript ? .semibold : .medium))
             .foregroundStyle(.white.opacity(hasTranscript ? 0.94 : 0.56))
-            .lineLimit(2)
+            .lineLimit(Self.maxDisplayLines)
             .lineSpacing(1)
             .truncationMode(.head)
             .fixedSize(horizontal: false, vertical: true)
@@ -158,7 +161,10 @@ struct RecordingIndicatorSurface: View {
         return quiet[index] + (loud[index] - quiet[index]) * level
     }
 
-    nonisolated static func recentDisplayText(_ text: String, maxCharacters: Int = 160) -> String {
+    nonisolated static func recentDisplayText(
+        _ text: String,
+        maxCharacters: Int = maxDisplayCharacters
+    ) -> String {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleaned.isEmpty else { return "Listening..." }
         guard cleaned.count > maxCharacters else { return cleaned }
