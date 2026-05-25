@@ -96,6 +96,128 @@
       gap: 18px;
     }
 
+    .concept-grid[hidden] {
+      display: none;
+    }
+
+    .decision {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 0.74fr);
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .locked-card,
+    .improvements {
+      border: 1px solid rgba(32, 33, 36, 0.12);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.68);
+      box-shadow: 0 10px 34px rgba(37, 40, 45, 0.08);
+    }
+
+    .locked-card {
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    .locked-head,
+    .improvements-head {
+      padding: 18px;
+      border-bottom: 1px solid rgba(32, 33, 36, 0.1);
+      background: rgba(255, 255, 255, 0.54);
+    }
+
+    .locked-kicker {
+      display: inline-flex;
+      align-items: center;
+      width: fit-content;
+      gap: 7px;
+      margin-bottom: 9px;
+      border-radius: 999px;
+      padding: 5px 9px;
+      color: #0e5e53;
+      background: rgba(79, 209, 194, 0.18);
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.07em;
+      text-transform: uppercase;
+    }
+
+    .locked-kicker::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #20a99a;
+    }
+
+    .locked-head h2,
+    .improvements-head h2 {
+      font-size: 22px;
+    }
+
+    .locked-head p,
+    .improvements-head p {
+      margin-top: 7px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.45;
+      max-width: 640px;
+    }
+
+    .locked-stage {
+      min-height: 420px;
+      padding: 24px 18px 18px;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+      background:
+        linear-gradient(180deg, rgba(248, 249, 250, 0.94), rgba(229, 233, 238, 0.86)),
+        repeating-linear-gradient(0deg, rgba(42, 48, 55, 0.05) 0, rgba(42, 48, 55, 0.05) 1px, transparent 1px, transparent 20px);
+    }
+
+    .improvement-list {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+      padding: 14px;
+    }
+
+    .improvement {
+      min-height: 190px;
+      border: 1px solid rgba(32, 33, 36, 0.1);
+      border-radius: 8px;
+      padding: 14px;
+      background: rgba(255, 255, 255, 0.66);
+      display: grid;
+      align-content: start;
+      gap: 8px;
+    }
+
+    .improvement-number {
+      width: 28px;
+      height: 28px;
+      border-radius: 999px;
+      display: grid;
+      place-items: center;
+      color: #08100f;
+      background: #4fd1c2;
+      font-size: 12px;
+      font-weight: 900;
+    }
+
+    .improvement h3 {
+      font-size: 15px;
+      line-height: 1.25;
+    }
+
+    .improvement p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.42;
+    }
+
     .concept {
       border: 1px solid rgba(32, 33, 36, 0.12);
       border-radius: 8px;
@@ -423,6 +545,37 @@
       background: rgba(255, 255, 255, 0.1);
     }
 
+    .locked-card .indicator,
+    .locked-card .popover {
+      color: #e9fbf8;
+      background: rgba(30, 33, 38, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(18px);
+    }
+
+    .locked-card .bars {
+      color: #39c7b8;
+    }
+
+    .locked-card .mic-mark {
+      color: #08100f;
+      background: #4fd1c2;
+    }
+
+    .locked-card .row {
+      border-color: rgba(255, 255, 255, 0.11);
+    }
+
+    .locked-card .status-pill {
+      color: #dff8ea;
+      background: rgba(46, 125, 89, 0.36);
+    }
+
+    .locked-card .button {
+      color: #f7fafc;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
     .concept-b .indicator {
       width: 440px;
       min-height: 48px;
@@ -564,6 +717,10 @@
     }
 
     @media (max-width: 980px) {
+      .decision {
+        grid-template-columns: 1fr;
+      }
+
       .concept-grid {
         grid-template-columns: 1fr;
       }
@@ -592,6 +749,10 @@
         grid-template-columns: 1fr;
       }
 
+      .improvement-list {
+        grid-template-columns: 1fr;
+      }
+
       .concept-head {
         display: grid;
       }
@@ -601,6 +762,7 @@
       }
 
       .indicator,
+      .locked-card .indicator,
       .concept-b .indicator,
       .concept-c .indicator,
       .concept-d .indicator {
@@ -621,10 +783,10 @@
   <main>
     <section class="intro" aria-labelledby="page-title">
       <div>
-        <h1 id="page-title">SteezFlow UI Concepts</h1>
+        <h1 id="page-title">SteezFlow Glass Capsule Direction</h1>
         <p>
-          Four visual directions for the baseline app surfaces: the floating recording indicator and the menu-bar popover.
-          Each concept keeps push-to-talk, live partial text, permissions, locale, launch-at-login, and quit in scope.
+          Option A is the selected direction. The next pass should keep the dark glass recording capsule and matching
+          menu popover, then sharpen hierarchy, state feedback, readiness, and interaction details.
         </p>
       </div>
       <div class="constraints" aria-label="Design constraints">
@@ -635,7 +797,84 @@
       </div>
     </section>
 
-    <section class="concept-grid" aria-label="Concept options">
+    <section class="decision" aria-label="Locked direction and improvements">
+      <article class="locked-card">
+        <header class="locked-head">
+          <div class="locked-kicker">Locked direction</div>
+          <h2>Glass Capsule</h2>
+          <p>
+            Keep the compact floating capsule, dark translucent material, teal audio energy, and a menu popover that feels
+            like the same surface. This is the best fit because it improves the current UI without expanding baseline scope.
+          </p>
+        </header>
+        <div class="locked-stage">
+          <div>
+            <div class="surface-label">Recording indicator</div>
+            <div class="desktop-strip">
+              <div class="indicator">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                <span class="transcript">send the branch diff with the signing fix</span>
+                <span class="shortcut">fn</span>
+              </div>
+              <div class="dock" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="popover-wrap">
+            <div class="notes">
+              <p><strong>Implementation target:</strong> one SwiftUI visual language shared by RecordingIndicator and MenuBarView.</p>
+              <p>Start from the current layout, then tighten spacing, state colors, row grouping, and active/finalizing behavior.</p>
+            </div>
+            <div>
+              <div class="surface-label">Menu popover</div>
+              <div class="popover">
+                <div class="pop-head">
+                  <div class="mic-mark">mic</div>
+                  <div class="state-text"><strong>Ready</strong><span>Hold fn to dictate</span></div>
+                </div>
+                <div class="row"><span>Microphone</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Speech Recognition</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Accessibility</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Locale</span><small>en-US</small></div>
+                <div class="row"><span>Launch at login</span><span class="toggle" aria-hidden="true"></span></div>
+                <div class="button-row"><div class="button">Privacy</div><div class="button">Quit</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <aside class="improvements" aria-labelledby="improvements-title">
+        <header class="improvements-head">
+          <h2 id="improvements-title">Four Improvements</h2>
+          <p>These are the refinements I would make before translating the direction into SwiftUI.</p>
+        </header>
+        <div class="improvement-list">
+          <section class="improvement">
+            <div class="improvement-number">1</div>
+            <h3>Make the indicator read in one glance</h3>
+            <p>Use three fixed zones: status dot, live audio meter, transcript. The transcript stays primary, while the dot only says recording/finalizing/error.</p>
+          </section>
+          <section class="improvement">
+            <div class="improvement-number">2</div>
+            <h3>Add distinct state treatments</h3>
+            <p>Recording should be red plus teal motion, finalizing should shift to amber progress, and errors should flash briefly without adding a new recovery mode.</p>
+          </section>
+          <section class="improvement">
+            <div class="improvement-number">3</div>
+            <h3>Turn the popover into a readiness panel</h3>
+            <p>Lead with one clear ready/blocked state, then show permissions as compact rows. Only show the Privacy action when something needs attention.</p>
+          </section>
+          <section class="improvement">
+            <div class="improvement-number">4</div>
+            <h3>Use calmer menu actions</h3>
+            <p>Keep launch-at-login as the only switch, make locale read-only metadata, and push Quit into a lower-emphasis row so the popover feels operational.</p>
+          </section>
+        </div>
+      </aside>
+    </section>
+
+    <section class="concept-grid" aria-label="Earlier concept options" hidden>
       <article class="concept concept-a">
         <header class="concept-head">
           <div class="concept-title">
