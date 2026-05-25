@@ -1,4 +1,5 @@
 import AVFoundation
+import Speech
 import XCTest
 @testable import SteezFlow
 
@@ -23,6 +24,15 @@ final class SmokeTests: XCTestCase {
     func testTranscriberInstantiates() {
         let transcriber = Transcriber(locale: Locale(identifier: "en-US"))
         XCTAssertEqual(transcriber.locale.identifier, "en-US")
+    }
+
+    func testTranscriberPresetRequestsAlternativesWithoutFastResults() {
+        let preset = Transcriber.speechPreset
+
+        XCTAssertEqual(preset.transcriptionOptions, [])
+        XCTAssertEqual(preset.reportingOptions, [.volatileResults, .alternativeTranscriptions])
+        XCTAssertFalse(preset.reportingOptions.contains(.fastResults))
+        XCTAssertEqual(preset.attributeOptions, [.transcriptionConfidence])
     }
 
     func testInjectorPasteEmptyStringNoop() {

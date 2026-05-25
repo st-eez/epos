@@ -18,7 +18,14 @@ public enum TranscriptEvent: Equatable {
 public final class Transcriber: @unchecked Sendable {
     public let locale: Locale
 
+    static let speechPreset = SpeechTranscriber.Preset(
+        transcriptionOptions: [],
+        reportingOptions: [.volatileResults, .alternativeTranscriptions],
+        attributeOptions: [.transcriptionConfidence]
+    )
+
     private static let log = SteezFlowLogger(category: "transcriber")
+    private static let logFinalAlternativesKey = "debug.speech.logFinalAlternatives"
 
     private let lock = NSLock()
     private var analyzer: SpeechAnalyzer?
@@ -66,6 +73,7 @@ public final class Transcriber: @unchecked Sendable {
                     count += 1
                     let text = String(result.text.characters)
                     if result.isFinal {
+                        Self.logFinalAlternativesIfEnabled(result)
                         eventCont.yield(.final(text))
                     } else {
                         eventCont.yield(.partial(text))
@@ -108,12 +116,19 @@ public final class Transcriber: @unchecked Sendable {
     }
 
     static func makeTranscriber(locale: Locale) -> SpeechTranscriber {
-        SpeechTranscriber(
-            locale: locale,
-            transcriptionOptions: [],
-            reportingOptions: [.volatileResults],
-            attributeOptions: []
-        )
+        SpeechTranscriber(locale: locale, preset: speechPreset)
+    }
+
+    private static func logFinalAlternativesIfEnabled(_ result: SpeechTranscriber.Result) {
+        guard UserDefaults.standard.bool(forKey: logFinalAlternativesKey) else { return }
+        let candidates = ([result.text] + result.alternatives)
+            .prefix(8)
+            .enumerated()
+            .map { index, alternative in
+                "\(index): \(String(alternative.characters))"
+            }
+            .joined(separator: " | ")
+        log.info("debug final alternatives count=\(result.alternatives.count) candidates=\(candidates)")
     }
 
     /// Feed a captured audio buffer into the active session. Thread-safe.
