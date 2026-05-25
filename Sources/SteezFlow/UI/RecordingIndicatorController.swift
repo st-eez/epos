@@ -10,7 +10,7 @@ public final class RecordingIndicatorController {
     private var panel: NSPanel?
     private let log = SteezFlowLogger(category: "indicator")
 
-    private static let panelSize = CGSize(width: 420, height: 56)
+    private static let panelSize = CGSize(width: 700, height: 150)
     private static let bottomInset: CGFloat = 60
 
     public init() {}
@@ -33,7 +33,7 @@ public final class RecordingIndicatorController {
         panel.isMovableByWindowBackground = false
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.hasShadow = true
+        panel.hasShadow = false
 
         let host = NSHostingView(rootView: content)
         host.frame = frame
