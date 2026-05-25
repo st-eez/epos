@@ -23,6 +23,7 @@ public final class AppCoordinator: ObservableObject {
     private let hotkey: FnHotkey
     private let audio: AudioCapture
     private let transcriber: Transcriber
+    private let speechContext: SpeechContext
     private let injector: TextInjector
     private let permissions: PermissionsGate
     private let assets: AssetManager
@@ -44,12 +45,14 @@ public final class AppCoordinator: ObservableObject {
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
         injector: TextInjector = TextInjector(),
+        speechContext: SpeechContext = SpeechContext(),
         settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
         self.injector = injector
+        self.speechContext = speechContext
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -117,12 +120,22 @@ public final class AppCoordinator: ObservableObject {
 
     private func runSession(format: AVAudioFormat) async {
         let transcriber = self.transcriber
+        let speechContext = self.speechContext
         let audio = self.audio
         let dogfood = self.dogfood
 
         let events: AsyncStream<TranscriptEvent>
         do {
-            events = try await transcriber.start()
+            events = try await transcriber.start(contextualStrings: speechContext.load())
+            guard state == .recording else {
+                await transcriber.finish()
+                indicator.hide()
+                amplitude = 0
+                partial = ""
+                transcriptionTask = nil
+                state = .idle
+                return
+            }
             audio.onBuffer = { buffer in transcriber.accept(buffer) }
             audio.onAmplitude = { [weak self] amp in
                 Task { @MainActor in
