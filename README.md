@@ -14,7 +14,7 @@ Greenfield rebuild of the original SteezFlow. Source of truth: `specs/baseline.m
 ## Build
 
 ```sh
-# Library + executable target via SwiftPM
+# Library target via SwiftPM
 swift build
 
 # Build a signed .app bundle. The script infers DEVELOPMENT_TEAM when one
@@ -24,6 +24,25 @@ scripts/build-signed-app.sh
 # Install the signed app to /Applications for the stable runtime/TCC target.
 scripts/install-signed-app.sh
 ```
+
+## Free Local Install
+
+This path does not require a paid Apple Developer Program account. It builds
+the app from source on the user's Mac, signs it locally, and installs it into
+`/Applications`.
+
+```sh
+brew install xcodegen
+scripts/install-local-app.sh
+open /Applications/SteezFlowMacApp.app
+```
+
+`scripts/build-local-app.sh` prefers an Apple Development certificate when one
+is available. That certificate can be created with a free Apple ID in Xcode. If
+none is available, the script falls back to an ad-hoc local signature.
+
+For Homebrew tap distribution, use the source-build formula template in
+`packaging/homebrew/`.
 
 ## First-Run Setup
 

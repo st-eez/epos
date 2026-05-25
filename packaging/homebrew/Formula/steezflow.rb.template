@@ -1,0 +1,53 @@
+class Steezflow < Formula
+  desc "Push-to-talk dictation app using Apple SpeechTranscriber"
+  homepage "https://github.com/YOUR_GITHUB_OWNER/steezflow2"
+  url "https://github.com/YOUR_GITHUB_OWNER/steezflow2/archive/refs/tags/v2.0.0.tar.gz"
+  sha256 "REPLACE_WITH_SOURCE_TARBALL_SHA256"
+
+  depends_on xcode: ["17.0", :build]
+  depends_on "xcodegen" => :build
+
+  def install
+    system "scripts/build-local-app.sh"
+    libexec.install ".build/xcode/Release/SteezFlowMacApp.app"
+
+    (bin/"steezflow-install-app").write <<~SH
+      #!/bin/sh
+      set -eu
+
+      app="#{libexec}/SteezFlowMacApp.app"
+      dest="${INSTALL_APP_PATH:-/Applications/SteezFlowMacApp.app}"
+
+      if pgrep -f "$dest/Contents/MacOS/SteezFlowMacApp" >/dev/null 2>&1; then
+        echo "error: $dest is running. Quit SteezFlowMacApp, then rerun this command." >&2
+        exit 66
+      fi
+
+      mkdir -p "$(dirname "$dest")"
+      ditto "$app" "$dest"
+      codesign --verify --deep --strict "$dest"
+      printf '%s\\n' "$dest"
+    SH
+  end
+
+  def caveats
+    <<~EOS
+      SteezFlow was built locally from source and was not notarized.
+
+      Install the app bundle into /Applications with:
+        steezflow-install-app
+
+      Then launch:
+        open /Applications/SteezFlowMacApp.app
+
+      For a more stable free local signature, add an Apple ID in Xcode and
+      create an Apple Development certificate before installing.
+    EOS
+  end
+
+  test do
+    app = libexec/"SteezFlowMacApp.app"
+    assert_path_exists app/"Contents/MacOS/SteezFlowMacApp"
+    system "codesign", "--verify", "--deep", "--strict", app
+  end
+end
