@@ -1,34 +1,5 @@
 # SteezFlow Claude Instructions
 
-## ⚠️ Dogfood Capture Rig Active (started 2026-05-22)
-
-A background log stream + RSS sampler + audio-tee `.wav` capture have been
-running since the dogfood session started. **At the start of every Claude
-session in this directory, before doing anything else, tell the user the
-rig is still active and ask whether to leave it running or tear it down.**
-
-Status check (run before reminding):
-
-```sh
-pgrep -af '/usr/bin/log stream.*com.steez.SteezFlow'   # log stream
-pgrep -af 'STEEZ_RSS_SAMPLER'                          # rss sampler
-ls -la ~/Library/Caches/SteezFlow/                     # outputs
-```
-
-Tear down when the user says so:
-
-```sh
-pkill -f '/usr/bin/log stream.*com.steez.SteezFlow'
-pkill -f 'STEEZ_RSS_SAMPLER'
-```
-
-Audio tee in `AudioCapture` continues writing `.wav` files per recording — that's a
-code change (`c4a6816`). Removing it is a separate revert when the dogfood
-review is done.
-
-**Remove this entire section** (and revert the audio-tee commit if desired) once
-the dogfood review is complete.
-
 ## Hard Rules
 
 - Never hardcode PII, secrets, API keys, credentials, or machine-specific absolute paths.
@@ -89,13 +60,15 @@ Grep it before assuming any symbol exists. macOS 26+ only — no `if #available`
 
 ## Logging
 
-`os.Logger` only. Subsystem `com.steez.SteezFlow`. Categories per module: `coordinator`, `permissions`, `assets`, `transcriber`, `audio`, `menubar`. Stream during runtime:
+Use `SteezFlowLogger` so each event goes to Apple unified logging and the app-owned diagnostic log under `~/Library/Caches/SteezFlow/logs/`. Subsystem `com.steez.SteezFlow`. Categories per module: `coordinator`, `permissions`, `assets`, `transcriber`, `audio`, `menubar`.
+
+Use `log stream` only as a manual, bounded debugging command; do not leave it running as a background capture rig:
 
 ```sh
 /usr/bin/log stream --predicate 'subsystem == "com.steez.SteezFlow"' --info --debug
 ```
 
-`Logger` interpolations default to `.private` redaction (shows `<private>`). Use `, privacy: .public` for non-PII values you actually need to see.
+Diagnostic log events must stay privacy-aware: no transcript text, PII, secrets, or environment-specific values.
 
 ## Code Change Rules
 
