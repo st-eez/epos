@@ -24,6 +24,20 @@ discover_development_teams() {
   done | sort -u
 }
 
+require_command() {
+  local command_name="$1"
+  local install_hint="$2"
+
+  if ! command -v "$command_name" >/dev/null 2>&1; then
+    cat >&2 <<MSG
+error: missing required command: $command_name
+
+$install_hint
+MSG
+    exit 69
+  fi
+}
+
 configuration="${CONFIGURATION:-Release}"
 symroot="$repo_root/.build/xcode"
 app_path="$symroot/$configuration/SteezFlowMacApp.app"
@@ -31,9 +45,10 @@ signing_mode="${STEEZFLOW_LOCAL_SIGNING:-auto}"
 
 cd "$repo_root"
 
-if command -v xcodegen >/dev/null 2>&1; then
-  xcodegen generate >&2
-fi
+require_command xcodegen "Install it with: brew install xcodegen"
+require_command xcodebuild "Install Xcode 17 or later, then run: sudo xcode-select -s /Applications/Xcode.app"
+
+xcodegen generate >&2
 
 case "$signing_mode" in
   auto | development | adhoc) ;;

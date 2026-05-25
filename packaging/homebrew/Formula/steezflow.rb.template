@@ -40,6 +40,10 @@ class Steezflow < Formula
       Then launch:
         open /Applications/SteezFlowMacApp.app
 
+      On first launch, grant Microphone, Speech Recognition, and Accessibility
+      permissions. Also disable macOS system dictation for the fn key:
+      System Settings -> Keyboard -> Dictation -> Shortcut -> Off.
+
       For a more stable free local signature, add an Apple ID in Xcode and
       create an Apple Development certificate before installing.
     EOS

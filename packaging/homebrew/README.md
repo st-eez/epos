@@ -42,6 +42,12 @@ copy that app into `/Applications`.
    open /Applications/SteezFlowMacApp.app
    ```
 
+6. Complete first-run setup:
+
+   - Grant Microphone, Speech Recognition, and Accessibility permissions.
+   - Disable macOS system dictation: System Settings -> Keyboard -> Dictation
+     -> Shortcut -> Off.
+
 ## Signing Behavior
 
 `scripts/build-local-app.sh` prefers an Apple Development certificate when one
@@ -62,3 +68,10 @@ STEEZFLOW_LOCAL_SIGNING=adhoc scripts/build-local-app.sh
 
 This flow intentionally does not remove `com.apple.quarantine` from downloaded
 binary app bundles. The app is built locally from source instead.
+
+## When to Update This Packaging
+
+Normal app code changes should not change the coworker install command. Update
+the formula/template only when release metadata changes, required build tools
+change, app target/project generation changes, signing behavior changes, or the
+installed app path changes.

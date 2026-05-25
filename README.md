@@ -44,6 +44,23 @@ none is available, the script falls back to an ad-hoc local signature.
 For Homebrew tap distribution, use the source-build formula template in
 `packaging/homebrew/`.
 
+## Contributor Workflow
+
+The build and install commands stay the same when editing normal app code under
+`Sources/`, `Tests/`, or `Resources/`.
+
+```sh
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+scripts/install-local-app.sh
+```
+
+Update the build or distribution instructions only when changing build
+infrastructure: `Package.swift`, `project.yml`, app entitlements, required
+tools, deployment target, signing behavior, install scripts, or Homebrew
+packaging.
+
 ## First-Run Setup
 
 1. Launch only `/Applications/SteezFlowMacApp.app`, not a DerivedData copy.
