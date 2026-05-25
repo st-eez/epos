@@ -4,23 +4,75 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 
-if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
-  cat >&2 <<'MSG'
-error: DEVELOPMENT_TEAM is required.
+discover_development_teams() {
+  local tmpdir
+  tmpdir="$(mktemp -d)"
+  trap 'rm -rf "$tmpdir"' RETURN
 
-Set it to your Apple Developer Team ID, then rerun this script:
+  security find-certificate -a -p -c "Apple Development" 2>/dev/null |
+    awk -v dir="$tmpdir" '
+      /-----BEGIN CERTIFICATE-----/ { n += 1 }
+      n > 0 { print > (dir "/cert-" n ".pem") }
+    '
+
+  local cert subject team
+  for cert in "$tmpdir"/cert-*.pem; do
+    [[ -e "$cert" ]] || continue
+    subject="$(openssl x509 -in "$cert" -noout -subject 2>/dev/null || true)"
+    team="$(sed -n 's/.*OU=\([^,]*\).*/\1/p' <<<"$subject" | head -n 1)"
+    [[ -n "$team" ]] && printf '%s\n' "$team"
+  done | sort -u
+}
+
+code_sign_identity="${CODE_SIGN_IDENTITY:-Apple Development}"
+
+if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
+  mapfile -t discovered_teams < <(discover_development_teams)
+  if [[ "${#discovered_teams[@]}" -eq 1 ]]; then
+    DEVELOPMENT_TEAM="${discovered_teams[0]}"
+    export DEVELOPMENT_TEAM
+    printf 'info: using DEVELOPMENT_TEAM=%s from installed Apple Development certificate\n' "$DEVELOPMENT_TEAM" >&2
+  else
+    cat >&2 <<'MSG'
+error: DEVELOPMENT_TEAM is required and could not be inferred uniquely.
+
+Set it to the TeamIdentifier/OU from your Apple Development certificate, then
+rerun this script:
 
   export DEVELOPMENT_TEAM=YOURTEAMID
   scripts/build-signed-app.sh
 
-You can inspect available signing identities with:
+You can inspect available certificate subjects with:
 
-  security find-identity -v -p codesigning
+  security find-certificate -a -p -c "Apple Development" | openssl x509 -noout -subject
 MSG
-  exit 64
+    exit 64
+  fi
+else
+  mapfile -t discovered_teams < <(discover_development_teams)
+  if [[ "${#discovered_teams[@]}" -gt 0 ]]; then
+    team_matches=false
+    for team in "${discovered_teams[@]}"; do
+      if [[ "$team" == "$DEVELOPMENT_TEAM" ]]; then
+        team_matches=true
+        break
+      fi
+    done
+    if [[ "$team_matches" == false ]]; then
+      cat >&2 <<MSG
+error: DEVELOPMENT_TEAM=$DEVELOPMENT_TEAM does not match any installed Apple Development certificate TeamIdentifier/OU.
+
+Installed Apple Development certificate TeamIdentifier/OU values:
+$(printf '  %s\n' "${discovered_teams[@]}")
+
+Use one of those values for DEVELOPMENT_TEAM. Do not copy the parenthesized
+suffix from the keychain display name unless it matches the certificate OU.
+MSG
+      exit 64
+    fi
+  fi
 fi
 
-code_sign_identity="${CODE_SIGN_IDENTITY:-Apple Development}"
 configuration="${CONFIGURATION:-Debug}"
 symroot="$repo_root/.build/xcode"
 app_path="$symroot/$configuration/SteezFlowMacApp.app"

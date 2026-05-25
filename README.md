@@ -17,18 +17,17 @@ Greenfield rebuild of the original SteezFlow. Source of truth: `specs/baseline.m
 # Library + executable target via SwiftPM
 swift build
 
-# Build a signed .app bundle. DEVELOPMENT_TEAM must come from your shell,
-# not committed project config, so TCC can persist Accessibility grants.
-export DEVELOPMENT_TEAM=YOURTEAMID
+# Build a signed .app bundle. The script infers DEVELOPMENT_TEAM when one
+# Apple Development team is available; otherwise set it in your local shell.
 scripts/build-signed-app.sh
 
-# Optional: install the signed app to /Applications for a stable TCC target.
+# Install the signed app to /Applications for the stable runtime/TCC target.
 scripts/install-signed-app.sh
 ```
 
 ## First-Run Setup
 
-1. Launch only the installed signed app, not a DerivedData copy.
+1. Launch only `/Applications/SteezFlowMacApp.app`, not a DerivedData copy.
 2. Grant Microphone, Speech Recognition, and Accessibility permissions when prompted.
 3. The app downloads the SpeechTranscriber locale asset on first launch (one-time).
 4. **Disable macOS system dictation** so the fn key doesn't trigger two listeners at once: System Settings → Keyboard → Dictation → Shortcut → "Off".
