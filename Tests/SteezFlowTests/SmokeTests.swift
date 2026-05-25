@@ -39,6 +39,15 @@ final class SmokeTests: XCTestCase {
         XCTAssertGreaterThan(loudHeights.max() ?? 0, quietHeights.max() ?? 0)
     }
 
+    func testRecordingIndicatorKeepsRecentTranscriptVisible() {
+        let transcript = "open the project and run the full test suite then summarize the last failure in the final response"
+        let display = RecordingIndicator.recentDisplayText(transcript, maxCharacters: 54)
+
+        XCTAssertTrue(display.hasPrefix("..."))
+        XCTAssertFalse(display.contains("open the project"))
+        XCTAssertTrue(display.contains("last failure in the final response"))
+    }
+
     func testDiagnosticLogSinkWritesDirectFile() throws {
         let directory = try makeTemporaryDirectory()
         let sink = DiagnosticLogSink(

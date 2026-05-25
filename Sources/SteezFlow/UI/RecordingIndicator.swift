@@ -28,6 +28,10 @@ public struct RecordingIndicator: View {
     nonisolated static func barOpacity(_ index: Int, amplitude: Float) -> Double {
         RecordingIndicatorSurface.barOpacity(index, amplitude: amplitude)
     }
+
+    nonisolated static func recentDisplayText(_ text: String, maxCharacters: Int = 160) -> String {
+        RecordingIndicatorSurface.recentDisplayText(text, maxCharacters: maxCharacters)
+    }
 }
 
 struct RecordingIndicatorSurface: View {
@@ -62,7 +66,7 @@ struct RecordingIndicatorSurface: View {
     }
 
     private var displayText: String {
-        transcript.isEmpty ? "Listening..." : transcript
+        Self.recentDisplayText(transcript)
     }
 
     private var hasTranscript: Bool {
@@ -103,7 +107,7 @@ struct RecordingIndicatorSurface: View {
             .foregroundStyle(.white.opacity(hasTranscript ? 0.94 : 0.56))
             .lineLimit(2)
             .lineSpacing(1)
-            .truncationMode(.tail)
+            .truncationMode(.head)
             .fixedSize(horizontal: false, vertical: true)
             .frame(minWidth: 135, maxWidth: maxTranscriptWidth, alignment: .leading)
     }
@@ -152,6 +156,18 @@ struct RecordingIndicatorSurface: View {
         let loud: [Double] = [0.72, 0.98, 0.86, 1, 0.88]
         let level = Double(visualLevel(amplitude))
         return quiet[index] + (loud[index] - quiet[index]) * level
+    }
+
+    nonisolated static func recentDisplayText(_ text: String, maxCharacters: Int = 160) -> String {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return "Listening..." }
+        guard cleaned.count > maxCharacters else { return cleaned }
+
+        let suffixStart = cleaned.index(cleaned.endIndex, offsetBy: -maxCharacters)
+        let suffix = cleaned[suffixStart...]
+        let boundary = suffix.firstIndex(where: { $0.isWhitespace }) ?? suffix.startIndex
+        let recent = suffix[boundary...].trimmingCharacters(in: .whitespacesAndNewlines)
+        return recent.isEmpty ? String(suffix) : "... \(recent)"
     }
 
     nonisolated private static func visualLevel(_ amplitude: Float) -> CGFloat {
