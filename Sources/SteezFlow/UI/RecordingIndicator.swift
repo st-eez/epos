@@ -45,13 +45,12 @@ struct RecordingIndicatorSurface: View {
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
     private let teal = Color(red: 0.22, green: 0.78, blue: 0.72)
     private let amber = Color(red: 0.86, green: 0.55, blue: 0.18)
-    private let maxTranscriptWidth: CGFloat = 370
+    private let maxTranscriptWidth: CGFloat = 410
 
     var body: some View {
         HStack(alignment: .center, spacing: 9) {
             statusCluster
             transcriptText
-            keyCap
         }
         .padding(.leading, 10)
         .padding(.trailing, 9)
@@ -116,18 +115,6 @@ struct RecordingIndicatorSurface: View {
             .transaction { transaction in
                 transaction.animation = nil
             }
-    }
-
-    private var keyCap: some View {
-        Text("fn")
-            .font(.system(size: 10, weight: .bold))
-            .foregroundStyle(.white.opacity(0.72))
-            .frame(width: 27, height: 20)
-            .background(.white.opacity(0.085), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .stroke(.white.opacity(0.12), lineWidth: 1)
-            )
     }
 
     private var surfaceStroke: some View {
