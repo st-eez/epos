@@ -302,7 +302,7 @@
       box-shadow: 0 0 0 5px rgba(79, 209, 194, 0.14);
     }
 
-    .mini-dot.finalizing {
+    .mini-dot.warn {
       background: var(--amber);
       box-shadow: 0 0 0 5px rgba(194, 122, 34, 0.16);
     }
@@ -328,20 +328,40 @@
       align-items: center;
     }
 
-    .mini-indicator.finalizing {
-      color: #fff4dd;
-      border-color: rgba(246, 188, 84, 0.28);
-    }
-
-    .mini-indicator.finalizing .bars,
-    .mini-indicator.finalizing .mini-bars {
-      color: #f6bc54;
+    .no-panel {
+      min-height: 48px;
+      display: grid;
+      place-items: center;
+      border: 1px dashed rgba(89, 98, 115, 0.38);
+      border-radius: 999px;
+      color: #596273;
+      background: rgba(255, 255, 255, 0.42);
+      font-size: 12px;
+      font-weight: 800;
     }
 
     .mini-indicator.error {
       color: #fff1f1;
       border-color: rgba(255, 107, 103, 0.42);
       box-shadow: 0 0 0 2px rgba(255, 107, 103, 0.12), 0 14px 35px rgba(22, 27, 36, 0.18);
+    }
+
+    .mini-indicator.expands {
+      width: min(100%, 470px);
+      min-height: 72px;
+      align-items: flex-start;
+      border-radius: 28px;
+      padding: 12px 14px;
+    }
+
+    .mini-indicator.expands .mini-dot,
+    .mini-indicator.expands .mini-bars,
+    .mini-indicator.expands .mini-key {
+      margin-top: 9px;
+    }
+
+    .mini-indicator.compact {
+      width: min(100%, 340px);
     }
 
     .mini-bars {
@@ -374,6 +394,14 @@
       white-space: nowrap;
       font-size: 13px;
       font-weight: 650;
+    }
+
+    .mini-transcript.wrap {
+      white-space: normal;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 3;
     }
 
     .mini-key {
@@ -615,6 +643,20 @@
       box-shadow: var(--shadow);
     }
 
+    .indicator.expanded {
+      width: min(620px, calc(100% - 32px));
+      min-height: 84px;
+      align-items: flex-start;
+      border-radius: 30px;
+      padding: 14px 16px;
+    }
+
+    .indicator.expanded .dot,
+    .indicator.expanded .bars,
+    .indicator.expanded .shortcut {
+      margin-top: 9px;
+    }
+
     .dot {
       width: 10px;
       height: 10px;
@@ -653,6 +695,14 @@
       font-size: 14px;
       line-height: 1.25;
       font-weight: 520;
+    }
+
+    .transcript.wrap {
+      white-space: normal;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
     }
 
     .shortcut {
@@ -1102,7 +1152,7 @@
         <h1 id="page-title">SteezFlow Glass Capsule Direction</h1>
         <p>
           Option A is the selected direction. The next pass should keep the dark glass recording capsule and matching
-          menu popover, then sharpen hierarchy, state feedback, readiness, and interaction details.
+          menu popover, then sharpen transcript readability, state feedback, readiness, and interaction details.
         </p>
       </div>
       <div class="constraints" aria-label="Design constraints">
@@ -1120,17 +1170,17 @@
           <h2>Glass Capsule</h2>
           <p>
             Keep the compact floating capsule, dark translucent material, teal audio energy, and a menu popover that feels
-            like the same surface. This is the best fit because it improves the current UI without expanding baseline scope.
+            like the same surface. This is the best fit because it improves the current UI without expanding product scope.
           </p>
         </header>
         <div class="locked-stage">
           <div>
             <div class="surface-label">Recording indicator</div>
             <div class="desktop-strip">
-              <div class="indicator">
+              <div class="indicator expanded">
                 <span class="dot" aria-hidden="true"></span>
                 <span class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
-                <span class="transcript">send the branch diff with the signing fix</span>
+                <span class="transcript wrap">send the branch diff with the signing fix and include the test command that failed in the summary</span>
                 <span class="shortcut">fn</span>
               </div>
               <div class="dock" aria-hidden="true"></div>
@@ -1139,7 +1189,7 @@
           <div class="popover-wrap">
             <div class="notes">
               <p><strong>Implementation target:</strong> one SwiftUI visual language shared by RecordingIndicator and MenuBarView.</p>
-              <p>Start from the current layout, then tighten spacing, state colors, row grouping, and active/finalizing behavior.</p>
+              <p>Start from the current layout, then let the transcript area grow, tighten state colors, and simplify the menu rows.</p>
             </div>
             <div>
               <div class="surface-label">Menu popover</div>
@@ -1170,28 +1220,34 @@
             <div class="improvement-head">
               <div class="improvement-number">1</div>
               <div>
-                <h3>One-glance indicator hierarchy</h3>
-                <p>Fixed zones make the capsule scannable: state, audio, transcript, key.</p>
+                <h3>Expandable transcript capsule</h3>
+                <p>The capsule should grow wider and taller as partial text comes in.</p>
               </div>
             </div>
             <div class="visual-preview">
               <div class="mini-stack">
-                <div class="mini-indicator tight">
-                  <span class="mini-zone"><span class="mini-dot"></span></span>
-                  <span class="mini-zone"><span class="mini-bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span></span>
-                  <span class="mini-zone text">send branch diff</span>
-                  <span class="mini-zone"><span class="mini-key">fn</span></span>
+                <div class="mini-indicator compact">
+                  <span class="mini-dot"></span>
+                  <span class="mini-bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                  <span class="mini-transcript">send branch diff</span>
+                  <span class="mini-key">fn</span>
+                </div>
+                <div class="mini-indicator expands">
+                  <span class="mini-dot"></span>
+                  <span class="mini-bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                  <span class="mini-transcript wrap">send the branch diff with the signing fix and include the test command that failed in the summary</span>
+                  <span class="mini-key">fn</span>
                 </div>
               </div>
             </div>
-            <p>The improvement is spacing and structure, not extra copy. The transcript stays dominant while the meter stays visually separate.</p>
+            <p>This keeps the beginning visible and avoids head truncation. The indicator can cap at two or three lines, then fade only the tail if needed.</p>
           </section>
           <section class="improvement">
             <div class="improvement-head">
               <div class="improvement-number">2</div>
               <div>
-                <h3>Distinct state treatments</h3>
-                <p>Recording, finalizing, and error states should be visually different.</p>
+                <h3>Record and error states only</h3>
+                <p>Paste is too fast to deserve its own visible state.</p>
               </div>
             </div>
             <div class="visual-preview">
@@ -1206,12 +1262,8 @@
                   </div>
                 </div>
                 <div class="state-row">
-                  <div class="state-label">Finalize</div>
-                  <div class="mini-indicator finalizing">
-                    <span class="mini-dot finalizing"></span>
-                    <span class="mini-progress" aria-hidden="true"><span></span></span>
-                    <span class="mini-transcript">preparing paste</span>
-                  </div>
+                  <div class="state-label">Release</div>
+                  <div class="no-panel">no visible panel</div>
                 </div>
                 <div class="state-row">
                   <div class="state-label">Error</div>
@@ -1223,7 +1275,7 @@
                 </div>
               </div>
             </div>
-            <p>This keeps the baseline state machine intact while giving each user-visible state a different visual affordance.</p>
+            <p>On release, the panel should disappear after paste instead of showing progress. Save visible treatment for recording and recoverable errors.</p>
           </section>
           <section class="improvement">
             <div class="improvement-head">
@@ -1245,7 +1297,7 @@
                   <div class="mini-permission">AX<br>OK</div>
                 </div>
                 <div class="readiness-banner blocked">
-                  <span class="mini-dot finalizing"></span>
+                  <span class="mini-dot warn"></span>
                   <div class="readiness-copy"><strong>Needs permission</strong><span>Show this only when blocked</span></div>
                 </div>
               </div>
@@ -1404,7 +1456,7 @@
               <div class="popover">
                 <div class="pop-head">
                   <div class="mic-mark">mic</div>
-                  <div class="state-text"><strong>Finalizing</strong><span>Preparing paste</span></div>
+                  <div class="state-text"><strong>Recording</strong><span>Hold fn to keep dictating</span></div>
                 </div>
                 <div class="row"><span>Microphone</span><span class="status-pill">Granted</span></div>
                 <div class="row"><span>Speech Recognition</span><span class="status-pill">Granted</span></div>
