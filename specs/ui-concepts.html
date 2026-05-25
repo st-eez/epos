@@ -102,7 +102,7 @@
 
     .decision {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(340px, 0.74fr);
+      grid-template-columns: 1fr;
       gap: 18px;
       margin-bottom: 18px;
     }
@@ -180,19 +180,19 @@
     .improvement-list {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 12px;
-      padding: 14px;
+      gap: 14px;
+      padding: 18px;
     }
 
     .improvement {
-      min-height: 190px;
+      min-height: 350px;
       border: 1px solid rgba(32, 33, 36, 0.1);
       border-radius: 8px;
       padding: 14px;
       background: rgba(255, 255, 255, 0.66);
       display: grid;
-      align-content: start;
-      gap: 8px;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
     }
 
     .improvement-number {
@@ -212,10 +212,296 @@
       line-height: 1.25;
     }
 
+    .improvement-head {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+    }
+
     .improvement p {
       color: var(--muted);
       font-size: 13px;
       line-height: 1.42;
+    }
+
+    .visual-preview {
+      min-height: 210px;
+      border: 1px solid rgba(32, 33, 36, 0.1);
+      border-radius: 8px;
+      padding: 14px;
+      display: grid;
+      place-items: center;
+      background:
+        linear-gradient(180deg, rgba(245, 247, 249, 0.96), rgba(225, 230, 236, 0.9)),
+        repeating-linear-gradient(90deg, rgba(42, 48, 55, 0.04) 0, rgba(42, 48, 55, 0.04) 1px, transparent 1px, transparent 18px);
+      overflow: hidden;
+    }
+
+    .mini-stack {
+      width: min(100%, 410px);
+      display: grid;
+      gap: 10px;
+    }
+
+    .mini-indicator {
+      width: 100%;
+      min-width: 0;
+      min-height: 52px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 9px 12px;
+      border-radius: 999px;
+      color: #e9fbf8;
+      background: rgba(30, 33, 38, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      box-shadow: 0 14px 35px rgba(22, 27, 36, 0.18);
+    }
+
+    .mini-indicator.tight {
+      justify-content: stretch;
+    }
+
+    .mini-zone {
+      min-width: 0;
+      min-height: 34px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 10px;
+      border-right: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .mini-zone:last-child {
+      border-right: 0;
+    }
+
+    .mini-zone.text {
+      flex: 1 1 auto;
+      justify-content: flex-start;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .mini-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--red);
+      box-shadow: 0 0 0 5px rgba(229, 72, 77, 0.14);
+      flex: 0 0 auto;
+    }
+
+    .mini-dot.ready {
+      background: #4fd1c2;
+      box-shadow: 0 0 0 5px rgba(79, 209, 194, 0.14);
+    }
+
+    .mini-dot.finalizing {
+      background: var(--amber);
+      box-shadow: 0 0 0 5px rgba(194, 122, 34, 0.16);
+    }
+
+    .mini-dot.error {
+      background: #ff6b67;
+      box-shadow: 0 0 0 5px rgba(255, 107, 103, 0.18);
+    }
+
+    .state-label {
+      min-width: 70px;
+      color: #596273;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+
+    .state-row {
+      display: grid;
+      grid-template-columns: 82px minmax(0, 1fr);
+      gap: 8px;
+      align-items: center;
+    }
+
+    .mini-indicator.finalizing {
+      color: #fff4dd;
+      border-color: rgba(246, 188, 84, 0.28);
+    }
+
+    .mini-indicator.finalizing .bars,
+    .mini-indicator.finalizing .mini-bars {
+      color: #f6bc54;
+    }
+
+    .mini-indicator.error {
+      color: #fff1f1;
+      border-color: rgba(255, 107, 103, 0.42);
+      box-shadow: 0 0 0 2px rgba(255, 107, 103, 0.12), 0 14px 35px rgba(22, 27, 36, 0.18);
+    }
+
+    .mini-bars {
+      height: 22px;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      color: #39c7b8;
+      flex: 0 0 auto;
+    }
+
+    .mini-bars span {
+      display: block;
+      width: 4px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .mini-bars span:nth-child(1) { height: 8px; opacity: 0.55; }
+    .mini-bars span:nth-child(2) { height: 18px; opacity: 0.85; }
+    .mini-bars span:nth-child(3) { height: 12px; opacity: 0.7; }
+    .mini-bars span:nth-child(4) { height: 20px; opacity: 0.95; }
+    .mini-bars span:nth-child(5) { height: 11px; opacity: 0.65; }
+
+    .mini-transcript {
+      flex: 1 1 auto;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+      font-weight: 650;
+    }
+
+    .mini-key {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 3px 7px;
+      font-size: 10px;
+      font-weight: 800;
+      color: rgba(255, 255, 255, 0.86);
+      background: rgba(255, 255, 255, 0.13);
+    }
+
+    .mini-progress {
+      height: 5px;
+      width: 58px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.14);
+      overflow: hidden;
+    }
+
+    .mini-progress span {
+      display: block;
+      width: 62%;
+      height: 100%;
+      border-radius: inherit;
+      background: #f6bc54;
+    }
+
+    .mini-popover {
+      width: min(100%, 310px);
+      border-radius: 8px;
+      padding: 12px;
+      color: #e9fbf8;
+      background: rgba(30, 33, 38, 0.9);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      box-shadow: 0 14px 35px rgba(22, 27, 36, 0.18);
+    }
+
+    .readiness-banner {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      background: rgba(79, 209, 194, 0.12);
+      border: 1px solid rgba(79, 209, 194, 0.2);
+    }
+
+    .readiness-banner.blocked {
+      background: rgba(255, 184, 77, 0.12);
+      border-color: rgba(255, 184, 77, 0.24);
+    }
+
+    .readiness-copy {
+      min-width: 0;
+      display: grid;
+      gap: 2px;
+    }
+
+    .readiness-copy strong {
+      font-size: 13px;
+    }
+
+    .readiness-copy span {
+      color: rgba(233, 251, 248, 0.68);
+      font-size: 11px;
+    }
+
+    .mini-permission-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin: 8px 0;
+    }
+
+    .mini-permission {
+      min-height: 54px;
+      border-radius: 7px;
+      padding: 8px 6px;
+      display: grid;
+      place-items: center;
+      gap: 4px;
+      text-align: center;
+      color: #dff8ea;
+      background: rgba(46, 125, 89, 0.22);
+      font-size: 10px;
+      font-weight: 750;
+    }
+
+    .mini-permission.warn {
+      color: #ffe7b5;
+      background: rgba(194, 122, 34, 0.24);
+    }
+
+    .mini-meta {
+      display: grid;
+      gap: 7px;
+      padding-top: 9px;
+      margin-top: 9px;
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .mini-meta-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      color: rgba(233, 251, 248, 0.76);
+      font-size: 12px;
+    }
+
+    .mini-meta-row strong {
+      color: #e9fbf8;
+      font-size: 12px;
+    }
+
+    .quiet-action {
+      min-height: 30px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-top: 9px;
+      padding-top: 9px;
+      color: rgba(233, 251, 248, 0.62);
+      border-top: 1px solid rgba(255, 255, 255, 0.1);
+      font-size: 12px;
     }
 
     .concept {
@@ -776,6 +1062,36 @@
       .popover {
         width: 100%;
       }
+
+      .visual-preview {
+        padding: 10px;
+      }
+
+      .mini-indicator {
+        gap: 7px;
+        padding: 8px 10px;
+      }
+
+      .mini-zone {
+        padding: 0 7px;
+      }
+
+      .mini-bars {
+        gap: 2px;
+      }
+
+      .mini-bars span {
+        width: 3px;
+      }
+
+      .state-row {
+        grid-template-columns: 1fr;
+        gap: 5px;
+      }
+
+      .state-label {
+        min-width: 0;
+      }
     }
   </style>
 </head>
@@ -846,29 +1162,121 @@
 
       <aside class="improvements" aria-labelledby="improvements-title">
         <header class="improvements-head">
-          <h2 id="improvements-title">Four Improvements</h2>
-          <p>These are the refinements I would make before translating the direction into SwiftUI.</p>
+          <h2 id="improvements-title">Four Visual Improvements</h2>
+          <p>Each card shows the specific UI refinement instead of only describing it.</p>
         </header>
         <div class="improvement-list">
           <section class="improvement">
-            <div class="improvement-number">1</div>
-            <h3>Make the indicator read in one glance</h3>
-            <p>Use three fixed zones: status dot, live audio meter, transcript. The transcript stays primary, while the dot only says recording/finalizing/error.</p>
+            <div class="improvement-head">
+              <div class="improvement-number">1</div>
+              <div>
+                <h3>One-glance indicator hierarchy</h3>
+                <p>Fixed zones make the capsule scannable: state, audio, transcript, key.</p>
+              </div>
+            </div>
+            <div class="visual-preview">
+              <div class="mini-stack">
+                <div class="mini-indicator tight">
+                  <span class="mini-zone"><span class="mini-dot"></span></span>
+                  <span class="mini-zone"><span class="mini-bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span></span>
+                  <span class="mini-zone text">send branch diff</span>
+                  <span class="mini-zone"><span class="mini-key">fn</span></span>
+                </div>
+              </div>
+            </div>
+            <p>The improvement is spacing and structure, not extra copy. The transcript stays dominant while the meter stays visually separate.</p>
           </section>
           <section class="improvement">
-            <div class="improvement-number">2</div>
-            <h3>Add distinct state treatments</h3>
-            <p>Recording should be red plus teal motion, finalizing should shift to amber progress, and errors should flash briefly without adding a new recovery mode.</p>
+            <div class="improvement-head">
+              <div class="improvement-number">2</div>
+              <div>
+                <h3>Distinct state treatments</h3>
+                <p>Recording, finalizing, and error states should be visually different.</p>
+              </div>
+            </div>
+            <div class="visual-preview">
+              <div class="mini-stack">
+                <div class="state-row">
+                  <div class="state-label">Record</div>
+                  <div class="mini-indicator">
+                    <span class="mini-dot"></span>
+                    <span class="mini-bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                    <span class="mini-transcript">list the latest smoke test failures</span>
+                    <span class="mini-key">fn</span>
+                  </div>
+                </div>
+                <div class="state-row">
+                  <div class="state-label">Finalize</div>
+                  <div class="mini-indicator finalizing">
+                    <span class="mini-dot finalizing"></span>
+                    <span class="mini-progress" aria-hidden="true"><span></span></span>
+                    <span class="mini-transcript">preparing paste</span>
+                  </div>
+                </div>
+                <div class="state-row">
+                  <div class="state-label">Error</div>
+                  <div class="mini-indicator error">
+                    <span class="mini-dot error"></span>
+                    <span class="mini-transcript">recording stopped</span>
+                    <span class="mini-key">!</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <p>This keeps the baseline state machine intact while giving each user-visible state a different visual affordance.</p>
           </section>
           <section class="improvement">
-            <div class="improvement-number">3</div>
-            <h3>Turn the popover into a readiness panel</h3>
-            <p>Lead with one clear ready/blocked state, then show permissions as compact rows. Only show the Privacy action when something needs attention.</p>
+            <div class="improvement-head">
+              <div class="improvement-number">3</div>
+              <div>
+                <h3>Readiness-first popover</h3>
+                <p>The menu should answer one question first: can I dictate right now?</p>
+              </div>
+            </div>
+            <div class="visual-preview">
+              <div class="mini-popover">
+                <div class="readiness-banner">
+                  <span class="mini-dot ready"></span>
+                  <div class="readiness-copy"><strong>Ready to dictate</strong><span>Hold fn in any text field</span></div>
+                </div>
+                <div class="mini-permission-grid">
+                  <div class="mini-permission">Mic<br>OK</div>
+                  <div class="mini-permission">Speech<br>OK</div>
+                  <div class="mini-permission">AX<br>OK</div>
+                </div>
+                <div class="readiness-banner blocked">
+                  <span class="mini-dot finalizing"></span>
+                  <div class="readiness-copy"><strong>Needs permission</strong><span>Show this only when blocked</span></div>
+                </div>
+              </div>
+            </div>
+            <p>Privacy becomes contextual: visible when blocked, absent when everything is ready.</p>
           </section>
           <section class="improvement">
-            <div class="improvement-number">4</div>
-            <h3>Use calmer menu actions</h3>
-            <p>Keep launch-at-login as the only switch, make locale read-only metadata, and push Quit into a lower-emphasis row so the popover feels operational.</p>
+            <div class="improvement-head">
+              <div class="improvement-number">4</div>
+              <div>
+                <h3>Calmer menu action hierarchy</h3>
+                <p>Settings-like metadata should not compete with status or primary readiness.</p>
+              </div>
+            </div>
+            <div class="visual-preview">
+              <div class="mini-popover">
+                <div class="pop-head">
+                  <div class="mic-mark">mic</div>
+                  <div class="state-text"><strong>Ready</strong><span>Hold fn to dictate</span></div>
+                </div>
+                <div class="mini-meta">
+                  <div class="mini-meta-row"><span>Locale</span><strong>en-US</strong></div>
+                  <div class="mini-meta-row"><span>Launch at login</span><span class="toggle" aria-hidden="true"></span></div>
+                </div>
+                <div class="quiet-action">
+                  <span>Quit SteezFlow</span>
+                  <span>Q</span>
+                </div>
+              </div>
+            </div>
+            <p>The popover feels more operational: one switch, read-only locale, and Quit as a quiet footer action.</p>
           </section>
         </div>
       </aside>
