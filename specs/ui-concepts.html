@@ -1,0 +1,821 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SteezFlow UI Concepts</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --ink: #202124;
+      --muted: #667085;
+      --line: #d7dce2;
+      --paper: #f7f5ef;
+      --panel: rgba(255, 255, 255, 0.86);
+      --shadow: 0 18px 55px rgba(22, 27, 36, 0.16);
+      --red: #e5484d;
+      --green: #2e7d59;
+      --teal: #147d80;
+      --amber: #c27a22;
+      --graphite: #25282d;
+      --blue: #2864b8;
+      font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.48)),
+        repeating-linear-gradient(90deg, rgba(37, 40, 45, 0.035) 0, rgba(37, 40, 45, 0.035) 1px, transparent 1px, transparent 24px),
+        var(--paper);
+    }
+
+    main {
+      width: min(1180px, calc(100vw - 36px));
+      margin: 0 auto;
+      padding: 32px 0 52px;
+    }
+
+    .intro {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 24px;
+      align-items: end;
+      margin-bottom: 26px;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin: 0;
+    }
+
+    h1 {
+      font-size: 34px;
+      line-height: 1.05;
+      font-weight: 760;
+      letter-spacing: 0;
+    }
+
+    .intro p {
+      margin-top: 10px;
+      max-width: 720px;
+      color: var(--muted);
+      line-height: 1.5;
+      font-size: 15px;
+    }
+
+    .constraints {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      justify-content: flex-end;
+      max-width: 420px;
+    }
+
+    .chip {
+      border: 1px solid rgba(32, 33, 36, 0.12);
+      background: rgba(255, 255, 255, 0.64);
+      border-radius: 999px;
+      padding: 7px 10px;
+      font-size: 12px;
+      color: #3d444d;
+      white-space: nowrap;
+    }
+
+    .concept-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .concept {
+      border: 1px solid rgba(32, 33, 36, 0.12);
+      border-radius: 8px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.62);
+      box-shadow: 0 10px 34px rgba(37, 40, 45, 0.08);
+    }
+
+    .concept-head {
+      min-height: 92px;
+      padding: 18px 18px 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: flex-start;
+      border-bottom: 1px solid rgba(32, 33, 36, 0.1);
+      background: rgba(255, 255, 255, 0.5);
+    }
+
+    .concept-title {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    h2 {
+      font-size: 18px;
+      line-height: 1.2;
+      font-weight: 740;
+    }
+
+    .concept-title p {
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.4;
+      max-width: 410px;
+    }
+
+    .score {
+      width: 82px;
+      display: grid;
+      gap: 6px;
+      justify-items: end;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .score strong {
+      color: var(--ink);
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .stage {
+      min-height: 430px;
+      padding: 24px 18px 18px;
+      display: grid;
+      gap: 18px;
+      align-content: start;
+      background:
+        linear-gradient(180deg, rgba(248, 249, 250, 0.94), rgba(229, 233, 238, 0.86)),
+        repeating-linear-gradient(0deg, rgba(42, 48, 55, 0.05) 0, rgba(42, 48, 55, 0.05) 1px, transparent 1px, transparent 20px);
+    }
+
+    .surface-label {
+      color: #747b86;
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .desktop-strip {
+      position: relative;
+      min-height: 124px;
+      border: 1px solid rgba(32, 33, 36, 0.1);
+      border-radius: 8px;
+      background:
+        linear-gradient(135deg, rgba(255, 255, 255, 0.8), rgba(236, 238, 241, 0.58)),
+        linear-gradient(90deg, rgba(20, 125, 128, 0.06), rgba(194, 122, 34, 0.06));
+      overflow: hidden;
+    }
+
+    .dock {
+      position: absolute;
+      left: 50%;
+      bottom: 10px;
+      translate: -50% 0;
+      height: 13px;
+      width: 190px;
+      border-radius: 999px;
+      background: rgba(32, 33, 36, 0.12);
+    }
+
+    .indicator {
+      position: absolute;
+      left: 50%;
+      bottom: 30px;
+      translate: -50% 0;
+      width: 420px;
+      min-height: 56px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 14px;
+      border-radius: 999px;
+      box-shadow: var(--shadow);
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      flex: 0 0 auto;
+      background: var(--red);
+      box-shadow: 0 0 0 5px rgba(229, 72, 77, 0.14);
+    }
+
+    .bars {
+      height: 24px;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      flex: 0 0 auto;
+    }
+
+    .bars span {
+      display: block;
+      width: 4px;
+      border-radius: 999px;
+      background: currentColor;
+    }
+
+    .bars span:nth-child(1) { height: 6px; opacity: 0.45; }
+    .bars span:nth-child(2) { height: 16px; opacity: 0.7; }
+    .bars span:nth-child(3) { height: 22px; opacity: 0.95; }
+    .bars span:nth-child(4) { height: 12px; opacity: 0.65; }
+    .bars span:nth-child(5) { height: 18px; opacity: 0.85; }
+
+    .transcript {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 14px;
+      line-height: 1.25;
+      font-weight: 520;
+    }
+
+    .shortcut {
+      flex: 0 0 auto;
+      border-radius: 999px;
+      padding: 4px 8px;
+      font-size: 11px;
+      font-weight: 700;
+      color: rgba(255, 255, 255, 0.86);
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .popover-wrap {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      align-items: start;
+      gap: 16px;
+    }
+
+    .notes {
+      display: grid;
+      gap: 9px;
+      align-content: start;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.45;
+    }
+
+    .notes strong {
+      color: var(--ink);
+    }
+
+    .popover {
+      width: 260px;
+      border-radius: 8px;
+      padding: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .pop-head {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.16);
+    }
+
+    .mic-mark {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      font-size: 17px;
+      font-weight: 800;
+    }
+
+    .state-text {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    .state-text strong {
+      font-size: 14px;
+      line-height: 1.2;
+    }
+
+    .state-text span {
+      color: inherit;
+      opacity: 0.68;
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 34px;
+      border-bottom: 1px solid rgba(32, 33, 36, 0.08);
+      font-size: 13px;
+    }
+
+    .row:last-child {
+      border-bottom: 0;
+    }
+
+    .row small {
+      color: inherit;
+      opacity: 0.62;
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .status-pill {
+      border-radius: 999px;
+      padding: 4px 7px;
+      font-size: 11px;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+
+    .toggle {
+      width: 30px;
+      height: 18px;
+      border-radius: 999px;
+      padding: 2px;
+      display: flex;
+      justify-content: flex-end;
+      background: currentColor;
+      opacity: 0.92;
+    }
+
+    .toggle::before {
+      content: "";
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #fff;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 8px;
+      padding-top: 10px;
+    }
+
+    .button {
+      flex: 1;
+      min-height: 30px;
+      border-radius: 7px;
+      border: 0;
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .concept-a .indicator {
+      color: #e9fbf8;
+      background: rgba(30, 33, 38, 0.88);
+      border: 1px solid rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(18px);
+    }
+
+    .concept-a .bars {
+      color: #39c7b8;
+    }
+
+    .concept-a .popover {
+      color: #f5f7fa;
+      background: rgba(34, 38, 44, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+    }
+
+    .concept-a .mic-mark {
+      color: #08100f;
+      background: #4fd1c2;
+    }
+
+    .concept-a .row {
+      border-color: rgba(255, 255, 255, 0.11);
+    }
+
+    .concept-a .status-pill {
+      color: #dff8ea;
+      background: rgba(46, 125, 89, 0.36);
+    }
+
+    .concept-a .button {
+      color: #f7fafc;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .concept-b .indicator {
+      width: 440px;
+      min-height: 48px;
+      border-radius: 8px;
+      color: #1d2529;
+      background: rgba(255, 255, 255, 0.9);
+      border: 1px solid rgba(20, 125, 128, 0.22);
+      backdrop-filter: blur(18px);
+    }
+
+    .concept-b .dot {
+      width: 8px;
+      height: 8px;
+      box-shadow: 0 0 0 4px rgba(194, 122, 34, 0.16);
+      background: var(--amber);
+    }
+
+    .concept-b .bars {
+      color: var(--teal);
+    }
+
+    .concept-b .shortcut {
+      color: #1d2529;
+      background: rgba(20, 125, 128, 0.1);
+    }
+
+    .concept-b .popover {
+      background: rgba(255, 255, 255, 0.94);
+      border: 1px solid rgba(32, 33, 36, 0.12);
+    }
+
+    .concept-b .mic-mark {
+      color: #fff;
+      background: var(--teal);
+    }
+
+    .concept-b .status-pill {
+      color: #175f44;
+      background: rgba(46, 125, 89, 0.12);
+    }
+
+    .concept-b .button {
+      color: #14383a;
+      background: rgba(20, 125, 128, 0.1);
+    }
+
+    .concept-c .indicator {
+      width: 360px;
+      min-height: 66px;
+      border-radius: 8px;
+      color: #fff8ed;
+      background: #312b24;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .concept-c .dot {
+      width: 28px;
+      height: 28px;
+      border: 7px solid rgba(255, 255, 255, 0.16);
+      background: #ff705d;
+      box-shadow: none;
+    }
+
+    .concept-c .bars {
+      color: #f6bc54;
+    }
+
+    .concept-c .shortcut {
+      color: #312b24;
+      background: #f6bc54;
+    }
+
+    .concept-c .popover {
+      color: #fff8ed;
+      background: #312b24;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+    }
+
+    .concept-c .mic-mark {
+      color: #312b24;
+      background: #f6bc54;
+    }
+
+    .concept-c .row {
+      border-color: rgba(255, 255, 255, 0.12);
+    }
+
+    .concept-c .status-pill {
+      color: #fff1c9;
+      background: rgba(246, 188, 84, 0.2);
+    }
+
+    .concept-c .button {
+      color: #fff8ed;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .concept-d .indicator {
+      width: 420px;
+      min-height: 54px;
+      border-radius: 999px;
+      color: #202124;
+      background: rgba(252, 252, 250, 0.92);
+      border: 1px solid rgba(32, 33, 36, 0.1);
+    }
+
+    .concept-d .dot {
+      background: var(--blue);
+      box-shadow: 0 0 0 5px rgba(40, 100, 184, 0.12);
+    }
+
+    .concept-d .bars {
+      color: var(--blue);
+    }
+
+    .concept-d .shortcut {
+      color: #334155;
+      background: rgba(40, 100, 184, 0.1);
+    }
+
+    .concept-d .popover {
+      background: rgba(252, 252, 250, 0.96);
+      border: 1px solid rgba(32, 33, 36, 0.12);
+    }
+
+    .concept-d .mic-mark {
+      color: #fff;
+      background: var(--blue);
+    }
+
+    .concept-d .status-pill {
+      color: #1d5c45;
+      background: rgba(46, 125, 89, 0.11);
+    }
+
+    .concept-d .button {
+      color: #202124;
+      background: rgba(32, 33, 36, 0.07);
+    }
+
+    @media (max-width: 980px) {
+      .concept-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .intro {
+        grid-template-columns: 1fr;
+      }
+
+      .constraints {
+        justify-content: flex-start;
+      }
+    }
+
+    @media (max-width: 620px) {
+      main {
+        width: min(100% - 24px, 1180px);
+        padding-top: 22px;
+      }
+
+      h1 {
+        font-size: 27px;
+      }
+
+      .concept-head,
+      .popover-wrap {
+        grid-template-columns: 1fr;
+      }
+
+      .concept-head {
+        display: grid;
+      }
+
+      .score {
+        justify-items: start;
+      }
+
+      .indicator,
+      .concept-b .indicator,
+      .concept-c .indicator,
+      .concept-d .indicator {
+        width: min(420px, calc(100% - 20px));
+      }
+
+      .desktop-strip {
+        min-height: 136px;
+      }
+
+      .popover {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="intro" aria-labelledby="page-title">
+      <div>
+        <h1 id="page-title">SteezFlow UI Concepts</h1>
+        <p>
+          Four visual directions for the baseline app surfaces: the floating recording indicator and the menu-bar popover.
+          Each concept keeps push-to-talk, live partial text, permissions, locale, launch-at-login, and quit in scope.
+        </p>
+      </div>
+      <div class="constraints" aria-label="Design constraints">
+        <span class="chip">Floating NSPanel</span>
+        <span class="chip">MenuBarExtra popover</span>
+        <span class="chip">No settings window</span>
+        <span class="chip">macOS 26+</span>
+      </div>
+    </section>
+
+    <section class="concept-grid" aria-label="Concept options">
+      <article class="concept concept-a">
+        <header class="concept-head">
+          <div class="concept-title">
+            <h2>A. Glass Capsule</h2>
+            <p>Closest to the current shape, but more premium: dark material, crisper hierarchy, and a clear active recording state.</p>
+          </div>
+          <div class="score"><span>Fit</span><strong>High</strong></div>
+        </header>
+        <div class="stage">
+          <div>
+            <div class="surface-label">Recording indicator</div>
+            <div class="desktop-strip">
+              <div class="indicator">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                <span class="transcript">send the branch diff with the signing fix</span>
+                <span class="shortcut">fn</span>
+              </div>
+              <div class="dock" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="popover-wrap">
+            <div class="notes">
+              <p><strong>Use when:</strong> you want the least risky implementation path with a better finish.</p>
+              <p>SwiftUI mapping: keep the capsule, add material contrast, compact text treatment, and separate the audio meter from status color.</p>
+            </div>
+            <div>
+              <div class="surface-label">Menu popover</div>
+              <div class="popover">
+                <div class="pop-head">
+                  <div class="mic-mark">mic</div>
+                  <div class="state-text"><strong>Recording</strong><span>Hold fn to keep dictating</span></div>
+                </div>
+                <div class="row"><span>Microphone</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Speech Recognition</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Accessibility</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Locale</span><small>en-US</small></div>
+                <div class="row"><span>Launch at login</span><span class="toggle" aria-hidden="true"></span></div>
+                <div class="button-row"><div class="button">Privacy</div><div class="button">Quit</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept concept-b">
+        <header class="concept-head">
+          <div class="concept-title">
+            <h2>B. Command Strip</h2>
+            <p>A flatter, tool-like strip that feels native beside developer tools and keeps transcript scanning very fast.</p>
+          </div>
+          <div class="score"><span>Fit</span><strong>Medium</strong></div>
+        </header>
+        <div class="stage">
+          <div>
+            <div class="surface-label">Recording indicator</div>
+            <div class="desktop-strip">
+              <div class="indicator">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                <span class="transcript">open the app and verify the floating panel</span>
+                <span class="shortcut">PTT</span>
+              </div>
+              <div class="dock" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="popover-wrap">
+            <div class="notes">
+              <p><strong>Use when:</strong> you prefer utility over personality and want the UI to fade into daily work.</p>
+              <p>SwiftUI mapping: rounded rectangle instead of capsule, smaller status dot, and a lighter popover with clearer rows.</p>
+            </div>
+            <div>
+              <div class="surface-label">Menu popover</div>
+              <div class="popover">
+                <div class="pop-head">
+                  <div class="mic-mark">mic</div>
+                  <div class="state-text"><strong>Ready</strong><span>Hold fn to record</span></div>
+                </div>
+                <div class="row"><span>Microphone</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Speech Recognition</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Accessibility</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Locale</span><small>en-US</small></div>
+                <div class="row"><span>Launch at login</span><span class="toggle" aria-hidden="true"></span></div>
+                <div class="button-row"><div class="button">Privacy</div><div class="button">Quit</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept concept-c">
+        <header class="concept-head">
+          <div class="concept-title">
+            <h2>C. Signal Tile</h2>
+            <p>A warmer, more visible direction with a larger record target and more confidence during active dictation.</p>
+          </div>
+          <div class="score"><span>Fit</span><strong>Medium</strong></div>
+        </header>
+        <div class="stage">
+          <div>
+            <div class="surface-label">Recording indicator</div>
+            <div class="desktop-strip">
+              <div class="indicator">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                <span class="transcript">paste this into the focused editor</span>
+                <span class="shortcut">fn</span>
+              </div>
+              <div class="dock" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="popover-wrap">
+            <div class="notes">
+              <p><strong>Use when:</strong> recording state needs to be impossible to miss across busy desktops.</p>
+              <p>SwiftUI mapping: slightly taller panel, larger status element, and a warmer popover that still stays compact.</p>
+            </div>
+            <div>
+              <div class="surface-label">Menu popover</div>
+              <div class="popover">
+                <div class="pop-head">
+                  <div class="mic-mark">mic</div>
+                  <div class="state-text"><strong>Finalizing</strong><span>Preparing paste</span></div>
+                </div>
+                <div class="row"><span>Microphone</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Speech Recognition</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Accessibility</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Locale</span><small>en-US</small></div>
+                <div class="row"><span>Launch at login</span><span class="toggle" aria-hidden="true"></span></div>
+                <div class="button-row"><div class="button">Privacy</div><div class="button">Quit</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="concept concept-d">
+        <header class="concept-head">
+          <div class="concept-title">
+            <h2>D. Quiet Native</h2>
+            <p>Subtle, bright, and close to macOS defaults, with just enough custom polish to feel intentional.</p>
+          </div>
+          <div class="score"><span>Fit</span><strong>High</strong></div>
+        </header>
+        <div class="stage">
+          <div>
+            <div class="surface-label">Recording indicator</div>
+            <div class="desktop-strip">
+              <div class="indicator">
+                <span class="dot" aria-hidden="true"></span>
+                <span class="bars" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+                <span class="transcript">run the signed app from applications</span>
+                <span class="shortcut">fn</span>
+              </div>
+              <div class="dock" aria-hidden="true"></div>
+            </div>
+          </div>
+          <div class="popover-wrap">
+            <div class="notes">
+              <p><strong>Use when:</strong> you want SteezFlow to look like a polished system utility instead of a branded overlay.</p>
+              <p>SwiftUI mapping: keep native colors, use blue for readiness, and make the popover rows denser but calmer.</p>
+            </div>
+            <div>
+              <div class="surface-label">Menu popover</div>
+              <div class="popover">
+                <div class="pop-head">
+                  <div class="mic-mark">mic</div>
+                  <div class="state-text"><strong>Idle</strong><span>Hold fn to record</span></div>
+                </div>
+                <div class="row"><span>Microphone</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Speech Recognition</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Accessibility</span><span class="status-pill">Granted</span></div>
+                <div class="row"><span>Locale</span><small>en-US</small></div>
+                <div class="row"><span>Launch at login</span><span class="toggle" aria-hidden="true"></span></div>
+                <div class="button-row"><div class="button">Privacy</div><div class="button">Quit</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+  </main>
+</body>
+</html>
