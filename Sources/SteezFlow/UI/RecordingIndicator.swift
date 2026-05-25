@@ -64,7 +64,6 @@ struct RecordingIndicatorSurface: View {
         .overlay(surfaceStroke)
         .shadow(color: .black.opacity(0.17), radius: 16, x: 0, y: 9)
         .frame(minWidth: 260, maxWidth: 500, alignment: .center)
-        .animation(.spring(response: 0.22, dampingFraction: 0.86), value: displayText)
         .animation(.easeOut(duration: 0.08), value: amplitude)
     }
 
@@ -112,7 +111,11 @@ struct RecordingIndicatorSurface: View {
             .lineSpacing(1)
             .truncationMode(.tail)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(minWidth: 135, maxWidth: maxTranscriptWidth, alignment: .leading)
+            .frame(width: maxTranscriptWidth, alignment: .leading)
+            .frame(minHeight: 35, alignment: .leading)
+            .transaction { transaction in
+                transaction.animation = nil
+            }
     }
 
     private var keyCap: some View {
