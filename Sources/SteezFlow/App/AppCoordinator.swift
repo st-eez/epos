@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import OSLog
 import SwiftUI
 
 public enum CoordinatorState: Equatable {
@@ -30,8 +29,7 @@ public final class AppCoordinator: ObservableObject {
     private let settings: Settings
     // Dogfood `.wav` capture — temporary, remove with DogfoodTap.swift + AudioCapture.onRawBuffer.
     private let dogfood = DogfoodTap()
-    private let logExporter = LogExporter()
-    private let log = Logger(subsystem: "com.steez.SteezFlow", category: "coordinator")
+    private let log = SteezFlowLogger(category: "coordinator")
 
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
@@ -77,7 +75,6 @@ public final class AppCoordinator: ObservableObject {
     public func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
-        logExporter.start()
         log.info("bootstrap begin")
         _ = await permissions.requestAll()
         _ = await assets.prepare()
@@ -136,11 +133,11 @@ public final class AppCoordinator: ObservableObject {
             audio.onRawBuffer = { buffer in dogfood.write(buffer) }
             try audio.start(targetFormat: format)
         } catch {
-            log.error("recording setup failed: \(String(describing: error), privacy: .public)")
+            log.error("recording setup failed: \(String(describing: error))")
             audio.onBuffer = nil
             audio.onAmplitude = nil
             audio.onRawBuffer = nil
-            dogfood.stop()
+            dogfood.stop(keeping: false)
             await transcriber.finish()
             indicator.hide()
             state = .idle
@@ -155,7 +152,7 @@ public final class AppCoordinator: ObservableObject {
                 finalText += text
                 partial = ""
             case .failed(let message):
-                log.error("transcription failed: \(message, privacy: .public)")
+                log.error("transcription failed: \(message)")
             }
         }
 
@@ -163,10 +160,12 @@ public final class AppCoordinator: ObservableObject {
         audio.onBuffer = nil
         audio.onAmplitude = nil
         audio.onRawBuffer = nil
-        dogfood.stop()
         await transcriber.finish()
 
-        if !finalText.isEmpty {
+        let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        dogfood.stop(keeping: hasTranscribedText)
+
+        if hasTranscribedText {
             injector.paste(finalText)
         }
 

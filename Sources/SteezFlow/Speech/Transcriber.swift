@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import OSLog
 import Speech
 
 /// Streaming result emitted by `Transcriber` while a recording is in progress.
@@ -19,7 +18,7 @@ public enum TranscriptEvent: Equatable {
 public final class Transcriber: @unchecked Sendable {
     public let locale: Locale
 
-    private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "transcriber")
+    private static let log = SteezFlowLogger(category: "transcriber")
 
     private let lock = NSLock()
     private var analyzer: SpeechAnalyzer?
@@ -72,10 +71,10 @@ public final class Transcriber: @unchecked Sendable {
                         eventCont.yield(.partial(text))
                     }
                 }
-                Self.log.info("results stream completed (results=\(count, privacy: .public))")
+                Self.log.info("results stream completed (results=\(count))")
             } catch {
                 let message = String(describing: error)
-                Self.log.error("results stream failed after \(count, privacy: .public): \(message, privacy: .public)")
+                Self.log.error("results stream failed after \(count): \(message)")
                 eventCont.yield(.failed(message))
             }
             eventCont.finish()
@@ -95,7 +94,7 @@ public final class Transcriber: @unchecked Sendable {
             self.hasReceivedBuffer = false
         }
 
-        Self.log.info("session starting for locale \(self.locale.identifier, privacy: .public)")
+        Self.log.info("session starting for locale \(self.locale.identifier)")
         do {
             try await startT.value
         } catch {
@@ -148,7 +147,7 @@ public final class Transcriber: @unchecked Sendable {
                     try await analyzer.finalizeAndFinishThroughEndOfInput()
                 } catch {
                     let message = String(describing: error)
-                    Self.log.error("finalize failed: \(message, privacy: .public)")
+                    Self.log.error("finalize failed: \(message)")
                     // A failed finalize can leave `transcriber.results` dangling;
                     // force-close the event stream and cancel the drain so the
                     // `await drain?.value` below cannot hang.
@@ -168,7 +167,7 @@ public final class Transcriber: @unchecked Sendable {
             }
         }
 
-        Self.log.info("session finished (hadInput=\(hadInput, privacy: .public)) locale=\(self.locale.identifier, privacy: .public)")
+        Self.log.info("session finished (hadInput=\(hadInput)) locale=\(self.locale.identifier)")
     }
 }
 

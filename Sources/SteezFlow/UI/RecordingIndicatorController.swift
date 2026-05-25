@@ -1,5 +1,4 @@
 import AppKit
-import OSLog
 import SwiftUI
 
 /// Floating borderless `NSPanel` that hosts a SwiftUI view supplied by the caller.
@@ -9,7 +8,7 @@ import SwiftUI
 @MainActor
 public final class RecordingIndicatorController {
     private var panel: NSPanel?
-    private let log = Logger(subsystem: "com.steez.SteezFlow", category: "indicator")
+    private let log = SteezFlowLogger(category: "indicator")
 
     private static let panelSize = CGSize(width: 420, height: 56)
     private static let bottomInset: CGFloat = 60

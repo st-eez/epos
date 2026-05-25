@@ -1,6 +1,5 @@
 @preconcurrency import AVFoundation
 import Foundation
-import OSLog
 
 /// Captures microphone audio via `AVAudioEngine` and emits PCM buffers in the format the
 /// downstream `SpeechTranscriber` expects (obtained from `Transcriber.bestAudioFormat`).
@@ -14,7 +13,7 @@ public final class AudioCapture {
     public var onRawBuffer: ((AVAudioPCMBuffer) -> Void)?
     public var onAmplitude: ((Float) -> Void)?
 
-    private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "audio")
+    private static let log = SteezFlowLogger(category: "audio")
 
     /// Long-lived: the engine is created once and never deallocated while operating.
     /// Releasing an `AVAudioEngine` while CoreAudio's HAL IO thread is still rendering
@@ -91,7 +90,7 @@ public final class AudioCapture {
 
             if status == .error {
                 if let convError {
-                    Self.log.error("convert failed: \(String(describing: convError), privacy: .public)")
+                    Self.log.error("convert failed: \(String(describing: convError))")
                 }
                 return
             }
@@ -104,13 +103,13 @@ public final class AudioCapture {
             try engine.start()
         } catch {
             inputNode.removeTap(onBus: 0)
-            Self.log.error("engine start failed: \(String(describing: error), privacy: .public)")
+            Self.log.error("engine start failed: \(String(describing: error))")
             throw AudioCaptureError.engineFailed(error)
         }
 
         self.converter = converter
         self.isRunning = true
-        Self.log.info("capture started: input \(inputFormat.sampleRate, privacy: .public)Hz/\(inputFormat.channelCount, privacy: .public)ch -> target \(targetFormat.sampleRate, privacy: .public)Hz/\(targetFormat.channelCount, privacy: .public)ch")
+        Self.log.info("capture started: input \(inputFormat.sampleRate)Hz/\(inputFormat.channelCount)ch -> target \(targetFormat.sampleRate)Hz/\(targetFormat.channelCount)ch")
     }
 
     /// Stop capture: halt the engine and remove the tap, keeping the engine allocated

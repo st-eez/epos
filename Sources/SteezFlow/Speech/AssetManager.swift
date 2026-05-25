@@ -1,5 +1,4 @@
 import Foundation
-import OSLog
 import Speech
 
 public enum AssetStatus: Equatable {
@@ -15,7 +14,7 @@ public enum AssetStatus: Equatable {
 public struct AssetManager: Sendable {
     public let locale: Locale
 
-    private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "assets")
+    private static let log = SteezFlowLogger(category: "assets")
 
     public init(locale: Locale = Locale(identifier: "en-US")) {
         self.locale = locale
@@ -56,32 +55,32 @@ public struct AssetManager: Sendable {
     public func prepare() async -> AssetStatus {
         guard let assetLocale = await resolvedLocale() else {
             let message = "locale \(locale.identifier) not supported"
-            Self.log.info("\(message, privacy: .public)")
+            Self.log.info(message)
             return .failed(message: message)
         }
 
         let status = await currentStatus(for: assetLocale)
         if case .reserved = status {
-            Self.log.info("asset already reserved for locale \(assetLocale.identifier, privacy: .public)")
+            Self.log.info("asset already reserved for locale \(assetLocale.identifier)")
             return status
         }
 
         let transcriber = SpeechTranscriber(locale: assetLocale, preset: .progressiveTranscription)
         do {
             if case .missing = status {
-                Self.log.info("downloading asset for locale \(assetLocale.identifier, privacy: .public)")
+                Self.log.info("downloading asset for locale \(assetLocale.identifier)")
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                     // post-baseline: surface progress via request.progress (NSProgress)
                     try await request.downloadAndInstall()
                 }
             }
-            Self.log.info("reserving locale \(assetLocale.identifier, privacy: .public)")
+            Self.log.info("reserving locale \(assetLocale.identifier)")
             try await AssetInventory.reserve(locale: assetLocale)
-            Self.log.info("asset reserved for locale \(assetLocale.identifier, privacy: .public)")
+            Self.log.info("asset reserved for locale \(assetLocale.identifier)")
             return .reserved
         } catch {
             let message = String(describing: error)
-            Self.log.info("asset prepare failed: \(message, privacy: .public)")
+            Self.log.info("asset prepare failed: \(message)")
             return .failed(message: message)
         }
     }

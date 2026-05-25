@@ -2,7 +2,6 @@ import AVFoundation
 import ApplicationServices
 import Foundation
 import Speech
-import os
 
 public enum PermissionStatus: Equatable {
     case notDetermined
@@ -17,7 +16,7 @@ public struct PermissionsSnapshot: Equatable {
 }
 
 public struct PermissionsGate: Sendable {
-    private let log = Logger(subsystem: "com.steez.SteezFlow", category: "permissions")
+    private let log = SteezFlowLogger(category: "permissions")
 
     public init() {}
 

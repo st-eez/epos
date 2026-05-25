@@ -1,24 +1,30 @@
 import AVFoundation
 import Foundation
-import OSLog
 
 /// Per-recording `.wav` capture in the mic's native format. Lives in
 /// `~/Library/Caches/SteezFlow/recordings/` as future eval material for the
 /// dogfood session that started 2026-05-22. **Temporary — delete this file and
 /// the `onRawBuffer` hook on `AudioCapture` when the dogfood review is done.**
 final class DogfoodTap: @unchecked Sendable {
-    private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "dogfood")
+    private static let log = SteezFlowLogger(category: "dogfood")
 
     /// Serial queue that owns `file`. All disk I/O happens here, never on the
     /// audio thread.
     private let queue = DispatchQueue(label: "com.steez.SteezFlow.dogfood-write", qos: .utility)
+    private let recordingsDirectory: URL?
     private var file: AVAudioFile?
+    private var fileURL: URL?
+
+    init(recordingsDirectory: URL? = nil) {
+        self.recordingsDirectory = recordingsDirectory
+    }
 
     /// Append `buffer` to the current recording. Called from the audio thread, so
     /// it does only a cheap deep-copy of the samples here (the engine reuses
     /// `buffer` after the callback returns) and hands the copy to the write queue.
     /// Opens a new file on the first write after construction or after `stop()`.
     func write(_ buffer: AVAudioPCMBuffer) {
+        guard buffer.frameLength > 0 else { return }
         guard let copy = Self.copy(buffer) else { return }
         // `copy` is freshly allocated and handed off exclusively to the write queue —
         // the audio thread never touches it again — so the transfer is safe.
@@ -26,12 +32,17 @@ final class DogfoodTap: @unchecked Sendable {
         nonisolated(unsafe) let sendableCopy = copy
         queue.async {
             if self.file == nil {
-                self.file = Self.openFile(format: sendableCopy.format)
+                guard let opened = Self.openFile(
+                    format: sendableCopy.format,
+                    recordingsDirectory: self.recordingsDirectory
+                ) else { return }
+                self.file = opened.file
+                self.fileURL = opened.url
             }
             do {
                 try self.file?.write(from: sendableCopy)
             } catch {
-                Self.log.error("audio file write failed: \(String(describing: error), privacy: .public)")
+                Self.log.error("audio file write failed: \(String(describing: error))")
             }
         }
     }
@@ -39,8 +50,24 @@ final class DogfoodTap: @unchecked Sendable {
     /// Close the current recording. Routed through the write queue so any
     /// already-enqueued writes flush first (serial FIFO). Next `write` opens a
     /// fresh file.
-    func stop() {
-        queue.async { self.file = nil }
+    func stop(keeping shouldKeep: Bool = true) {
+        queue.async {
+            let url = self.fileURL
+            self.file = nil
+            self.fileURL = nil
+            if !shouldKeep, let url {
+                do {
+                    try FileManager.default.removeItem(at: url)
+                    Self.log.info("discarded recording \(url.lastPathComponent)")
+                } catch {
+                    Self.log.error("recording discard failed: \(String(describing: error))")
+                }
+            }
+        }
+    }
+
+    func flush() {
+        queue.sync {}
     }
 
     /// Deep-copy a buffer's samples so it survives past the audio callback. Returns
@@ -83,22 +110,31 @@ final class DogfoodTap: @unchecked Sendable {
         return copy
     }
 
-    private static func openFile(format: AVAudioFormat) -> AVAudioFile? {
-        guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+    private static func openFile(
+        format: AVAudioFormat,
+        recordingsDirectory: URL?
+    ) -> (file: AVAudioFile, url: URL)? {
+        guard let dir = recordingsDirectory ?? defaultRecordingsDirectory() else {
             return nil
         }
-        let dir = cachesDir.appendingPathComponent("SteezFlow/recordings", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss-SSS"
         let url = dir.appendingPathComponent("\(formatter.string(from: Date())).wav")
         do {
             let file = try AVAudioFile(forWriting: url, settings: format.settings)
-            log.info("recording to \(url.lastPathComponent, privacy: .public)")
-            return file
+            log.info("recording to \(url.lastPathComponent)")
+            return (file, url)
         } catch {
-            log.error("audio file open failed: \(String(describing: error), privacy: .public)")
+            log.error("audio file open failed: \(String(describing: error))")
             return nil
         }
+    }
+
+    private static func defaultRecordingsDirectory() -> URL? {
+        guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        return cachesDir.appendingPathComponent("SteezFlow/recordings", isDirectory: true)
     }
 }

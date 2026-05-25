@@ -1,12 +1,11 @@
 import AppKit
 import ApplicationServices
 import Foundation
-import OSLog
 
 /// Pastes text into the frontmost app via clipboard + synthesized cmd-v,
 /// restoring the previous clipboard contents afterwards.
 public final class TextInjector {
-    private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "inject")
+    private static let log = SteezFlowLogger(category: "inject")
 
     public init() {}
 
@@ -15,7 +14,7 @@ public final class TextInjector {
 
         let trusted = AXIsProcessTrusted()
         if !trusted {
-            Self.log.error("paste of \(text.count, privacy: .public) chars will be DROPPED: Accessibility not trusted (System Settings > Privacy & Security > Accessibility)")
+            Self.log.error("paste of \(text.count) chars will be DROPPED: Accessibility not trusted (System Settings > Privacy & Security > Accessibility)")
         }
 
         let pasteboard = NSPasteboard.general
@@ -26,7 +25,7 @@ public final class TextInjector {
         let changeCountAfterWrite = pasteboard.changeCount
 
         synthesizeCommandV()
-        Self.log.info("pasted \(text.count, privacy: .public) chars (axTrusted=\(trusted, privacy: .public))")
+        Self.log.info("pasted \(text.count) chars (axTrusted=\(trusted))")
 
         // Restore the prior clipboard after the paste lands — but only if nothing
         // else wrote to the pasteboard in the meantime (changeCount unchanged).

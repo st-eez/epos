@@ -1,4 +1,3 @@
-import OSLog
 import ServiceManagement
 import SwiftUI
 
@@ -7,7 +6,7 @@ public struct MenuBarView: View {
     @State private var permissions: PermissionsSnapshot?
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
 
-    private static let log = Logger(subsystem: "com.steez.SteezFlow", category: "menubar")
+    private static let log = SteezFlowLogger(category: "menubar")
 
     public init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -57,7 +56,7 @@ public struct MenuBarView: View {
             current.launchAtLogin = enabled
             current.save()
         } catch {
-            Self.log.error("launch-at-login toggle failed: \(String(describing: error), privacy: .public)")
+            Self.log.error("launch-at-login toggle failed: \(String(describing: error))")
         }
     }
 
