@@ -28,7 +28,7 @@ public struct AssetManager: Sendable {
     }
 
     private func currentStatus(for assetLocale: Locale) async -> AssetStatus {
-        let transcriber = SpeechTranscriber(locale: assetLocale, preset: .progressiveTranscription)
+        let transcriber = Transcriber.makeTranscriber(locale: assetLocale)
         let installed = await SpeechTranscriber.installedLocales
         let reserved = await AssetInventory.reservedLocales
 
@@ -65,7 +65,7 @@ public struct AssetManager: Sendable {
             return status
         }
 
-        let transcriber = SpeechTranscriber(locale: assetLocale, preset: .progressiveTranscription)
+        let transcriber = Transcriber.makeTranscriber(locale: assetLocale)
         do {
             if case .missing = status {
                 Self.log.info("downloading asset for locale \(assetLocale.identifier)")

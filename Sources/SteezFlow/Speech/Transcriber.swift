@@ -19,7 +19,6 @@ public final class Transcriber: @unchecked Sendable {
     public let locale: Locale
 
     private static let log = SteezFlowLogger(category: "transcriber")
-    private static let maxContextualStrings = 100
 
     private let lock = NSLock()
     private var analyzer: SpeechAnalyzer?
@@ -36,7 +35,7 @@ public final class Transcriber: @unchecked Sendable {
     /// Best PCM format the underlying `SpeechTranscriber` accepts for this locale.
     /// Call once at bootstrap; the coordinator hands the result to `AudioCapture.start`.
     public func bestAudioFormat() async -> AVAudioFormat? {
-        let probe = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
+        let probe = Self.makeTranscriber(locale: locale)
         return await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [probe])
     }
 
@@ -45,15 +44,14 @@ public final class Transcriber: @unchecked Sendable {
     /// installed under `lock` BEFORE the await, so a concurrent `finish()` sees the session
     /// and can drive teardown via `startTask.value`.
     /// Throws `TranscriberError.alreadyRunning` if a prior session hasn't been `finish`ed.
-    public func start(contextualStrings: [String] = []) async throws -> AsyncStream<TranscriptEvent> {
+    public func start() async throws -> AsyncStream<TranscriptEvent> {
         let alreadyRunning = lock.withLock {
             self.analyzer != nil || self.startTask != nil
         }
         if alreadyRunning {
             throw TranscriberError.alreadyRunning
         }
-        let transcriber = SpeechTranscriber(locale: locale, preset: .progressiveTranscription)
-        let context = Self.analysisContext(contextualStrings: contextualStrings)
+        let transcriber = Self.makeTranscriber(locale: locale)
 
         let (inputStream, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
         let (eventStream, eventCont) = AsyncStream<TranscriptEvent>.makeStream()
@@ -83,9 +81,6 @@ public final class Transcriber: @unchecked Sendable {
         }
 
         let startT = Task<Void, Error> {
-            if let context {
-                try await analyzer.setContext(context)
-            }
             try await analyzer.start(inputSequence: inputStream)
         }
 
@@ -112,14 +107,13 @@ public final class Transcriber: @unchecked Sendable {
         return eventStream
     }
 
-    private static func analysisContext(contextualStrings: [String]) -> AnalysisContext? {
-        let limited = Array(contextualStrings.prefix(maxContextualStrings))
-        guard !limited.isEmpty else { return nil }
-
-        let context = AnalysisContext()
-        context.contextualStrings[.general] = limited
-        log.info("applying speech context count=\(limited.count)")
-        return context
+    static func makeTranscriber(locale: Locale) -> SpeechTranscriber {
+        SpeechTranscriber(
+            locale: locale,
+            transcriptionOptions: [],
+            reportingOptions: [.volatileResults],
+            attributeOptions: []
+        )
     }
 
     /// Feed a captured audio buffer into the active session. Thread-safe.

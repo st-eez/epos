@@ -25,37 +25,6 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(transcriber.locale.identifier, "en-US")
     }
 
-    func testSpeechContextParsesPhrases() {
-        let contents = """
-        # ignored
-        CMUX
-
-          AGENTS.md
-        CMUX
-        /
-        """
-
-        XCTAssertEqual(SpeechContext.parse(contents), ["CMUX", "AGENTS.md", "/"])
-    }
-
-    func testSpeechContextCapsPhraseCount() {
-        let contents = (0..<105).map { "phrase-\($0)" }.joined(separator: "\n")
-
-        let phrases = SpeechContext.parse(contents)
-
-        XCTAssertEqual(phrases.count, SpeechContext.maxPhraseCount)
-        XCTAssertEqual(phrases.last, "phrase-99")
-    }
-
-    func testSpeechContextCreatesMissingConfigFile() throws {
-        let directory = try makeTemporaryDirectory()
-        let fileURL = directory.appendingPathComponent("speech-context.txt")
-        let context = SpeechContext(fileURL: fileURL)
-
-        XCTAssertEqual(context.load(), [])
-        XCTAssertTrue(FileManager.default.fileExists(atPath: fileURL.path))
-    }
-
     func testInjectorPasteEmptyStringNoop() {
         TextInjector().paste("")
     }
