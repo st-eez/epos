@@ -36,7 +36,7 @@ public struct RecordingIndicator: View {
 
 struct RecordingIndicatorSurface: View {
     nonisolated private static let maxDisplayLines = 5
-    nonisolated private static let maxDisplayCharacters = 400
+    nonisolated private static let maxDisplayCharacters = 240
 
     let state: CoordinatorState
     let transcript: String
@@ -109,7 +109,7 @@ struct RecordingIndicatorSurface: View {
             .foregroundStyle(.white.opacity(hasTranscript ? 0.94 : 0.56))
             .lineLimit(Self.maxDisplayLines)
             .lineSpacing(1)
-            .truncationMode(.tail)
+            .truncationMode(.head)
             .fixedSize(horizontal: false, vertical: true)
             .frame(width: maxTranscriptWidth, alignment: .leading)
             .frame(minHeight: 35, alignment: .leading)

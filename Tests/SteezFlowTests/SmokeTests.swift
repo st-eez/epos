@@ -48,6 +48,15 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(display.contains("last failure in the final response"))
     }
 
+    func testRecordingIndicatorDefaultPreviewKeepsNewestText() {
+        let transcript = (0..<80).map { "word\($0)" }.joined(separator: " ")
+        let display = RecordingIndicator.recentDisplayText(transcript)
+
+        XCTAssertTrue(display.hasPrefix("..."))
+        XCTAssertFalse(display.contains("word0 word1 word2"))
+        XCTAssertTrue(display.contains("word77 word78 word79"))
+    }
+
     func testDiagnosticLogSinkWritesDirectFile() throws {
         let directory = try makeTemporaryDirectory()
         let sink = DiagnosticLogSink(
