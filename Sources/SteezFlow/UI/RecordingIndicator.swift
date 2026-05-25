@@ -66,21 +66,30 @@ public struct RecordingIndicator: View {
         HStack(alignment: .center, spacing: 3) {
             ForEach(0..<5, id: \.self) { index in
                 Capsule()
-                    .fill(Color(red: 0.22, green: 0.78, blue: 0.72).opacity(barOpacity(index)))
-                    .frame(width: 4, height: barHeight(index))
+                    .fill(Color(red: 0.22, green: 0.78, blue: 0.72).opacity(Self.barOpacity(index, amplitude: coordinator.amplitude)))
+                    .frame(width: 4, height: Self.barHeight(index, amplitude: coordinator.amplitude))
             }
         }
         .frame(height: 24)
+        .animation(.easeOut(duration: 0.08), value: coordinator.amplitude)
     }
 
-    private func barHeight(_ index: Int) -> CGFloat {
-        let base: [CGFloat] = [7, 14, 20, 12, 17]
-        let amplitude = min(1, max(0.12, CGFloat(coordinator.amplitude)))
-        return max(5, base[index] * (0.55 + amplitude))
+    nonisolated static func barHeight(_ index: Int, amplitude: Float) -> CGFloat {
+        let quiet: [CGFloat] = [5, 7, 6, 8, 6]
+        let loud: [CGFloat] = [14, 23, 18, 26, 20]
+        let level = visualLevel(amplitude)
+        return quiet[index] + (loud[index] - quiet[index]) * level
     }
 
-    private func barOpacity(_ index: Int) -> Double {
-        let base: [Double] = [0.48, 0.72, 0.94, 0.66, 0.84]
-        return min(1, base[index] + Double(coordinator.amplitude) * 0.18)
+    nonisolated static func barOpacity(_ index: Int, amplitude: Float) -> Double {
+        let quiet: [Double] = [0.38, 0.5, 0.44, 0.54, 0.46]
+        let loud: [Double] = [0.76, 0.98, 0.88, 1, 0.9]
+        let level = Double(visualLevel(amplitude))
+        return quiet[index] + (loud[index] - quiet[index]) * level
+    }
+
+    nonisolated private static func visualLevel(_ amplitude: Float) -> CGFloat {
+        let normalized = min(1, max(0, CGFloat(amplitude) / 0.09))
+        return pow(normalized, 0.55)
     }
 }

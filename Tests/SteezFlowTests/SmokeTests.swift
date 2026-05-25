@@ -29,6 +29,16 @@ final class SmokeTests: XCTestCase {
         TextInjector().paste("")
     }
 
+    func testRecordingIndicatorMeterRespondsToSpeechRange() {
+        let quietHeights = (0..<5).map { RecordingIndicator.barHeight($0, amplitude: 0.005) }
+        let speechHeights = (0..<5).map { RecordingIndicator.barHeight($0, amplitude: 0.03) }
+        let loudHeights = (0..<5).map { RecordingIndicator.barHeight($0, amplitude: 0.08) }
+
+        XCTAssertGreaterThan(speechHeights.reduce(0, +), quietHeights.reduce(0, +))
+        XCTAssertGreaterThan(loudHeights.reduce(0, +), speechHeights.reduce(0, +))
+        XCTAssertGreaterThan(loudHeights.max() ?? 0, quietHeights.max() ?? 0)
+    }
+
     func testDiagnosticLogSinkWritesDirectFile() throws {
         let directory = try makeTemporaryDirectory()
         let sink = DiagnosticLogSink(
