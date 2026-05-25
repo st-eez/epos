@@ -116,7 +116,7 @@ Known collision: macOS system dictation also defaults to fn (single-press or dou
 A single `NSPanel` (borderless, non-activating, floats above all) with:
 
 - Live amplitude bar from the audio tap (RMS over a small window).
-- Latest transcript preview, up to two lines, rolling from the front so newest text stays visible.
+- Latest transcript preview, up to five lines, rolling from the front so newest text stays visible.
 - Subtle "recording" affordance (color, not text).
 
 No frontmost-app icon, no waveform history, no draggable position in baseline. Centered above the active screen's bottom edge, fixed.

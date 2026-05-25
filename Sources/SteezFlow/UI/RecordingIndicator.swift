@@ -35,8 +35,8 @@ public struct RecordingIndicator: View {
 }
 
 struct RecordingIndicatorSurface: View {
-    nonisolated private static let maxDisplayLines = 2
-    nonisolated private static let maxDisplayCharacters = 96
+    nonisolated private static let maxDisplayLines = 5
+    nonisolated private static let maxDisplayCharacters = 400
 
     let state: CoordinatorState
     let transcript: String
