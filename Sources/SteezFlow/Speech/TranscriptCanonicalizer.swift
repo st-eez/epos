@@ -43,6 +43,18 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
             canonical: "AGENTS.md",
             aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
         ),
+        Rule(
+            canonical: "CLAUDE.md",
+            aliases: [
+                "CLAUDE.md",
+                "claude dot md",
+                "claude dot m d",
+                "claude md",
+                "cloud dot md",
+                "cloud dot m d",
+                "cloud.md"
+            ]
+        ),
         Rule(canonical: "README.md", aliases: ["README.md", "read me dot md", "readme dot md", "read me md"]),
         Rule(canonical: "Package.swift", aliases: ["Package.swift", "package dot swift"]),
         Rule(canonical: "project.yml", aliases: ["project.yml", "project dot yml", "project dot yaml"]),

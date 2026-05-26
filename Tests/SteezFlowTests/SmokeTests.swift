@@ -44,6 +44,15 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(cleaned, "open CMUX and edit AGENTS.md then run swiftlint")
     }
 
+    func testCanonicalizerFixesClaudeMarkdownAliases() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        let raw = "Check the cloud dot MD. Check the cloud.md."
+        let cleaned = canonicalizer.canonicalize(raw)
+
+        XCTAssertEqual(cleaned, "Check the CLAUDE.md. Check the CLAUDE.md.")
+    }
+
     func testCanonicalizerAppliesExposedAcronymAliases() {
         let canonicalizer = TranscriptCanonicalizer()
 
