@@ -37,19 +37,22 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
     public static let defaultRules: [Rule] = [
         Rule(
             canonical: "CMUX",
-            aliases: ["simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
+            aliases: ["CMUX", "simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
         ),
-        Rule(canonical: "AGENTS.md", aliases: ["agents dot md", "agents dot m d", "agents md", "agents dot markdown"]),
-        Rule(canonical: "README.md", aliases: ["read me dot md", "readme dot md", "read me md"]),
-        Rule(canonical: "Package.swift", aliases: ["package dot swift"]),
-        Rule(canonical: "project.yml", aliases: ["project dot yml", "project dot yaml"]),
+        Rule(
+            canonical: "AGENTS.md",
+            aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
+        ),
+        Rule(canonical: "README.md", aliases: ["README.md", "read me dot md", "readme dot md", "read me md"]),
+        Rule(canonical: "Package.swift", aliases: ["Package.swift", "package dot swift"]),
+        Rule(canonical: "project.yml", aliases: ["project.yml", "project dot yml", "project dot yaml"]),
         Rule(canonical: ".env", aliases: ["dot env"]),
-        Rule(canonical: "swiftlint", aliases: ["swift lint"]),
-        Rule(canonical: "SpeechTranscriber", aliases: ["speech transcriber"]),
-        Rule(canonical: "DictationTranscriber", aliases: ["dictation transcriber"]),
-        Rule(canonical: "UserDefaults", aliases: ["user defaults"]),
-        Rule(canonical: "Xcode", aliases: ["x code"]),
-        Rule(canonical: "macOS", aliases: ["mac os"])
+        Rule(canonical: "swiftlint", aliases: ["swiftlint", "swift lint"]),
+        Rule(canonical: "SpeechTranscriber", aliases: ["SpeechTranscriber", "speech transcriber"]),
+        Rule(canonical: "DictationTranscriber", aliases: ["DictationTranscriber", "dictation transcriber"]),
+        Rule(canonical: "UserDefaults", aliases: ["UserDefaults", "user defaults"]),
+        Rule(canonical: "Xcode", aliases: ["Xcode", "x code"]),
+        Rule(canonical: "macOS", aliases: ["macOS", "mac os"])
     ]
 
     public init(rules: [Rule] = Self.defaultRules) {
@@ -129,23 +132,13 @@ private extension TranscriptCanonicalizer {
     }
 
     static func allAliases(for rule: Rule) -> [String] {
-        var aliases = rule.aliases
-        if shouldIncludeCanonicalAlias(rule.canonical) {
-            aliases.append(rule.canonical)
-        }
-
         var seen: Set<String> = []
-        return aliases.filter { alias in
+        return rule.aliases.filter { alias in
             let key = normalizedPhrase(alias)
             guard !key.isEmpty, !seen.contains(key) else { return false }
             seen.insert(key)
             return true
         }
-    }
-
-    static func shouldIncludeCanonicalAlias(_ canonical: String) -> Bool {
-        guard let first = canonical.first else { return false }
-        return first.isLetter || first.isNumber
     }
 
     static func replacingMatches(in text: String, spec: ReplacementSpec) -> String {

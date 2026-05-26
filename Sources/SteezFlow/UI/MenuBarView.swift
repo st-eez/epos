@@ -2,6 +2,7 @@ import ServiceManagement
 import SwiftUI
 
 public struct MenuBarView: View {
+    @Environment(\.openWindow) private var openWindow
     @ObservedObject var coordinator: AppCoordinator
     @State private var permissions: PermissionsSnapshot?
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
@@ -21,7 +22,10 @@ public struct MenuBarView: View {
             readinessBanner
             permissionGrid
             metadataRows
-            CorrectionsEditorView()
+            Button { openCorrectionsWindow() } label: {
+                Label("Corrections", systemImage: "text.badge.checkmark")
+            }
+            .buttonStyle(QuietButtonStyle())
             actionRow
         }
         .padding(14)
@@ -162,6 +166,11 @@ public struct MenuBarView: View {
         }
     }
 
+    private func openCorrectionsWindow() {
+        openWindow(id: "corrections")
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
     private func allGranted(_ snapshot: PermissionsSnapshot?) -> Bool {
         guard let snapshot else { return false }
         return snapshot.microphone == .granted && snapshot.speech == .granted && snapshot.accessibility == .granted
@@ -227,23 +236,5 @@ public struct MenuBarView: View {
         case .recording: red
         case .finalizing: teal
         }
-    }
-}
-
-private struct QuietButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(configuration.isPressed ? 0.62 : 0.76))
-            .frame(maxWidth: .infinity, minHeight: 32)
-            .padding(.horizontal, 10)
-            .background(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .fill(.white.opacity(configuration.isPressed ? 0.1 : 0.06))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 11, style: .continuous)
-                    .stroke(.white.opacity(0.08), lineWidth: 1)
-            )
     }
 }

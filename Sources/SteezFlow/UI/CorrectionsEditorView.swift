@@ -1,152 +1,165 @@
 import SwiftUI
 
 struct CorrectionsEditorView: View {
-    @State private var rules: [TranscriptCanonicalizer.Rule] = TranscriptCanonicalizer.rules()
-    @State private var newAlias = ""
-    @State private var newCanonical = ""
+    @State private var rows = CorrectionDraft.fromRules(TranscriptCanonicalizer.rules())
+    @State private var savedRows = CorrectionDraft.fromRules(TranscriptCanonicalizer.rules())
+
+    private var hasInvalidRows: Bool {
+        rows.contains { !$0.isValid }
+    }
+
+    private var hasUnsavedChanges: Bool {
+        rows != savedRows
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(spacing: 0) {
             header
-            addRow
+            Divider()
+            tableHeader
             rulesList
+            Divider()
+            footer
         }
-        .padding(12)
-        .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .onAppear { rules = TranscriptCanonicalizer.rules() }
+        .frame(minWidth: 860, minHeight: 460)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear(perform: reload)
     }
 
     private var header: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 12) {
             Label("Corrections", systemImage: "text.badge.checkmark")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.8))
-            Spacer(minLength: 8)
-            Text("\(rules.count) corrections")
-                .font(.system(size: 10, weight: .bold))
-                .foregroundStyle(.white.opacity(0.5))
+                .font(.system(size: 16, weight: .semibold))
+            Spacer(minLength: 12)
+            Text("\(rows.count) entries")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(.secondary)
+            Button { addCorrection() } label: {
+                Label("Add", systemImage: "plus")
+            }
+            .buttonStyle(.borderedProminent)
         }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
     }
 
-    private var addRow: some View {
-        HStack(spacing: 6) {
-            correctionField("Heard", text: $newAlias)
-            correctionField("Use", text: $newCanonical)
-            Button { addCorrection() } label: {
-                Image(systemName: "plus")
-                    .font(.system(size: 12, weight: .bold))
-                    .frame(width: 26, height: 26)
-            }
-            .buttonStyle(PlainIconButtonStyle())
-            .disabled(!canAddCorrection)
-            .help("Add correction")
+    private var tableHeader: some View {
+        HStack(spacing: 10) {
+            headerLabel("")
+                .frame(width: 56)
+            headerLabel("Heard phrases")
+                .frame(minWidth: 330, maxWidth: .infinity, alignment: .leading)
+            headerLabel("Use")
+                .frame(width: 190, alignment: .leading)
+            headerLabel("Context")
+                .frame(width: 190, alignment: .leading)
+            headerLabel("")
+                .frame(width: 32)
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 
     private var rulesList: some View {
         ScrollView {
-            VStack(spacing: 7) {
-                if rules.isEmpty {
-                    Text("No corrections")
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.46))
-                        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            LazyVStack(spacing: 0) {
+                if rows.isEmpty {
+                    emptyState
                 } else {
-                    ForEach(rules.indices, id: \.self) { index in
-                        correctionRow(rule: rules[index]) {
-                            removeCorrection(at: index)
-                        }
+                    ForEach(rows.indices, id: \.self) { index in
+                        CorrectionDraftRow(
+                            row: $rows[index],
+                            canMoveUp: index > 0,
+                            canMoveDown: index < rows.count - 1,
+                            moveUp: { moveCorrection(from: index, to: index - 1) },
+                            moveDown: { moveCorrection(from: index, to: index + 1) },
+                            remove: { removeCorrection(at: index) }
+                        )
+                        Divider()
+                            .padding(.leading, 80)
                     }
                 }
             }
         }
-        .frame(height: 156)
     }
 
-    private func correctionField(_ placeholder: String, text: Binding<String>) -> some View {
-        TextField(placeholder, text: text)
-            .textFieldStyle(.plain)
-            .font(.system(size: 12, weight: .medium))
-            .foregroundStyle(.white)
-            .lineLimit(1)
-            .padding(.horizontal, 8)
-            .frame(height: 28)
-            .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(.white.opacity(0.08), lineWidth: 1))
-    }
-
-    private func correctionRow(
-        rule: TranscriptCanonicalizer.Rule,
-        remove: @escaping () -> Void
-    ) -> some View {
-        HStack(alignment: .top, spacing: 8) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(rule.canonical)
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.84))
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(ruleDetail(rule))
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.white.opacity(0.56))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Button { remove() } label: {
-                Image(systemName: "trash")
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 22, height: 22)
-            }
-            .buttonStyle(PlainIconButtonStyle())
-            .help("Remove correction")
+    private var emptyState: some View {
+        VStack(spacing: 10) {
+            Image(systemName: "text.badge.xmark")
+                .font(.system(size: 28, weight: .semibold))
+                .foregroundStyle(.secondary)
+            Text("No corrections")
+                .font(.system(size: 14, weight: .semibold))
         }
-        .padding(8)
-        .background(.black.opacity(0.14), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .frame(maxWidth: .infinity, minHeight: 240)
+        .foregroundStyle(.secondary)
     }
 
-    private var canAddCorrection: Bool {
-        !newAlias.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
-            !newCanonical.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var footer: some View {
+        HStack(spacing: 10) {
+            statusLabel
+            Spacer(minLength: 12)
+            Button("Restore Defaults") { restoreDefaults() }
+            Button("Revert") { reload() }
+                .disabled(!hasUnsavedChanges)
+            Button("Save Changes") { saveRules() }
+                .keyboardShortcut("s", modifiers: .command)
+                .buttonStyle(.borderedProminent)
+                .disabled(!hasUnsavedChanges || hasInvalidRows)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 12)
+    }
+
+    @ViewBuilder
+    private var statusLabel: some View {
+        if hasInvalidRows {
+            Label("Complete highlighted entries", systemImage: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+        } else if hasUnsavedChanges {
+            Label("Unsaved changes", systemImage: "circle.fill")
+                .foregroundStyle(.secondary)
+        } else {
+            Label("Saved", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func headerLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(.secondary)
     }
 
     private func addCorrection() {
-        let alias = newAlias.trimmingCharacters(in: .whitespacesAndNewlines)
-        let canonical = newCanonical.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !alias.isEmpty, !canonical.isEmpty else { return }
-
-        rules.insert(.init(canonical: canonical, aliases: [alias]), at: 0)
-        TranscriptCanonicalizer.saveRules(rules)
-        newAlias = ""
-        newCanonical = ""
+        rows.insert(.empty(), at: 0)
     }
 
     private func removeCorrection(at index: Int) {
-        guard rules.indices.contains(index) else { return }
-        rules.remove(at: index)
-        TranscriptCanonicalizer.saveRules(rules)
+        guard rows.indices.contains(index) else { return }
+        rows.remove(at: index)
     }
 
-    private func ruleDetail(_ rule: TranscriptCanonicalizer.Rule) -> String {
-        let aliases = rule.aliases.isEmpty ? [rule.canonical] : rule.aliases
-        let aliasText = aliases.joined(separator: ", ")
-        guard !rule.contexts.isEmpty else { return aliasText }
-        return "\(aliasText) | context: \(rule.contexts.joined(separator: ", "))"
+    private func moveCorrection(from source: Int, to destination: Int) {
+        guard rows.indices.contains(source), rows.indices.contains(destination) else { return }
+        let row = rows.remove(at: source)
+        rows.insert(row, at: destination)
     }
-}
 
-private struct PlainIconButtonStyle: ButtonStyle {
-    @Environment(\.isEnabled) private var isEnabled
+    private func restoreDefaults() {
+        rows = CorrectionDraft.fromRules(TranscriptCanonicalizer.defaultRules)
+    }
 
-    func makeBody(configuration: Configuration) -> some View {
-        configuration.label
-            .foregroundStyle(.white.opacity(!isEnabled ? 0.28 : configuration.isPressed ? 0.52 : 0.72))
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(.white.opacity(configuration.isPressed ? 0.1 : 0.05))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(.white.opacity(0.08), lineWidth: 1)
-            )
+    private func reload() {
+        let loadedRows = CorrectionDraft.fromRules(TranscriptCanonicalizer.rules())
+        rows = loadedRows
+        savedRows = loadedRows
+    }
+
+    private func saveRules() {
+        guard !hasInvalidRows else { return }
+        TranscriptCanonicalizer.saveRules(rows.map(\.rule))
+        savedRows = rows
     }
 }

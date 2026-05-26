@@ -52,6 +52,28 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("open c-mux"), "open CMUX")
     }
 
+    func testCanonicalizerOnlyAppliesListedAliases() {
+        let canonicalizer = TranscriptCanonicalizer(rules: [
+            .init(canonical: "WidgetPro", aliases: ["widget pro"])
+        ])
+
+        XCTAssertEqual(canonicalizer.canonicalize("open widget pro"), "open WidgetPro")
+        XCTAssertEqual(canonicalizer.canonicalize("open widgetpro"), "open widgetpro")
+    }
+
+    func testCorrectionDraftRoundTripsEditableFields() {
+        let draft = CorrectionDraft(
+            aliasesText: "widget pro, widget row",
+            canonical: " WidgetPro ",
+            contextsText: "open, launch"
+        )
+
+        XCTAssertTrue(draft.isValid)
+        XCTAssertEqual(draft.rule.canonical, "WidgetPro")
+        XCTAssertEqual(draft.rule.aliases, ["widget pro", "widget row"])
+        XCTAssertEqual(draft.rule.contexts, ["open", "launch"])
+    }
+
     func testCanonicalizerDoesNotRewriteSubstrings() {
         let canonicalizer = TranscriptCanonicalizer()
 
