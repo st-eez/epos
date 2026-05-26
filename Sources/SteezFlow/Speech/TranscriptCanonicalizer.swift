@@ -36,14 +36,6 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
 
     public static let defaultRules: [Rule] = [
         Rule(
-            canonical: "CMUX",
-            aliases: ["CMUX", "simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
-        ),
-        Rule(
-            canonical: "AGENTS.md",
-            aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
-        ),
-        Rule(
             canonical: "CLAUDE.md",
             aliases: [
                 "CLAUDE.md",
@@ -55,16 +47,19 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
                 "cloud.md"
             ]
         ),
+        Rule(canonical: "Stath", aliases: ["steph", "staff"]),
+        Rule(canonical: #"\/"#, aliases: ["slash"]),
+        Rule(
+            canonical: "CMUX",
+            aliases: ["CMUX", "simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
+        ),
+        Rule(
+            canonical: "AGENTS.md",
+            aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
+        ),
         Rule(canonical: "README.md", aliases: ["README.md", "read me dot md", "readme dot md", "read me md"]),
-        Rule(canonical: "Package.swift", aliases: ["Package.swift", "package dot swift"]),
         Rule(canonical: "project.yml", aliases: ["project.yml", "project dot yml", "project dot yaml"]),
-        Rule(canonical: ".env", aliases: ["dot env"]),
-        Rule(canonical: "swiftlint", aliases: ["swiftlint", "swift lint"]),
-        Rule(canonical: "SpeechTranscriber", aliases: ["SpeechTranscriber", "speech transcriber"]),
-        Rule(canonical: "DictationTranscriber", aliases: ["DictationTranscriber", "dictation transcriber"]),
-        Rule(canonical: "UserDefaults", aliases: ["UserDefaults", "user defaults"]),
-        Rule(canonical: "Xcode", aliases: ["Xcode", "x code"]),
-        Rule(canonical: "macOS", aliases: ["macOS", "mac os"])
+        Rule(canonical: ".env", aliases: ["dot env"])
     ]
 
     public init(rules: [Rule] = Self.defaultRules) {
@@ -101,11 +96,10 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
     public func canonicalize(_ text: String) -> String {
         guard !text.isEmpty else { return text }
 
-        var output = text
+        var output = Self.replacingCommandTokens(in: text)
         for spec in replacementSpecs() {
             output = Self.replacingMatches(in: output, spec: spec)
         }
-        output = Self.replacingCommandTokens(in: output)
         return output
     }
 }
