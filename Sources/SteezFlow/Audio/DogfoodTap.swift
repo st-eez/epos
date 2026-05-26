@@ -1,10 +1,8 @@
 import AVFoundation
 import Foundation
 
-/// Per-recording `.wav` capture in the mic's native format. Lives in
-/// `~/Library/Caches/SteezFlow/recordings/` as future eval material for the
-/// dogfood session that started 2026-05-22. **Temporary — delete this file and
-/// the `onRawBuffer` hook on `AudioCapture` when the dogfood review is done.**
+/// Per-recording `.wav` capture in the mic's native format. Lives in the app's
+/// cache directory as opt-in eval material; disabled by default through `Settings`.
 final class DogfoodTap: @unchecked Sendable {
     private static let log = SteezFlowLogger(category: "dogfood")
 

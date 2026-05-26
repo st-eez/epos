@@ -6,6 +6,7 @@ public struct MenuBarView: View {
     @ObservedObject var coordinator: AppCoordinator
     @State private var permissions: PermissionsSnapshot?
     @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
+    @State private var saveAudioSamples: Bool = Settings.load().saveAudioSamples
 
     private static let log = SteezFlowLogger(category: "menubar")
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
@@ -37,6 +38,7 @@ public struct MenuBarView: View {
         .shadow(color: .black.opacity(0.22), radius: 20, x: 0, y: 12)
         .onAppear {
             permissions = coordinator.snapshotPermissions()
+            saveAudioSamples = coordinator.saveAudioSamples
         }
     }
 
@@ -87,6 +89,18 @@ public struct MenuBarView: View {
                     .frame(width: 42, height: 22)
                     .onChange(of: launchAtLogin) { _, newValue in
                         applyLaunchAtLogin(newValue)
+                    }
+            }
+            Divider().overlay(.white.opacity(0.08))
+            metaRow("Save audio samples") {
+                Toggle("", isOn: $saveAudioSamples)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(teal)
+                    .scaleEffect(0.74)
+                    .frame(width: 42, height: 22)
+                    .onChange(of: saveAudioSamples) { _, newValue in
+                        coordinator.setSaveAudioSamples(newValue)
                     }
             }
         }

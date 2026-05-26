@@ -9,7 +9,7 @@ public final class AudioCapture {
     /// Set before `start()`; the value is snapshotted there for the session's tap.
     public var onBuffer: ((AVAudioPCMBuffer) -> Void)?
     /// Pre-conversion buffer in the mic's native format. Fires on the engine's audio
-    /// thread. Temporary hook for the dogfood `.wav` capture — remove with that feature.
+    /// thread. Used only when opt-in audio sample capture is enabled.
     public var onRawBuffer: ((AVAudioPCMBuffer) -> Void)?
     public var onAmplitude: ((Float) -> Void)?
 

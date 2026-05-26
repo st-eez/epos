@@ -35,6 +35,26 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(preset.attributeOptions, [.transcriptionConfidence])
     }
 
+    func testSettingsDefaultAudioSampleCaptureDisabled() throws {
+        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = Settings.load(from: defaults)
+
+        XCTAssertFalse(settings.saveAudioSamples)
+    }
+
+    func testSettingsPersistsAudioSampleCaptureFlag() throws {
+        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        Settings(saveAudioSamples: true).save(to: defaults)
+
+        XCTAssertTrue(Settings.load(from: defaults).saveAudioSamples)
+    }
+
     func testCanonicalizerFixesSeededDeveloperTerms() {
         let canonicalizer = TranscriptCanonicalizer()
 

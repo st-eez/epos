@@ -14,6 +14,7 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var finalText: String = ""
     @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
+    @Published public private(set) var settings: Settings
 
     /// Running display: committed finals + in-progress partial. The partial replaces
     /// only the tail because `SpeechTranscriber` emits volatile partials for the
@@ -27,8 +28,7 @@ public final class AppCoordinator: ObservableObject {
     private let canonicalizerProvider: () -> TranscriptCanonicalizer
     private let permissions: PermissionsGate
     private let assets: AssetManager
-    private let settings: Settings
-    // Dogfood `.wav` capture — temporary, remove with DogfoodTap.swift + AudioCapture.onRawBuffer.
+    // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
     private let log = SteezFlowLogger(category: "coordinator")
 
@@ -65,6 +65,15 @@ public final class AppCoordinator: ObservableObject {
     /// Identifier of the locale this coordinator was configured with. Read-only —
     /// changing locales mid-session is post-baseline.
     public var localeIdentifier: String { settings.localeIdentifier }
+
+    public var saveAudioSamples: Bool { settings.saveAudioSamples }
+
+    public func setSaveAudioSamples(_ enabled: Bool) {
+        guard settings.saveAudioSamples != enabled else { return }
+        settings.saveAudioSamples = enabled
+        settings.save()
+        log.info("audio sample capture \(enabled ? "enabled" : "disabled")")
+    }
 
     /// Synchronous read of current permission grants (no prompts).
     /// Used by MenuBarView to surface a warning row when something isn't granted.
@@ -122,6 +131,7 @@ public final class AppCoordinator: ObservableObject {
         let transcriber = self.transcriber
         let audio = self.audio
         let dogfood = self.dogfood
+        let shouldSaveAudioSamples = settings.saveAudioSamples
 
         let events: AsyncStream<TranscriptEvent>
         do {
@@ -142,7 +152,11 @@ public final class AppCoordinator: ObservableObject {
                     self.amplitude = amp
                 }
             }
-            audio.onRawBuffer = { buffer in dogfood.write(buffer) }
+            if shouldSaveAudioSamples {
+                audio.onRawBuffer = { buffer in dogfood.write(buffer) }
+            } else {
+                audio.onRawBuffer = nil
+            }
             try audio.start(targetFormat: format)
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
@@ -175,7 +189,7 @@ public final class AppCoordinator: ObservableObject {
         await transcriber.finish()
 
         let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        dogfood.stop(keeping: hasTranscribedText)
+        dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
         if hasTranscribedText {
             injector.paste(canonicalizerProvider().canonicalize(finalText))
