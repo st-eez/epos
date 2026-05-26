@@ -48,7 +48,7 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
             ]
         ),
         Rule(canonical: "Stath", aliases: ["steph", "staff"]),
-        Rule(canonical: #"\/"#, aliases: ["slash"]),
+        Rule(canonical: "/", aliases: ["slash"]),
         Rule(
             canonical: "CMUX",
             aliases: ["CMUX", "simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
@@ -59,7 +59,12 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
         ),
         Rule(canonical: "README.md", aliases: ["README.md", "read me dot md", "readme dot md", "read me md"]),
         Rule(canonical: "project.yml", aliases: ["project.yml", "project dot yml", "project dot yaml"]),
-        Rule(canonical: ".env", aliases: ["dot env"])
+        Rule(canonical: ".env", aliases: ["dot env"]),
+        // Developer-token shorthands. Plain alias->canonical, so they ride the same
+        // engine as user rules; only the flag-prefix form needs the pre-pass below.
+        Rule(canonical: "--", aliases: ["dash dash"]),
+        Rule(canonical: "/goal", aliases: ["slash goal"]),
+        Rule(canonical: "$HOME", aliases: ["dollar home"])
     ]
 
     public init(rules: [Rule] = Self.defaultRules) {
@@ -96,7 +101,10 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
     public func canonicalize(_ text: String) -> String {
         guard !text.isEmpty else { return text }
 
-        var output = Self.replacingCommandTokens(in: text)
+        // Only the flag-prefix form ("dash dash verbose" -> "--verbose") needs a capture
+        // group; every other spoken shorthand is a plain alias->canonical default rule,
+        // so it flows through the same engine as user rules below.
+        var output = Self.attachingFlagPrefix(in: text)
         for spec in replacementSpecs() {
             output = Self.replacingMatches(in: output, spec: spec)
         }
@@ -201,29 +209,15 @@ private extension TranscriptCanonicalizer {
         }
     }
 
-    static func replacingCommandTokens(in text: String) -> String {
-        var output = text
-        output = replacing(
+    /// `dash dash <flag>` -> `--<flag>`. The one shorthand the alias->canonical engine
+    /// can't express (it prepends `--` to a captured word), so it stays a pre-pass.
+    /// Bare `dash dash`, `slash goal`, and `dollar home` are plain default rules.
+    static func attachingFlagPrefix(in text: String) -> String {
+        replacing(
             pattern: #"(?<![A-Za-z0-9])dash\s+dash\s+([A-Za-z][A-Za-z0-9_-]*)"#,
-            in: output,
+            in: text,
             withTemplate: #"--$1"#
         )
-        output = replacing(
-            pattern: #"(?<![A-Za-z0-9])dash\s+dash(?![A-Za-z0-9])"#,
-            in: output,
-            withTemplate: "--"
-        )
-        output = replacing(
-            pattern: #"(?<![A-Za-z0-9])slash\s+goal(?![A-Za-z0-9])"#,
-            in: output,
-            withTemplate: "/goal"
-        )
-        output = replacing(
-            pattern: #"(?<![A-Za-z0-9])dollar\s+home(?![A-Za-z0-9])"#,
-            in: output,
-            withTemplate: "$HOME"
-        )
-        return output
     }
 
     static func replacing(pattern: String, in text: String, withTemplate template: String) -> String {

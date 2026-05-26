@@ -12,6 +12,9 @@ public enum TranscriptEvent: Equatable {
 /// Wraps `SpeechAnalyzer` + a `SpeechTranscriber` module.
 /// `start()` builds a fresh analyzer + module per call; do not reuse a single session.
 /// `accept(_:)` is safe to call from the audio thread.
+/// Not an `actor`: `accept(_:)` must be callable *synchronously* from the realtime audio
+/// thread (the `AudioCapture` tap), which actor isolation would force to be `async`. Hence
+/// the manual `NSLock` + `@unchecked Sendable` rather than compiler-enforced isolation.
 /// `finish()` is idempotent and safe to call concurrently with — or immediately after —
 /// `start()`. The lock-install inside `start()` precedes the `await` on analyzer start,
 /// so a `finish()` racing the in-flight start sees the install and tears down cleanly.

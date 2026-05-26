@@ -1,5 +1,6 @@
 import AVFoundation
 import Foundation
+import ServiceManagement
 import SwiftUI
 
 public enum CoordinatorState: Equatable {
@@ -25,9 +26,11 @@ public final class AppCoordinator: ObservableObject {
     private let audio: AudioCapture
     private let transcriber: Transcriber
     private let injector: TextInjector
-    private let canonicalizerProvider: () -> TranscriptCanonicalizer
     private let permissions: PermissionsGate
     private let assets: AssetManager
+    /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
+    /// editor mutates the same instance (the app hands the editor `coordinator.corrections`).
+    public let corrections = CorrectionStore()
     // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
     private let log = SteezFlowLogger(category: "coordinator")
@@ -45,14 +48,12 @@ public final class AppCoordinator: ObservableObject {
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
         injector: TextInjector = TextInjector(),
-        canonicalizerProvider: @escaping () -> TranscriptCanonicalizer = { .load() },
         settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
         self.injector = injector
-        self.canonicalizerProvider = canonicalizerProvider
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -73,6 +74,25 @@ public final class AppCoordinator: ObservableObject {
         settings.saveAudioSamples = enabled
         settings.save()
         log.info("audio sample capture \(enabled ? "enabled" : "disabled")")
+    }
+
+    /// Live launch-at-login state from the system — the source of truth, which the user
+    /// can also change in System Settings — not the cached `settings` copy.
+    public var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }
+
+    public func setLaunchAtLogin(_ enabled: Bool) {
+        do {
+            if enabled {
+                try SMAppService.mainApp.register()
+            } else {
+                try SMAppService.mainApp.unregister()
+            }
+            settings.launchAtLogin = enabled
+            settings.save()
+            log.info("launch-at-login \(enabled ? "enabled" : "disabled")")
+        } catch {
+            log.error("launch-at-login toggle failed: \(String(describing: error))")
+        }
     }
 
     /// Synchronous read of current permission grants (no prompts).
@@ -137,12 +157,7 @@ public final class AppCoordinator: ObservableObject {
         do {
             events = try await transcriber.start()
             guard state == .recording else {
-                await transcriber.finish()
-                indicator.hide()
-                amplitude = 0
-                partial = ""
-                transcriptionTask = nil
-                state = .idle
+                await resetToIdle()
                 return
             }
             audio.onBuffer = { buffer in transcriber.accept(buffer) }
@@ -160,13 +175,8 @@ public final class AppCoordinator: ObservableObject {
             try audio.start(targetFormat: format)
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
-            audio.onBuffer = nil
-            audio.onAmplitude = nil
-            audio.onRawBuffer = nil
             dogfood.stop(keeping: false)
-            await transcriber.finish()
-            indicator.hide()
-            state = .idle
+            await resetToIdle()
             return
         }
 
@@ -183,23 +193,31 @@ public final class AppCoordinator: ObservableObject {
         }
 
         audio.stop()
-        audio.onBuffer = nil
-        audio.onAmplitude = nil
-        audio.onRawBuffer = nil
-        await transcriber.finish()
 
         let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
         if hasTranscribedText {
-            injector.paste(canonicalizerProvider().canonicalize(finalText))
+            injector.paste(corrections.canonicalize(finalText))
         }
 
+        await resetToIdle()
+        log.info("recording done (finalChars=\(self.finalText.count))")
+    }
+
+    /// Common teardown shared by every exit from `runSession`. Each piece is idempotent
+    /// (callbacks set to nil, `finish()` is idempotent). Path-specific work — `audio.stop()`,
+    /// `dogfood.stop(keeping:)`, the paste — stays at the call sites; only what every path
+    /// does identically lives here, so the three exits can't drift apart again.
+    private func resetToIdle() async {
+        audio.onBuffer = nil
+        audio.onAmplitude = nil
+        audio.onRawBuffer = nil
+        await transcriber.finish()
         indicator.hide()
         amplitude = 0
         partial = ""
         transcriptionTask = nil
         state = .idle
-        log.info("recording done (finalChars=\(self.finalText.count))")
     }
 }

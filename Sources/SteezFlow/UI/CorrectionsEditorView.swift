@@ -1,8 +1,9 @@
 import SwiftUI
 
 struct CorrectionsEditorView: View {
-    @State private var rows = CorrectionDraft.fromRules(TranscriptCanonicalizer.rules())
-    @State private var savedRows = CorrectionDraft.fromRules(TranscriptCanonicalizer.rules())
+    @ObservedObject var store: CorrectionStore
+    @State private var rows: [CorrectionDraft] = []
+    @State private var savedRows: [CorrectionDraft] = []
 
     private var hasInvalidRows: Bool {
         rows.contains { !$0.isValid }
@@ -152,14 +153,14 @@ struct CorrectionsEditorView: View {
     }
 
     private func reload() {
-        let loadedRows = CorrectionDraft.fromRules(TranscriptCanonicalizer.rules())
+        let loadedRows = CorrectionDraft.fromRules(store.rules)
         rows = loadedRows
         savedRows = loadedRows
     }
 
     private func saveRules() {
         guard !hasInvalidRows else { return }
-        TranscriptCanonicalizer.saveRules(rows.map(\.rule))
+        store.save(rows.map(\.rule))
         savedRows = rows
     }
 }

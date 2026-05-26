@@ -13,7 +13,7 @@ public struct SteezFlowApp: App {
         .menuBarExtraStyle(.window)
 
         Window("Corrections", id: "corrections") {
-            CorrectionsEditorView()
+            CorrectionsEditorView(store: coordinator.corrections)
         }
         .defaultSize(width: 940, height: 560)
         .defaultLaunchBehavior(.suppressed)

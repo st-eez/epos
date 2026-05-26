@@ -1,14 +1,12 @@
-import ServiceManagement
 import SwiftUI
 
 public struct MenuBarView: View {
     @Environment(\.openWindow) private var openWindow
     @ObservedObject var coordinator: AppCoordinator
     @State private var permissions: PermissionsSnapshot?
-    @State private var launchAtLogin: Bool = (SMAppService.mainApp.status == .enabled)
-    @State private var saveAudioSamples: Bool = Settings.load().saveAudioSamples
+    @State private var launchAtLogin = false
+    @State private var saveAudioSamples = false
 
-    private static let log = SteezFlowLogger(category: "menubar")
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
     private let teal = Color(red: 0.22, green: 0.78, blue: 0.72)
     private let red = Color(red: 0.9, green: 0.28, blue: 0.3)
@@ -38,22 +36,24 @@ public struct MenuBarView: View {
         .shadow(color: .black.opacity(0.22), radius: 20, x: 0, y: 12)
         .onAppear {
             permissions = coordinator.snapshotPermissions()
+            launchAtLogin = coordinator.launchAtLogin
             saveAudioSamples = coordinator.saveAudioSamples
         }
     }
 
     private var readinessBanner: some View {
-        HStack(spacing: 11) {
-            Image(systemName: readinessIcon)
+        let readiness = self.readiness
+        return HStack(spacing: 11) {
+            Image(systemName: readiness.icon)
                 .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(readinessColor)
+                .foregroundStyle(readiness.color)
                 .frame(width: 34, height: 34)
-                .background(readinessColor.opacity(0.18), in: Circle())
+                .background(readiness.color.opacity(0.18), in: Circle())
             VStack(alignment: .leading, spacing: 2) {
-                Text(readinessTitle)
+                Text(readiness.title)
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(.white)
-                Text(readinessSubtitle)
+                Text(readiness.subtitle)
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(.white.opacity(0.62))
             }
@@ -61,7 +61,7 @@ public struct MenuBarView: View {
         }
         .padding(12)
         .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(readinessColor.opacity(0.22), lineWidth: 1))
+        .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).stroke(readiness.color.opacity(0.22), lineWidth: 1))
     }
 
     private var permissionGrid: some View {
@@ -88,7 +88,7 @@ public struct MenuBarView: View {
                     .scaleEffect(0.74)
                     .frame(width: 42, height: 22)
                     .onChange(of: launchAtLogin) { _, newValue in
-                        applyLaunchAtLogin(newValue)
+                        coordinator.setLaunchAtLogin(newValue)
                     }
             }
             Divider().overlay(.white.opacity(0.08))
@@ -159,21 +159,6 @@ public struct MenuBarView: View {
         .frame(height: 34)
     }
 
-    private func applyLaunchAtLogin(_ enabled: Bool) {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-            var current = Settings.load()
-            current.launchAtLogin = enabled
-            current.save()
-        } catch {
-            Self.log.error("launch-at-login toggle failed: \(String(describing: error))")
-        }
-    }
-
     private func openPrivacySettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy") {
             NSWorkspace.shared.open(url)
@@ -208,47 +193,40 @@ public struct MenuBarView: View {
         }
     }
 
-    private var readinessTitle: String {
-        if !allGranted(permissions) {
-            return permissions == nil ? "Checking access" : "Needs permission"
-        }
-        return switch coordinator.state {
-        case .idle: "Ready to dictate"
-        case .recording: "Recording"
-        case .finalizing: "Finishing dictation"
-        }
+    private struct Readiness {
+        let icon: String
+        let title: String
+        let subtitle: String
+        let color: Color
     }
 
-    private var readinessSubtitle: String {
-        if !allGranted(permissions) {
-            return permissions == nil ? "Reading current grants" : "Open Privacy to finish setup"
+    /// Single source for the banner's icon/title/subtitle/color. Permission state
+    /// outranks recording state; these four facets were previously four parallel
+    /// computed properties that each re-derived the same two-axis decision.
+    private var readiness: Readiness {
+        guard let permissions else {
+            return Readiness(
+                icon: "ellipsis",
+                title: "Checking access",
+                subtitle: "Reading current grants",
+                color: .white.opacity(0.56)
+            )
+        }
+        guard allGranted(permissions) else {
+            return Readiness(
+                icon: "exclamationmark.triangle.fill",
+                title: "Needs permission",
+                subtitle: "Open Privacy to finish setup",
+                color: amber
+            )
         }
         return switch coordinator.state {
-        case .idle: "Hold fn in any text field"
-        case .recording: "Release fn to paste"
-        case .finalizing: "Pasting into the frontmost app"
-        }
-    }
-
-    private var readinessIcon: String {
-        if !allGranted(permissions) {
-            return permissions == nil ? "ellipsis" : "exclamationmark.triangle.fill"
-        }
-        return switch coordinator.state {
-        case .idle: "mic"
-        case .recording: "waveform"
-        case .finalizing: "arrow.down.doc"
-        }
-    }
-
-    private var readinessColor: Color {
-        if !allGranted(permissions) {
-            return permissions == nil ? .white.opacity(0.56) : amber
-        }
-        return switch coordinator.state {
-        case .idle: teal
-        case .recording: red
-        case .finalizing: teal
+        case .idle:
+            Readiness(icon: "mic", title: "Ready to dictate", subtitle: "Hold fn in any text field", color: teal)
+        case .recording:
+            Readiness(icon: "waveform", title: "Recording", subtitle: "Release fn to paste", color: red)
+        case .finalizing:
+            Readiness(icon: "arrow.down.doc", title: "Finishing dictation", subtitle: "Pasting into the frontmost app", color: teal)
         }
     }
 }

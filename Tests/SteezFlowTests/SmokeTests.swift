@@ -79,7 +79,7 @@ final class SmokeTests: XCTestCase {
         let raw = "message steph and type slash"
         let cleaned = canonicalizer.canonicalize(raw)
 
-        XCTAssertEqual(cleaned, #"message Stath and type \/"#)
+        XCTAssertEqual(cleaned, "message Stath and type /")
     }
 
     func testCanonicalizerAppliesExposedAcronymAliases() {
@@ -194,14 +194,29 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open siemux"), "open siemux")
     }
 
+    @MainActor
+    func testCorrectionStorePersistsAndCanonicalizesWithSavedRules() throws {
+        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CorrectionStore(defaults: defaults)
+        store.save([.init(canonical: "WidgetPro", aliases: ["widget pro"])])
+
+        // Live instance reflects the save without a reload.
+        XCTAssertEqual(store.canonicalize("open widget pro"), "open WidgetPro")
+        // A fresh store over the same defaults loads the persisted rule.
+        XCTAssertEqual(CorrectionStore(defaults: defaults).canonicalize("open widget pro"), "open WidgetPro")
+    }
+
     func testInjectorPasteEmptyStringNoop() {
         TextInjector().paste("")
     }
 
     func testRecordingIndicatorMeterRespondsToSpeechRange() {
-        let quietHeights = (0..<5).map { RecordingIndicator.barHeight($0, amplitude: 0.005) }
-        let speechHeights = (0..<5).map { RecordingIndicator.barHeight($0, amplitude: 0.03) }
-        let loudHeights = (0..<5).map { RecordingIndicator.barHeight($0, amplitude: 0.08) }
+        let quietHeights = (0..<5).map { RecordingIndicatorSurface.barHeight($0, amplitude: 0.005) }
+        let speechHeights = (0..<5).map { RecordingIndicatorSurface.barHeight($0, amplitude: 0.03) }
+        let loudHeights = (0..<5).map { RecordingIndicatorSurface.barHeight($0, amplitude: 0.08) }
 
         XCTAssertGreaterThan(speechHeights.reduce(0, +), quietHeights.reduce(0, +))
         XCTAssertGreaterThan(loudHeights.reduce(0, +), speechHeights.reduce(0, +))
@@ -210,7 +225,7 @@ final class SmokeTests: XCTestCase {
 
     func testRecordingIndicatorKeepsRecentTranscriptVisible() {
         let transcript = "open the project and run the full test suite then summarize the last failure in the final response"
-        let display = RecordingIndicator.recentDisplayText(transcript, maxCharacters: 54)
+        let display = RecordingIndicatorSurface.recentDisplayText(transcript, maxCharacters: 54)
 
         XCTAssertTrue(display.hasPrefix("..."))
         XCTAssertFalse(display.contains("open the project"))
@@ -219,7 +234,7 @@ final class SmokeTests: XCTestCase {
 
     func testRecordingIndicatorDefaultPreviewKeepsNewestText() {
         let transcript = (0..<80).map { "word\($0)" }.joined(separator: " ")
-        let display = RecordingIndicator.recentDisplayText(transcript)
+        let display = RecordingIndicatorSurface.recentDisplayText(transcript)
 
         XCTAssertTrue(display.hasPrefix("..."))
         XCTAssertFalse(display.contains("word0 word1 word2"))

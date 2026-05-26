@@ -20,18 +20,6 @@ public struct RecordingIndicator: View {
         .padding(.horizontal, 20)
         .padding(.bottom, 10)
     }
-
-    nonisolated static func barHeight(_ index: Int, amplitude: Float) -> CGFloat {
-        RecordingIndicatorSurface.barHeight(index, amplitude: amplitude)
-    }
-
-    nonisolated static func barOpacity(_ index: Int, amplitude: Float) -> Double {
-        RecordingIndicatorSurface.barOpacity(index, amplitude: amplitude)
-    }
-
-    nonisolated static func recentDisplayText(_ text: String, maxCharacters: Int = 160) -> String {
-        RecordingIndicatorSurface.recentDisplayText(text, maxCharacters: maxCharacters)
-    }
 }
 
 struct RecordingIndicatorSurface: View {
