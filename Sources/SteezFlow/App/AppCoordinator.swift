@@ -24,6 +24,7 @@ public final class AppCoordinator: ObservableObject {
     private let audio: AudioCapture
     private let transcriber: Transcriber
     private let injector: TextInjector
+    private let canonicalizer: TranscriptCanonicalizer
     private let permissions: PermissionsGate
     private let assets: AssetManager
     private let settings: Settings
@@ -44,12 +45,14 @@ public final class AppCoordinator: ObservableObject {
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
         injector: TextInjector = TextInjector(),
+        canonicalizer: TranscriptCanonicalizer = .load(),
         settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
         self.injector = injector
+        self.canonicalizer = canonicalizer
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -175,7 +178,7 @@ public final class AppCoordinator: ObservableObject {
         dogfood.stop(keeping: hasTranscribedText)
 
         if hasTranscribedText {
-            injector.paste(finalText)
+            injector.paste(canonicalizer.canonicalize(finalText))
         }
 
         indicator.hide()

@@ -35,6 +35,76 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(preset.attributeOptions, [.transcriptionConfidence])
     }
 
+    func testCanonicalizerFixesSeededDeveloperTerms() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        let raw = "open Siemux and edit agents dot m d then run swift lint"
+        let cleaned = canonicalizer.canonicalize(raw)
+
+        XCTAssertEqual(cleaned, "open CMUX and edit AGENTS.md then run swiftlint")
+    }
+
+    func testCanonicalizerGeneratesAcronymAliases() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        XCTAssertEqual(canonicalizer.canonicalize("open see mux"), "open CMUX")
+        XCTAssertEqual(canonicalizer.canonicalize("open c m u x"), "open CMUX")
+        XCTAssertEqual(canonicalizer.canonicalize("open c-mux"), "open CMUX")
+    }
+
+    func testCanonicalizerDoesNotRewriteSubstrings() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        XCTAssertEqual(canonicalizer.canonicalize("the simuxed branch"), "the simuxed branch")
+        XCTAssertEqual(canonicalizer.canonicalize("print env before running"), "print env before running")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("source dot env before running"),
+            "source .env before running"
+        )
+    }
+
+    func testCanonicalizerAppliesContextualCustomRules() {
+        let canonicalizer = TranscriptCanonicalizer(rules: [
+            .init(canonical: "Aster", aliases: ["esther"], contexts: ["message to"])
+        ])
+
+        XCTAssertEqual(canonicalizer.canonicalize("message to Esther"), "message to Aster")
+        XCTAssertEqual(canonicalizer.canonicalize("Esther sent the note"), "Esther sent the note")
+    }
+
+    func testCanonicalizerNormalizesCommandTokens() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        let raw = "pass dash dash verbose then use dollar home and slash goal"
+        let cleaned = canonicalizer.canonicalize(raw)
+
+        XCTAssertEqual(cleaned, "pass --verbose then use $HOME and /goal")
+    }
+
+    func testCanonicalizerLoadsRuntimeRulesFromUserDefaults() throws {
+        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let rules = [
+            TranscriptCanonicalizer.Rule(
+                canonical: "WidgetPro",
+                aliases: ["widget pro"],
+                contexts: ["open"]
+            )
+        ]
+        let data = try JSONEncoder().encode(rules)
+        defaults.set(
+            String(decoding: data, as: UTF8.self),
+            forKey: TranscriptCanonicalizer.customRulesDefaultsKey
+        )
+
+        let canonicalizer = TranscriptCanonicalizer.load(from: defaults)
+
+        XCTAssertEqual(canonicalizer.canonicalize("open widget pro"), "open WidgetPro")
+        XCTAssertEqual(canonicalizer.canonicalize("compare widget pro"), "compare widget pro")
+    }
+
     func testInjectorPasteEmptyStringNoop() {
         TextInjector().paste("")
     }
