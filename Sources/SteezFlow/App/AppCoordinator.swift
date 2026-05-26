@@ -132,11 +132,10 @@ public final class AppCoordinator: ObservableObject {
         let audio = self.audio
         let dogfood = self.dogfood
         let shouldSaveAudioSamples = settings.saveAudioSamples
-        let canonicalizer = canonicalizerProvider()
 
         let events: AsyncStream<TranscriptEvent>
         do {
-            events = try await transcriber.start(contextualStrings: canonicalizer.speechContextualStrings)
+            events = try await transcriber.start()
             guard state == .recording else {
                 await transcriber.finish()
                 indicator.hide()
@@ -193,7 +192,7 @@ public final class AppCoordinator: ObservableObject {
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
         if hasTranscribedText {
-            injector.paste(canonicalizer.canonicalize(finalText))
+            injector.paste(canonicalizerProvider().canonicalize(finalText))
         }
 
         indicator.hide()

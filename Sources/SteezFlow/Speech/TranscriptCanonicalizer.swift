@@ -5,7 +5,6 @@ import Foundation
 /// or style rewriting.
 public struct TranscriptCanonicalizer: Equatable, Sendable {
     public static let rulesDefaultsKey = "settings.canonicalizer.rulesJSON"
-    public static let maxSpeechContextualStringCount = 100
     private static let storedRulesVersion = 1
 
     public struct Rule: Codable, Equatable, Sendable {
@@ -102,26 +101,6 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
             output = Self.replacingMatches(in: output, spec: spec)
         }
         return output
-    }
-
-    public var speechContextualStrings: [String] {
-        var phrases: [String] = []
-        var seen: Set<String> = []
-
-        for rule in rules {
-            let phrase = rule.canonical.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard Self.isUsefulSpeechContext(phrase) else { continue }
-
-            let key = phrase.lowercased()
-            guard seen.insert(key).inserted else { continue }
-
-            phrases.append(phrase)
-            if phrases.count == Self.maxSpeechContextualStringCount {
-                break
-            }
-        }
-
-        return phrases
     }
 }
 
@@ -260,9 +239,5 @@ private extension TranscriptCanonicalizer {
             .lowercased()
             .split { !$0.isLetter && !$0.isNumber }
             .joined(separator: " ")
-    }
-
-    static func isUsefulSpeechContext(_ phrase: String) -> Bool {
-        phrase.contains { $0.isLetter || $0.isNumber }
     }
 }
