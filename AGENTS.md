@@ -11,13 +11,13 @@
 
 `specs/baseline.md` is the spec. Before changing architecture, scope, or adding a feature, re-read it. If the work doesn't fit, update the spec first.
 
-Architecture in one line: fn key → AudioCapture → Transcriber (Apple SpeechTranscriber) → TextInjector. Coordinator wires them. UI shows live partial. Nothing else.
+Architecture in one line: fn key → AudioCapture → Transcriber (Apple SpeechTranscriber) → TranscriptCanonicalizer (correction layer) → TextInjector. Coordinator wires them. UI shows live partial.
 
 ## Non-Goals
 
 These are explicitly out of scope for the baseline. Do not add them without an updated spec:
 
-- Personal dictionary, LLM polish, filler-word detector
+- LLM polish, filler-word detector
 - Persistent history, multiple model choices, multi-locale switching UI
 - Toggle/hands-free mode (push-to-talk only in baseline)
 - Cloud transcription fallback

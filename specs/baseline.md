@@ -1,8 +1,8 @@
 # SteezFlow — Baseline Spec
 
-Date: 2026-05-22
+Date: 2026-05-22 · Revised: 2026-05-26 (added "Shipped Since Baseline"; see that section)
 
-A clean-sheet rebuild of SteezFlow as a minimal dictation app on top of Apple's `SpeechTranscriber` (macOS 26+). No WhisperKit, no MLX, no personal dictionary, no LLM polish, no filler detector. Those become post-baseline candidates, not baseline requirements.
+A clean-sheet rebuild of SteezFlow as a minimal dictation app on top of Apple's `SpeechTranscriber` (macOS 26+). No WhisperKit, no MLX, no LLM polish, no filler detector. Those become post-baseline candidates, not baseline requirements. A deterministic, user-editable correction layer has since shipped on top of this baseline — see "Shipped Since Baseline".
 
 ## Product
 
@@ -15,13 +15,12 @@ Hold fn → record → see indicator with live partial text → release → fina
 - On-device. No network at runtime except the one-time `SpeechTranscriber` locale asset download via `AssetInventory`.
 - Single locale per install (start with `en-US`); locale switching is a post-baseline concern.
 - Target footprint: under ~50 MB resident while idle, under ~100 MB while transcribing. Bakeoff measured `SpeechTranscriber` at ~27 MB RSS.
-- ~2,000 LOC ceiling for the baseline. If a module pushes past that, cut scope, do not grow the budget.
+- Keep modules under ~250 LOC each (see `CLAUDE.md`) rather than policing one global budget. The core dictation path held to the original ~2,000 LOC target; the correction layer, opt-in audio capture, and diagnostic sink shipped on top of it (see "Shipped Since Baseline"), so the whole app now runs larger. Cut scope at the module level.
 
 ## Non-Goals (baseline)
 
 Explicitly out of scope. Each is a candidate for a later, opt-in module:
 
-- Personal dictionary / custom vocabulary
 - LLM grammar polish (MLX/Qwen3 etc.)
 - Filler-word detection
 - Persistent transcription history
@@ -31,11 +30,18 @@ Explicitly out of scope. Each is a candidate for a later, opt-in module:
 - Push-to-talk *and* toggle modes — baseline ships push-to-talk only
 - Agent-specific modes (Codex prompt, Cursor chat, etc.)
 - Cloud transcription fallback
-- Deterministic developer-token rewriter (`"dash dash"` → `--`). The bakeoff shows we'll want this back eventually; baseline ships without it and we re-add as the first post-baseline feature once we have failure data from real use.
+
+## Shipped Since Baseline
+
+Built and validated after the original baseline and promoted from the backlog. Listed here so the source of truth matches the code — these are part of the app, not aspirational.
+
+- **Correction layer** (`Speech/TranscriptCanonicalizer.swift`, `UI/CorrectionsEditorView.swift`, `CorrectionDraft.swift`, `CorrectionDraftRow.swift`). Deterministic spoken→canonical rewriting applied to the final transcript before paste: user-editable alias→canonical rules with optional context guards, plus built-in developer-token normalization (`dash dash` → `--`, `slash goal` → `/goal`, `dollar home` → `$HOME`). Backlog #1 + #4. Rules persist under their own `UserDefaults` key and are edited in a dedicated Corrections window. Exposed rules only — not grammar or style rewriting.
+- **Opt-in audio sample capture** (`Audio/DogfoodTap.swift`). Per-recording `.wav` capture to the app cache as local eval material. Off by default, gated by `Settings.saveAudioSamples`; recordings that produced no transcript are discarded.
+- **On-disk diagnostic log** (`Diagnostics/SteezFlowLogger.swift` → `DiagnosticLogSink`). Mirrors `os.Logger` events to a size-capped, rotated app-owned log under `~/Library/Caches/SteezFlow/logs/` (writes direct events instead of polling the unified-log store). Privacy-aware: no transcript text. Disable with `STEEZFLOW_DIAGNOSTIC_LOGS=0`.
 
 ## Architecture
 
-Ten source modules, one test target. Flat layout, no subsystem folders beyond what's listed.
+Flat layout, one test target, no subsystem folders beyond what's listed. The core dictation path is below; the correction layer, opt-in capture, and diagnostic sink (see "Shipped Since Baseline") extend it.
 
 ```
 Sources/SteezFlow/
@@ -47,18 +53,23 @@ Sources/SteezFlow/
   Speech/
     AssetManager.swift          # SpeechTranscriber locale asset reserve + download
     Transcriber.swift           # SpeechAnalyzer + SpeechTranscriber wrapper
+    TranscriptCanonicalizer.swift  # deterministic spoken->canonical correction rules (Shipped Since Baseline)
   Audio/
     AudioCapture.swift          # AVAudioEngine input tap -> AnalyzerInput stream
+    DogfoodTap.swift            # opt-in per-recording .wav capture (Shipped Since Baseline)
   Hotkey/
     FnHotkey.swift              # NSEvent global monitor for fn press/release
   UI/
     RecordingIndicator.swift    # floating window: waveform + live partial text
     MenuBarView.swift           # MenuBarExtra: status, quit, open permissions
+    CorrectionsEditorView.swift # correction-rule editor window (+ CorrectionDraft, CorrectionDraftRow)
   Inject/
     TextInjector.swift          # paste via NSPasteboard + CGEvent cmd-v, restore clipboard
+  Diagnostics/
+    SteezFlowLogger.swift       # os.Logger + on-disk DiagnosticLogSink (Shipped Since Baseline)
 ```
 
-That is the whole tree. No `Core/`, no `Utilities/`, no `Models/` folder of empty types.
+No `Core/`, no `Utilities/`, no `Models/` folder of empty types. (Settings, the indicator controller, and small view styles also live under `App/` and `UI/`; the tree above lists the load-bearing modules.)
 
 ### Data flow
 
@@ -74,7 +85,8 @@ FnHotkey.release
      -> AudioCapture.stop
      -> Transcriber.finalize -> String
      -> RecordingIndicator.hide
-     -> TextInjector.paste(finalText) into frontmost app
+     -> TranscriptCanonicalizer.canonicalize(finalText)   # correction layer, Shipped Since Baseline
+     -> TextInjector.paste(corrected) into frontmost app
 ```
 
 ### Coordinator state
@@ -134,11 +146,11 @@ No frontmost-app icon, no waveform history, no draggable position in baseline. C
 
 ### Logging
 
-`os.Logger` only. One subsystem (`com.steez.SteezFlow`), categories per module. No ring buffer, no `StateHistory`, no on-disk log files in baseline.
+`os.Logger` for unified logging — one subsystem (`com.steez.SteezFlow`), categories per module — mirrored to an app-owned, size-capped, rotated on-disk `DiagnosticLogSink` (see "Shipped Since Baseline"; it writes direct events to disk instead of polling the unified-log store). No ring buffer, no `StateHistory`.
 
 ### Settings
 
-A single `UserDefaults`-backed struct with at most: launch-at-login bool, install locale string. Surfaced in the menu bar popover, no separate Settings window.
+A single `UserDefaults`-backed struct: launch-at-login bool, install locale string, and a `saveAudioSamples` bool (opt-in audio capture). Surfaced in the menu bar popover. Correction rules persist separately under their own `UserDefaults` key and are edited in the Corrections window.
 
 ## Build & Project Layout
 
@@ -180,10 +192,10 @@ Anything beyond this list is post-baseline.
 
 Tracked here so we do not lose them, in rough priority order:
 
-1. Deterministic developer-token rewriter (`"dash dash"` → `--`, `"dot env"` → `.env`, camelCase identifiers). First thing to re-add after baseline ships, based on real failure samples.
+1. ~~Deterministic developer-token rewriter (`"dash dash"` → `--`, `"dot env"` → `.env`).~~ **Shipped** as the correction layer (see "Shipped Since Baseline"). camelCase-identifier handling is still open.
 2. Toggle/hands-free recording mode alongside push-to-talk.
 3. Persistent transcription history (in-memory first, opt-in disk later).
-4. Personal dictionary with spoken→corrected mappings.
+4. ~~Personal dictionary with spoken→corrected mappings.~~ **Shipped** as user-editable correction rules (see "Shipped Since Baseline").
 5. Locale switching UI + multi-asset management.
 6. LLM polish (local MLX) as opt-in per-recording.
 7. Filler-word detection.
