@@ -64,6 +64,33 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(cleaned, "open CMUX and edit AGENTS.md then run swift lint")
     }
 
+    func testCanonicalizerBuildsSpeechContextFromCanonicalTerms() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        XCTAssertEqual(
+            canonicalizer.speechContextualStrings,
+            ["CLAUDE.md", "Stath", "CMUX", "AGENTS.md", "README.md", "project.yml", ".env"]
+        )
+    }
+
+    func testCanonicalizerSpeechContextSkipsAliasesAndPunctuationOnlyTerms() {
+        let canonicalizer = TranscriptCanonicalizer(rules: [
+            .init(canonical: " WidgetPro ", aliases: ["widget pro"]),
+            .init(canonical: #"\/"#, aliases: ["slash"]),
+            .init(canonical: "widgetpro", aliases: ["widget row"])
+        ])
+
+        XCTAssertEqual(canonicalizer.speechContextualStrings, ["WidgetPro"])
+    }
+
+    func testTranscriberAnalysisContextUsesGeneralContextualStrings() throws {
+        let context = try XCTUnwrap(
+            Transcriber.analysisContext(contextualStrings: [" CMUX ", "", "AGENTS.md"])
+        )
+
+        XCTAssertEqual(context.contextualStrings[.general], ["CMUX", "AGENTS.md"])
+    }
+
     func testCanonicalizerFixesClaudeMarkdownAliases() {
         let canonicalizer = TranscriptCanonicalizer()
 
