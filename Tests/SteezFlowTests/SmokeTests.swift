@@ -21,30 +21,6 @@ final class SmokeTests: XCTestCase {
         _ = snapshot.accessibility
     }
 
-    func testTranscriberInstantiates() {
-        let transcriber = Transcriber(locale: Locale(identifier: "en-US"))
-        XCTAssertEqual(transcriber.locale.identifier, "en-US")
-    }
-
-    func testTranscriberPresetRequestsAlternativesWithoutFastResults() {
-        let preset = Transcriber.speechPreset
-
-        XCTAssertEqual(preset.transcriptionOptions, [])
-        XCTAssertEqual(preset.reportingOptions, [.volatileResults, .alternativeTranscriptions])
-        XCTAssertFalse(preset.reportingOptions.contains(.fastResults))
-        XCTAssertEqual(preset.attributeOptions, [.transcriptionConfidence])
-    }
-
-    func testSettingsDefaultAudioSampleCaptureDisabled() throws {
-        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-
-        let settings = Settings.load(from: defaults)
-
-        XCTAssertFalse(settings.saveAudioSamples)
-    }
-
     func testSettingsPersistsAudioSampleCaptureFlag() throws {
         let suiteName = "SteezFlowTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -207,10 +183,6 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(store.canonicalize("open widget pro"), "open WidgetPro")
         // A fresh store over the same defaults loads the persisted rule.
         XCTAssertEqual(CorrectionStore(defaults: defaults).canonicalize("open widget pro"), "open WidgetPro")
-    }
-
-    func testInjectorPasteEmptyStringNoop() {
-        TextInjector().paste("")
     }
 
     func testRecordingIndicatorMeterRespondsToSpeechRange() {

@@ -3,7 +3,7 @@ import Foundation
 /// Deterministic post-final transcript cleanup for recurring ASR misses.
 /// This intentionally stays narrow: exposed correction rules, not general grammar
 /// or style rewriting.
-public struct TranscriptCanonicalizer: Equatable, Sendable {
+public struct TranscriptCanonicalizer: Sendable {
     public static let rulesDefaultsKey = "settings.canonicalizer.rulesJSON"
     private static let storedRulesVersion = 1
 
@@ -32,7 +32,18 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
         }
     }
 
-    public var rules: [Rule]
+    public let rules: [Rule]
+
+    /// Compiled once from `rules` at init: the alias regexes, sorted longest-alias-first
+    /// so a longer phrase wins over a shorter one it contains. `canonicalize` just runs
+    /// these — it never recompiles regexes or re-sorts per call.
+    private let specs: [CompiledSpec]
+
+    struct CompiledSpec: Sendable {
+        let canonical: String
+        let regex: NSRegularExpression
+        let contexts: [String]
+    }
 
     public static let defaultRules: [Rule] = [
         Rule(
@@ -69,6 +80,7 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
 
     public init(rules: [Rule] = Self.defaultRules) {
         self.rules = rules
+        self.specs = Self.compile(rules)
     }
 
     public static func load(from defaults: UserDefaults = .standard) -> TranscriptCanonicalizer {
@@ -105,7 +117,7 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
         // group; every other spoken shorthand is a plain alias->canonical default rule,
         // so it flows through the same engine as user rules below.
         var output = Self.attachingFlagPrefix(in: text)
-        for spec in replacementSpecs() {
+        for spec in specs {
             output = Self.replacingMatches(in: output, spec: spec)
         }
         return output
@@ -118,31 +130,24 @@ private extension TranscriptCanonicalizer {
         var rules: [Rule]
     }
 
-    struct ReplacementSpec {
-        var canonical: String
-        var alias: String
-        var contexts: [String]
-        var ruleOrder: Int
-    }
-
-    func replacementSpecs() -> [ReplacementSpec] {
-        rules.enumerated().flatMap { ruleOrder, rule in
-            Self.allAliases(for: rule)
-                .map {
-                    ReplacementSpec(
-                        canonical: rule.canonical,
-                        alias: $0,
-                        contexts: rule.contexts,
-                        ruleOrder: ruleOrder
-                    )
+    static func compile(_ rules: [Rule]) -> [CompiledSpec] {
+        rules.enumerated()
+            .flatMap { ruleOrder, rule in
+                allAliases(for: rule).map {
+                    (canonical: rule.canonical, alias: $0, contexts: rule.contexts, ruleOrder: ruleOrder)
                 }
-        }
-        .sorted { lhs, rhs in
-            if lhs.alias.count == rhs.alias.count {
-                return lhs.ruleOrder < rhs.ruleOrder
             }
-            return lhs.alias.count > rhs.alias.count
-        }
+            .sorted { lhs, rhs in
+                if lhs.alias.count == rhs.alias.count {
+                    return lhs.ruleOrder < rhs.ruleOrder
+                }
+                return lhs.alias.count > rhs.alias.count
+            }
+            .compactMap { spec in
+                regex(forAlias: spec.alias).map {
+                    CompiledSpec(canonical: spec.canonical, regex: $0, contexts: spec.contexts)
+                }
+            }
     }
 
     static func allAliases(for rule: Rule) -> [String] {
@@ -155,12 +160,10 @@ private extension TranscriptCanonicalizer {
         }
     }
 
-    static func replacingMatches(in text: String, spec: ReplacementSpec) -> String {
-        guard let regex = regex(forAlias: spec.alias) else { return text }
-
+    static func replacingMatches(in text: String, spec: CompiledSpec) -> String {
         let nsText = text as NSString
         let fullRange = NSRange(location: 0, length: nsText.length)
-        let matches = regex.matches(in: text, range: fullRange)
+        let matches = spec.regex.matches(in: text, range: fullRange)
         guard !matches.isEmpty else { return text }
 
         var output = ""

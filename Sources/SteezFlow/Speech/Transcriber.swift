@@ -31,12 +31,19 @@ public final class Transcriber: @unchecked Sendable {
     private static let logFinalAlternativesKey = "debug.speech.logFinalAlternatives"
 
     private let lock = NSLock()
-    private var analyzer: SpeechAnalyzer?
-    private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
-    private var eventContinuation: AsyncStream<TranscriptEvent>.Continuation?
-    private var drainTask: Task<Void, Never>?
-    private var startTask: Task<Void, Error>?
-    private var hasReceivedBuffer = false
+    private var session: Session?
+
+    /// All per-recording state, installed and torn down as a unit under `lock`. Grouping
+    /// it means `finish()` extracts a single value instead of a six-field tuple, and the
+    /// install/teardown can't drift field-by-field.
+    private struct Session {
+        let analyzer: SpeechAnalyzer
+        let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
+        let eventContinuation: AsyncStream<TranscriptEvent>.Continuation
+        let drainTask: Task<Void, Never>
+        let startTask: Task<Void, Error>
+        var hasReceivedBuffer: Bool
+    }
 
     public init(locale: Locale = Locale(identifier: "en-US")) {
         self.locale = locale
@@ -55,9 +62,7 @@ public final class Transcriber: @unchecked Sendable {
     /// and can drive teardown via `startTask.value`.
     /// Throws `TranscriberError.alreadyRunning` if a prior session hasn't been `finish`ed.
     public func start() async throws -> AsyncStream<TranscriptEvent> {
-        let alreadyRunning = lock.withLock {
-            self.analyzer != nil || self.startTask != nil
-        }
+        let alreadyRunning = lock.withLock { self.session != nil }
         if alreadyRunning {
             throw TranscriberError.alreadyRunning
         }
@@ -97,12 +102,14 @@ public final class Transcriber: @unchecked Sendable {
 
         // Install state BEFORE awaiting startT.value so a racing finish() can observe + drive teardown.
         lock.withLock {
-            self.analyzer = analyzer
-            self.inputContinuation = inputCont
-            self.eventContinuation = eventCont
-            self.drainTask = drain
-            self.startTask = startT
-            self.hasReceivedBuffer = false
+            self.session = Session(
+                analyzer: analyzer,
+                inputContinuation: inputCont,
+                eventContinuation: eventCont,
+                drainTask: drain,
+                startTask: startT,
+                hasReceivedBuffer: false
+            )
         }
 
         Self.log.info("session starting for locale \(self.locale.identifier)")
@@ -137,9 +144,8 @@ public final class Transcriber: @unchecked Sendable {
     /// Feed a captured audio buffer into the active session. Thread-safe.
     public func accept(_ buffer: AVAudioPCMBuffer) {
         lock.withLock {
-            guard let continuation = inputContinuation else { return }
-            hasReceivedBuffer = true
-            continuation.yield(AnalyzerInput(buffer: buffer))
+            session?.hasReceivedBuffer = true
+            session?.inputContinuation.yield(AnalyzerInput(buffer: buffer))
         }
     }
 
@@ -147,54 +153,42 @@ public final class Transcriber: @unchecked Sendable {
     /// Falls back to `cancelAndFinishNow()` when no audio buffers ever reached the
     /// analyzer; `finalizeAndFinishThroughEndOfInput()` hangs on empty input.
     public func finish() async {
-        let (analyzer, inputCont, drain, startT, eventCont, hadInput) = lock.withLock {
-            () -> (SpeechAnalyzer?, AsyncStream<AnalyzerInput>.Continuation?, Task<Void, Never>?, Task<Void, Error>?, AsyncStream<TranscriptEvent>.Continuation?, Bool) in
-            let analyzer = self.analyzer
-            let inputCont = self.inputContinuation
-            let drain = self.drainTask
-            let startT = self.startTask
-            let eventCont = self.eventContinuation
-            let hadInput = self.hasReceivedBuffer
-            self.analyzer = nil
-            self.inputContinuation = nil
-            self.drainTask = nil
-            self.startTask = nil
-            self.eventContinuation = nil
-            return (analyzer, inputCont, drain, startT, eventCont, hadInput)
+        let session = lock.withLock { () -> Session? in
+            defer { self.session = nil }
+            return self.session
         }
+        guard let session else { return }
 
         // Wait for any in-flight analyzer.start to settle before tearing down.
-        _ = try? await startT?.value
+        _ = try? await session.startTask.value
 
-        inputCont?.finish()
+        session.inputContinuation.finish()
 
-        if let analyzer {
-            if hadInput {
-                do {
-                    try await analyzer.finalizeAndFinishThroughEndOfInput()
-                } catch {
-                    let message = String(describing: error)
-                    Self.log.error("finalize failed: \(message)")
-                    // A failed finalize can leave `transcriber.results` dangling;
-                    // force-close the event stream and cancel the drain so the
-                    // `await drain?.value` below cannot hang.
-                    eventCont?.finish()
-                    drain?.cancel()
-                }
-                await drain?.value
-            } else {
-                // `cancelAndFinishNow()` returns promptly, but Apple's
-                // `SpeechTranscriber.results` AsyncSequence does NOT terminate
-                // when no input was ever fed. Awaiting `drain.value` here would
-                // block forever (rapid-fn-tap hang). Force-close our event
-                // stream and cancel the drain task so finish() always returns.
-                await analyzer.cancelAndFinishNow()
-                eventCont?.finish()
-                drain?.cancel()
+        if session.hasReceivedBuffer {
+            do {
+                try await session.analyzer.finalizeAndFinishThroughEndOfInput()
+            } catch {
+                let message = String(describing: error)
+                Self.log.error("finalize failed: \(message)")
+                // A failed finalize can leave `transcriber.results` dangling;
+                // force-close the event stream and cancel the drain so the
+                // `await drainTask.value` below cannot hang.
+                session.eventContinuation.finish()
+                session.drainTask.cancel()
             }
+            await session.drainTask.value
+        } else {
+            // `cancelAndFinishNow()` returns promptly, but Apple's
+            // `SpeechTranscriber.results` AsyncSequence does NOT terminate
+            // when no input was ever fed. Awaiting `drainTask.value` here would
+            // block forever (rapid-fn-tap hang). Force-close our event
+            // stream and cancel the drain task so finish() always returns.
+            await session.analyzer.cancelAndFinishNow()
+            session.eventContinuation.finish()
+            session.drainTask.cancel()
         }
 
-        Self.log.info("session finished (hadInput=\(hadInput)) locale=\(self.locale.identifier)")
+        Self.log.info("session finished (hadInput=\(session.hasReceivedBuffer)) locale=\(self.locale.identifier)")
     }
 }
 

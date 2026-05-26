@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct CorrectionsEditorView: View {
+    static let windowID = "corrections"
+
     @ObservedObject var store: CorrectionStore
     @State private var rows: [CorrectionDraft] = []
     @State private var savedRows: [CorrectionDraft] = []

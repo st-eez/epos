@@ -8,9 +8,9 @@ public struct MenuBarView: View {
     @State private var saveAudioSamples = false
 
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
-    private let teal = Color(red: 0.22, green: 0.78, blue: 0.72)
-    private let red = Color(red: 0.9, green: 0.28, blue: 0.3)
-    private let amber = Color(red: 0.86, green: 0.55, blue: 0.18)
+    private let teal = SteezPalette.teal
+    private let red = SteezPalette.red
+    private let amber = SteezPalette.amber
 
     public init(coordinator: AppCoordinator) {
         self.coordinator = coordinator
@@ -166,7 +166,7 @@ public struct MenuBarView: View {
     }
 
     private func openCorrectionsWindow() {
-        openWindow(id: "corrections")
+        openWindow(id: CorrectionsEditorView.windowID)
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 

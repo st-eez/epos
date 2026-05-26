@@ -2,8 +2,6 @@ import Foundation
 import SwiftUI
 
 public struct RecordingIndicator: View {
-    public static let windowID = "recording-indicator"
-
     @ObservedObject var coordinator: AppCoordinator
 
     public init(coordinator: AppCoordinator) {
@@ -31,8 +29,8 @@ struct RecordingIndicatorSurface: View {
     let amplitude: Float
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
-    private let teal = Color(red: 0.22, green: 0.78, blue: 0.72)
-    private let amber = Color(red: 0.86, green: 0.55, blue: 0.18)
+    private let teal = SteezPalette.teal
+    private let amber = SteezPalette.amber
     private let maxTranscriptWidth: CGFloat = 410
 
     var body: some View {
