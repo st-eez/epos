@@ -1,8 +1,8 @@
-# SteezFlow
+# Epos
 
 Minimal macOS dictation app built on Apple's `SpeechTranscriber`. Hold fn, speak, release — the text pastes into the frontmost app.
 
-Greenfield rebuild of the original SteezFlow. Source of truth: `specs/baseline.md`.
+Source of truth: `specs/baseline.md`.
 
 ## Requirements
 
@@ -34,7 +34,7 @@ the app from source on the user's Mac, signs it locally, and installs it into
 ```sh
 brew install xcodegen
 scripts/install-local-app.sh
-open /Applications/SteezFlowMacApp.app
+open /Applications/Epos.app
 ```
 
 `scripts/build-local-app.sh` prefers an Apple Development certificate when one
@@ -63,7 +63,7 @@ packaging.
 
 ## First-Run Setup
 
-1. Launch only `/Applications/SteezFlowMacApp.app`, not a DerivedData copy.
+1. Launch only `/Applications/Epos.app`, not a DerivedData copy.
 2. Grant Microphone, Speech Recognition, and Accessibility permissions when prompted.
 3. The app downloads the SpeechTranscriber locale asset on first launch (one-time).
 4. **Disable macOS system dictation** so the fn key doesn't trigger two listeners at once: System Settings → Keyboard → Dictation → Shortcut → "Off".
@@ -73,8 +73,8 @@ packaging.
 See `specs/baseline.md` for the full spec. Ten source modules, ~2K LOC ceiling:
 
 ```
-Sources/SteezFlow/
-  App/{SteezFlowApp,AppCoordinator}.swift
+Sources/Epos/
+  App/{EposApp,AppCoordinator}.swift
   Permissions/PermissionsGate.swift
   Speech/{AssetManager,Transcriber}.swift
   Audio/AudioCapture.swift

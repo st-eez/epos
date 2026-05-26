@@ -29,8 +29,8 @@ struct RecordingIndicatorSurface: View {
     let amplitude: Float
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
-    private let teal = SteezPalette.teal
-    private let amber = SteezPalette.amber
+    private let teal = EposPalette.teal
+    private let amber = EposPalette.amber
     private let maxTranscriptWidth: CGFloat = 410
 
     var body: some View {

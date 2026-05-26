@@ -27,7 +27,7 @@ public final class Transcriber: @unchecked Sendable {
         attributeOptions: [.transcriptionConfidence]
     )
 
-    private static let log = SteezFlowLogger(category: "transcriber")
+    private static let log = EposLogger(category: "transcriber")
     private static let logFinalAlternativesKey = "debug.speech.logFinalAlternatives"
 
     private let lock = NSLock()

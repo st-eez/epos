@@ -5,7 +5,7 @@ import Foundation
 /// Pastes text into the frontmost app via clipboard + synthesized cmd-v,
 /// restoring the previous clipboard contents afterwards.
 public final class TextInjector {
-    private static let log = SteezFlowLogger(category: "inject")
+    private static let log = EposLogger(category: "inject")
 
     public init() {}
 

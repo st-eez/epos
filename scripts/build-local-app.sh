@@ -40,8 +40,8 @@ MSG
 
 configuration="${CONFIGURATION:-Release}"
 symroot="$repo_root/.build/xcode"
-app_path="$symroot/$configuration/SteezFlowMacApp.app"
-signing_mode="${STEEZFLOW_LOCAL_SIGNING:-auto}"
+app_path="$symroot/$configuration/Epos.app"
+signing_mode="${EPOS_LOCAL_SIGNING:-auto}"
 
 cd "$repo_root"
 
@@ -54,7 +54,7 @@ case "$signing_mode" in
   auto | development | adhoc) ;;
   *)
     cat >&2 <<'MSG'
-error: STEEZFLOW_LOCAL_SIGNING must be one of: auto, development, adhoc
+error: EPOS_LOCAL_SIGNING must be one of: auto, development, adhoc
 MSG
     exit 64
     ;;
@@ -75,8 +75,8 @@ if [[ "$signing_mode" != "adhoc" ]]; then
   if [[ -n "${DEVELOPMENT_TEAM:-}" ]]; then
     code_sign_identity="${CODE_SIGN_IDENTITY:-Apple Development}"
     xcodebuild \
-      -project SteezFlow.xcodeproj \
-      -scheme SteezFlowMacApp \
+      -project Epos.xcodeproj \
+      -scheme EposMacApp \
       -configuration "$configuration" \
       -destination 'platform=macOS' \
       SYMROOT="$symroot" \
@@ -85,10 +85,10 @@ if [[ "$signing_mode" != "adhoc" ]]; then
       build >&2
   elif [[ "$signing_mode" == "development" ]]; then
     cat >&2 <<'MSG'
-error: DEVELOPMENT_TEAM is required for STEEZFLOW_LOCAL_SIGNING=development.
+error: DEVELOPMENT_TEAM is required for EPOS_LOCAL_SIGNING=development.
 
 Set DEVELOPMENT_TEAM to the TeamIdentifier/OU from your Apple Development
-certificate, or use STEEZFLOW_LOCAL_SIGNING=adhoc for a local ad-hoc build.
+certificate, or use EPOS_LOCAL_SIGNING=adhoc for a local ad-hoc build.
 MSG
     exit 64
   else
@@ -107,8 +107,8 @@ create an Apple Development certificate, then rerun this script.
 MSG
 
   xcodebuild \
-    -project SteezFlow.xcodeproj \
-    -scheme SteezFlowMacApp \
+    -project Epos.xcodeproj \
+    -scheme EposMacApp \
     -configuration "$configuration" \
     -destination 'platform=macOS' \
     SYMROOT="$symroot" \

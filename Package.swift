@@ -2,22 +2,22 @@
 import PackageDescription
 
 let package = Package(
-    name: "SteezFlow",
+    name: "Epos",
     platforms: [
         .macOS("26.0")
     ],
     products: [
-        .library(name: "SteezFlow", targets: ["SteezFlow"])
+        .library(name: "Epos", targets: ["Epos"])
     ],
     targets: [
         .target(
-            name: "SteezFlow",
-            path: "Sources/SteezFlow"
+            name: "Epos",
+            path: "Sources/Epos"
         ),
         .testTarget(
-            name: "SteezFlowTests",
-            dependencies: ["SteezFlow"],
-            path: "Tests/SteezFlowTests"
+            name: "EposTests",
+            dependencies: ["Epos"],
+            path: "Tests/EposTests"
         )
     ]
 )

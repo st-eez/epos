@@ -1,3 +1,0 @@
-import SteezFlow
-
-SteezFlowApp.main()

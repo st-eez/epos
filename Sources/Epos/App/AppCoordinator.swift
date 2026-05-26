@@ -33,7 +33,7 @@ public final class AppCoordinator: ObservableObject {
     public let corrections = CorrectionStore()
     // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
-    private let log = SteezFlowLogger(category: "coordinator")
+    private let log = EposLogger(category: "coordinator")
 
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?

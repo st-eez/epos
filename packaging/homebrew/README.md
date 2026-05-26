@@ -4,8 +4,8 @@ This is the free distribution path. It does not require a paid Apple Developer
 Program account because it does not distribute a Developer ID signed or
 notarized app bundle.
 
-The Homebrew formula builds SteezFlow from source on the user's Mac, installs
-the built `.app` into Homebrew's Cellar, and exposes `steezflow-install-app` to
+The Homebrew formula builds Epos from source on the user's Mac, installs
+the built `.app` into Homebrew's Cellar, and exposes `epos-install-app` to
 copy that app into `/Applications`.
 
 ## Release Checklist
@@ -24,8 +24,8 @@ copy that app into `/Applications`.
      | shasum -a 256
    ```
 
-3. Copy `Formula/steezflow.rb.template` into your tap as
-   `Formula/steezflow.rb`.
+3. Copy `Formula/epos.rb.template` into your tap as
+   `Formula/epos.rb`.
 
 4. Replace:
 
@@ -37,9 +37,9 @@ copy that app into `/Applications`.
 
    ```sh
    brew tap YOUR_GITHUB_OWNER/tap
-   brew install steezflow
-   steezflow-install-app
-   open /Applications/SteezFlowMacApp.app
+   brew install epos
+   epos-install-app
+   open /Applications/Epos.app
    ```
 
 6. Complete first-run setup:
@@ -62,8 +62,8 @@ some rebuilds.
 You can force a mode when testing locally:
 
 ```sh
-STEEZFLOW_LOCAL_SIGNING=development DEVELOPMENT_TEAM=YOURTEAMID scripts/build-local-app.sh
-STEEZFLOW_LOCAL_SIGNING=adhoc scripts/build-local-app.sh
+EPOS_LOCAL_SIGNING=development DEVELOPMENT_TEAM=YOURTEAMID scripts/build-local-app.sh
+EPOS_LOCAL_SIGNING=adhoc scripts/build-local-app.sh
 ```
 
 This flow intentionally does not remove `com.apple.quarantine` from downloaded

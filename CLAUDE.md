@@ -1,4 +1,4 @@
-# SteezFlow Claude Instructions
+# Epos Claude Instructions
 
 ## Hard Rules
 
@@ -36,17 +36,17 @@ swiftlint --quiet                            # silent = clean
 # 2. Installed signed .app — required for permission-gated work (mic, speech, AX)
 scripts/build-signed-app.sh
 scripts/install-signed-app.sh
-open /Applications/SteezFlowMacApp.app
+open /Applications/Epos.app
 ```
 
-E2E (mic / speech / accessibility / fn key / paste) requires the installed signed `.app`. macOS does not persist TCC grants for `swift run` executables, and launching a DerivedData `.app` can leave `/Applications/SteezFlowMacApp.app` stale. Treat raw `xcodebuild` as compile verification only; install before launching for app behavior.
+E2E (mic / speech / accessibility / fn key / paste) requires the installed signed `.app`. macOS does not persist TCC grants for `swift run` executables, and launching a DerivedData `.app` can leave `/Applications/Epos.app` stale. Treat raw `xcodebuild` as compile verification only; install before launching for app behavior.
 
 ## Build Topology — Do Not Re-introduce the Trap
 
-- `Package.swift` defines ONLY the `SteezFlow` library + `SteezFlowTests` test target. No executable target. Adding one back collides with the xcodegen `application` target (same name, same path) and produces a raw Mach-O at `Build/Products/Debug/SteezFlowMacApp` instead of a `.app` bundle.
+- `Package.swift` defines ONLY the `Epos` library + `EposTests` test target. No executable target. Adding one back collides with the xcodegen `application` target (same name, same path) and produces a raw Mach-O at `Build/Products/Debug/Epos` instead of a `.app` bundle.
 - `project.yml` is the source of truth for `Info.plist` keys and entitlements. They live under `info: properties:` and `entitlements: properties:`. Bare `path:` forms cause xcodegen to overwrite the on-disk files with empty templates on every regenerate.
-- `Resources/Info.plist` and `Resources/SteezFlow.entitlements` are generated artifacts. Edit `project.yml` and regenerate; don't hand-edit the plists.
-- `scripts/install-signed-app.sh` is the source of truth for the runnable app. It builds into `.build/xcode`, verifies a non-ad-hoc signature, copies to `/Applications/SteezFlowMacApp.app`, and verifies the installed bundle. Do not open DerivedData builds for runtime testing.
+- `Resources/Info.plist` and `Resources/Epos.entitlements` are generated artifacts. Edit `project.yml` and regenerate; don't hand-edit the plists.
+- `scripts/install-signed-app.sh` is the source of truth for the runnable app. It builds into `.build/xcode`, verifies a non-ad-hoc signature, copies to `/Applications/Epos.app`, and verifies the installed bundle. Do not open DerivedData builds for runtime testing.
 
 ## Apple Speech API Source of Truth
 
@@ -60,12 +60,12 @@ Grep it before assuming any symbol exists. macOS 26+ only — no `if #available`
 
 ## Logging
 
-Use `SteezFlowLogger` so each event goes to Apple unified logging and the app-owned diagnostic log under `~/Library/Caches/SteezFlow/logs/`. Subsystem `com.steez.SteezFlow`. Categories per module: `coordinator`, `permissions`, `assets`, `transcriber`, `audio`, `menubar`.
+Use `EposLogger` so each event goes to Apple unified logging and the app-owned diagnostic log under `~/Library/Caches/Epos/logs/`. Subsystem `com.steez.Epos`. Categories per module: `coordinator`, `permissions`, `assets`, `transcriber`, `audio`, `menubar`.
 
 Use `log stream` only as a manual, bounded debugging command; do not leave it running as a background capture rig:
 
 ```sh
-/usr/bin/log stream --predicate 'subsystem == "com.steez.SteezFlow"' --info --debug
+/usr/bin/log stream --predicate 'subsystem == "com.steez.Epos"' --info --debug
 ```
 
 Diagnostic log events must stay privacy-aware: no transcript text, PII, secrets, or environment-specific values.

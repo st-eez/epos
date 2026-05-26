@@ -8,7 +8,7 @@ import SwiftUI
 @MainActor
 public final class RecordingIndicatorController {
     private var panel: NSPanel?
-    private let log = SteezFlowLogger(category: "indicator")
+    private let log = EposLogger(category: "indicator")
 
     private static let panelSize = CGSize(width: 700, height: 150)
     private static let bottomInset: CGFloat = 60

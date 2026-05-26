@@ -14,7 +14,7 @@ public enum AssetStatus: Equatable {
 public struct AssetManager: Sendable {
     public let locale: Locale
 
-    private static let log = SteezFlowLogger(category: "assets")
+    private static let log = EposLogger(category: "assets")
 
     public init(locale: Locale = Locale(identifier: "en-US")) {
         self.locale = locale

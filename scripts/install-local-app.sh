@@ -2,13 +2,13 @@
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-install_app_path="${INSTALL_APP_PATH:-/Applications/SteezFlowMacApp.app}"
+install_app_path="${INSTALL_APP_PATH:-/Applications/Epos.app}"
 
-if pgrep -f "$install_app_path/Contents/MacOS/SteezFlowMacApp" >/dev/null 2>&1; then
+if pgrep -f "$install_app_path/Contents/MacOS/Epos" >/dev/null 2>&1; then
   cat >&2 <<MSG
 error: $install_app_path is running.
 
-Quit SteezFlowMacApp, then rerun:
+Quit Epos, then rerun:
 
   scripts/install-local-app.sh
 MSG

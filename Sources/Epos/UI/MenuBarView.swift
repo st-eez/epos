@@ -8,9 +8,9 @@ public struct MenuBarView: View {
     @State private var saveAudioSamples = false
 
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
-    private let teal = SteezPalette.teal
-    private let red = SteezPalette.red
-    private let amber = SteezPalette.amber
+    private let teal = EposPalette.teal
+    private let red = EposPalette.red
+    private let amber = EposPalette.amber
 
     public init(coordinator: AppCoordinator) {
         self.coordinator = coordinator

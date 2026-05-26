@@ -4,11 +4,11 @@ import Foundation
 /// Per-recording `.wav` capture in the mic's native format. Lives in the app's
 /// cache directory as opt-in eval material; disabled by default through `Settings`.
 final class DogfoodTap: @unchecked Sendable {
-    private static let log = SteezFlowLogger(category: "dogfood")
+    private static let log = EposLogger(category: "dogfood")
 
     /// Serial queue that owns `file`. All disk I/O happens here, never on the
     /// audio thread.
-    private let queue = DispatchQueue(label: "com.steez.SteezFlow.dogfood-write", qos: .utility)
+    private let queue = DispatchQueue(label: "com.steez.Epos.dogfood-write", qos: .utility)
     private let recordingsDirectory: URL?
     private var file: AVAudioFile?
     private var fileURL: URL?
@@ -133,6 +133,6 @@ final class DogfoodTap: @unchecked Sendable {
         guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             return nil
         }
-        return cachesDir.appendingPathComponent("SteezFlow/recordings", isDirectory: true)
+        return cachesDir.appendingPathComponent("Epos/recordings", isDirectory: true)
     }
 }

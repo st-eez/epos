@@ -1,4 +1,4 @@
-# SteezFlow Specs
+# Epos Specs
 
 > Keyword lookup table. Search keywords to find the right spec.
 

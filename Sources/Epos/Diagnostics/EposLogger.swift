@@ -22,7 +22,7 @@ public struct DiagnosticLogConfiguration: Equatable, Sendable {
     public static func load(
         from environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> DiagnosticLogConfiguration {
-        DiagnosticLogConfiguration(enabled: environment["STEEZFLOW_DIAGNOSTIC_LOGS"] != "0")
+        DiagnosticLogConfiguration(enabled: environment["EPOS_DIAGNOSTIC_LOGS"] != "0")
     }
 }
 
@@ -33,7 +33,7 @@ public final class DiagnosticLogSink: @unchecked Sendable {
 
     private let configuration: DiagnosticLogConfiguration
     private let directory: URL?
-    private let queue = DispatchQueue(label: "com.steez.SteezFlow.diagnostic-log", qos: .utility)
+    private let queue = DispatchQueue(label: "com.steez.Epos.diagnostic-log", qos: .utility)
     private let fileManager: FileManager
 
     public convenience init(configuration: DiagnosticLogConfiguration = .load()) {
@@ -80,7 +80,7 @@ public final class DiagnosticLogSink: @unchecked Sendable {
         guard let cachesDir = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first else {
             return nil
         }
-        return cachesDir.appendingPathComponent("SteezFlow/logs", isDirectory: true)
+        return cachesDir.appendingPathComponent("Epos/logs", isDirectory: true)
     }
 
     private func logFileURL(in directory: URL, date: Date) -> URL? {
@@ -182,8 +182,8 @@ public final class DiagnosticLogSink: @unchecked Sendable {
     }
 }
 
-public struct SteezFlowLogger: Sendable {
-    private static let subsystem = "com.steez.SteezFlow"
+public struct EposLogger: Sendable {
+    private static let subsystem = "com.steez.Epos"
 
     private let category: String
     private let system: Logger

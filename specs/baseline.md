@@ -1,8 +1,8 @@
-# SteezFlow — Baseline Spec
+# Epos — Baseline Spec
 
 Date: 2026-05-22 · Revised: 2026-05-26 (added "Shipped Since Baseline"; see that section)
 
-A clean-sheet rebuild of SteezFlow as a minimal dictation app on top of Apple's `SpeechTranscriber` (macOS 26+). No WhisperKit, no MLX, no LLM polish, no filler detector. Those become post-baseline candidates, not baseline requirements. A deterministic, user-editable correction layer has since shipped on top of this baseline — see "Shipped Since Baseline".
+A clean-sheet rebuild of Epos as a minimal dictation app on top of Apple's `SpeechTranscriber` (macOS 26+). No WhisperKit, no MLX, no LLM polish, no filler detector. Those become post-baseline candidates, not baseline requirements. A deterministic, user-editable correction layer has since shipped on top of this baseline — see "Shipped Since Baseline".
 
 ## Product
 
@@ -37,16 +37,16 @@ Built and validated after the original baseline and promoted from the backlog. L
 
 - **Correction layer** (`Speech/TranscriptCanonicalizer.swift`, `UI/CorrectionsEditorView.swift`, `CorrectionDraft.swift`, `CorrectionDraftRow.swift`). Deterministic spoken→canonical rewriting applied to the final transcript before paste: user-editable alias→canonical rules with optional context guards, plus built-in developer-token normalization (`dash dash` → `--`, `slash goal` → `/goal`, `dollar home` → `$HOME`). Backlog #1 + #4. Rules persist under their own `UserDefaults` key and are edited in a dedicated Corrections window. Exposed rules only — not grammar or style rewriting.
 - **Opt-in audio sample capture** (`Audio/DogfoodTap.swift`). Per-recording `.wav` capture to the app cache as local eval material. Off by default, gated by `Settings.saveAudioSamples`; recordings that produced no transcript are discarded.
-- **On-disk diagnostic log** (`Diagnostics/SteezFlowLogger.swift` → `DiagnosticLogSink`). Mirrors `os.Logger` events to a size-capped, rotated app-owned log under `~/Library/Caches/SteezFlow/logs/` (writes direct events instead of polling the unified-log store). Privacy-aware: no transcript text. Disable with `STEEZFLOW_DIAGNOSTIC_LOGS=0`.
+- **On-disk diagnostic log** (`Diagnostics/EposLogger.swift` → `DiagnosticLogSink`). Mirrors `os.Logger` events to a size-capped, rotated app-owned log under `~/Library/Caches/Epos/logs/` (writes direct events instead of polling the unified-log store). Privacy-aware: no transcript text. Disable with `EPOS_DIAGNOSTIC_LOGS=0`.
 
 ## Architecture
 
 Flat layout, one test target, no subsystem folders beyond what's listed. The core dictation path is below; the correction layer, opt-in capture, and diagnostic sink (see "Shipped Since Baseline") extend it.
 
 ```
-Sources/SteezFlow/
+Sources/Epos/
   App/
-    SteezFlowApp.swift          # @main, scenes, dependency wiring
+    EposApp.swift               # @main, scenes, dependency wiring
     AppCoordinator.swift        # state machine: idle <-> recording <-> finalizing
   Permissions/
     PermissionsGate.swift       # mic + speech + accessibility, request + status
@@ -66,7 +66,7 @@ Sources/SteezFlow/
   Inject/
     TextInjector.swift          # paste via NSPasteboard + CGEvent cmd-v, restore clipboard
   Diagnostics/
-    SteezFlowLogger.swift       # os.Logger + on-disk DiagnosticLogSink (Shipped Since Baseline)
+    EposLogger.swift            # os.Logger + on-disk DiagnosticLogSink (Shipped Since Baseline)
 ```
 
 No `Core/`, no `Utilities/`, no `Models/` folder of empty types. (Settings, the indicator controller, and small view styles also live under `App/` and `UI/`; the tree above lists the load-bearing modules.)
@@ -146,7 +146,7 @@ No frontmost-app icon, no waveform history, no draggable position in baseline. C
 
 ### Logging
 
-`os.Logger` for unified logging — one subsystem (`com.steez.SteezFlow`), categories per module — mirrored to an app-owned, size-capped, rotated on-disk `DiagnosticLogSink` (see "Shipped Since Baseline"; it writes direct events to disk instead of polling the unified-log store). No ring buffer, no `StateHistory`.
+`os.Logger` for unified logging — one subsystem (`com.steez.Epos`), categories per module — mirrored to an app-owned, size-capped, rotated on-disk `DiagnosticLogSink` (see "Shipped Since Baseline"; it writes direct events to disk instead of polling the unified-log store). No ring buffer, no `StateHistory`.
 
 ### Settings
 
@@ -156,7 +156,7 @@ A single `UserDefaults`-backed struct: launch-at-login bool, install locale stri
 
 - Swift Package + a thin Xcode app target (same shape as v1) so we can sign + entitle + bundle.
 - Entitlements: microphone, speech recognition, accessibility, hardened runtime. No sandbox in the baseline (paste injection wants accessibility, and there is no App Store target).
-- One scheme: `SteezFlowMacApp`. One test scheme: `SteezFlowTests`.
+- One scheme: `EposMacApp`. One test scheme: `EposTests`.
 - Lint: `swiftlint` with the v1 config copied verbatim.
 
 ## Testing
@@ -173,7 +173,7 @@ Target: < 30 tests total. If we cross that, we are testing implementation, not b
 
 ## Repository
 
-This repo is the greenfield rebuild of SteezFlow. The prior implementation lives at `~/Projects/Personal/steezflow` (99 Swift files, 28 specs, 16.7K LOC) and stays on disk as reference only — not a dependency, not a submodule, not something this repo imports from. The only v1 code worth porting verbatim is the fn-key monitor and the paste injector, both small enough to retype. v1 remains available until this rebuild is daily-driver stable.
+This repo is the greenfield rebuild now named Epos. The prior SteezFlow implementation lives at `~/Projects/Personal/steezflow` (99 Swift files, 28 specs, 16.7K LOC) and stays on disk as reference only — not a dependency, not a submodule, not something this repo imports from. The only v1 code worth porting verbatim is the fn-key monitor and the paste injector, both small enough to retype. v1 remains available until this rebuild is daily-driver stable.
 
 ## Acceptance — Baseline Done
 

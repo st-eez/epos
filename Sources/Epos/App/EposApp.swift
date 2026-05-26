@@ -1,12 +1,12 @@
 import SwiftUI
 
-public struct SteezFlowApp: App {
+public struct EposApp: App {
     @StateObject private var coordinator = AppCoordinator()
 
     public init() {}
 
     public var body: some Scene {
-        MenuBarExtra("SteezFlow", systemImage: "mic.fill") {
+        MenuBarExtra("Epos", systemImage: "mic.fill") {
             MenuBarView(coordinator: coordinator)
                 .task { await coordinator.bootstrap() }
         }

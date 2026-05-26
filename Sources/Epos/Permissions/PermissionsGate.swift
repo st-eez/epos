@@ -16,7 +16,7 @@ public struct PermissionsSnapshot: Equatable {
 }
 
 public struct PermissionsGate: Sendable {
-    private let log = SteezFlowLogger(category: "permissions")
+    private let log = EposLogger(category: "permissions")
 
     public init() {}
 

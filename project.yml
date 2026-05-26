@@ -1,4 +1,4 @@
-name: SteezFlow
+name: Epos
 options:
   bundleIdPrefix: com.steez
   deploymentTarget:
@@ -6,37 +6,38 @@ options:
   createIntermediateGroups: true
 
 packages:
-  SteezFlow:
+  Epos:
     path: .
 
 targets:
-  SteezFlowMacApp:
+  EposMacApp:
     type: application
     platform: macOS
     sources:
-      - path: Sources/SteezFlowMacApp
+      - path: Sources/EposMacApp
     dependencies:
-      - package: SteezFlow
-        product: SteezFlow
+      - package: Epos
+        product: Epos
     info:
       path: Resources/Info.plist
       properties:
-        CFBundleName: SteezFlow
+        CFBundleName: Epos
         CFBundleShortVersionString: "2.0.0"
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "26.0"
         LSUIElement: true
         NSHighResolutionCapable: true
-        NSMicrophoneUsageDescription: SteezFlow records your voice to transcribe dictation into the focused text field.
-        NSSpeechRecognitionUsageDescription: SteezFlow uses on-device speech recognition to turn your voice into text.
+        NSMicrophoneUsageDescription: Epos records your voice to transcribe dictation into the focused text field.
+        NSSpeechRecognitionUsageDescription: Epos uses on-device speech recognition to turn your voice into text.
     entitlements:
-      path: Resources/SteezFlow.entitlements
+      path: Resources/Epos.entitlements
       properties:
         com.apple.security.device.audio-input: true
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.steez.SteezFlow
-        PRODUCT_NAME: SteezFlowMacApp
+        PRODUCT_BUNDLE_IDENTIFIER: com.steez.Epos
+        PRODUCT_NAME: Epos
+        PRODUCT_MODULE_NAME: EposMacApp
         MACOSX_DEPLOYMENT_TARGET: "26.0"
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic

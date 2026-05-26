@@ -75,7 +75,7 @@ fi
 
 configuration="${CONFIGURATION:-Debug}"
 symroot="$repo_root/.build/xcode"
-app_path="$symroot/$configuration/SteezFlowMacApp.app"
+app_path="$symroot/$configuration/Epos.app"
 
 cd "$repo_root"
 
@@ -84,8 +84,8 @@ if command -v xcodegen >/dev/null 2>&1; then
 fi
 
 xcodebuild \
-  -project SteezFlow.xcodeproj \
-  -scheme SteezFlowMacApp \
+  -project Epos.xcodeproj \
+  -scheme EposMacApp \
   -configuration "$configuration" \
   -destination 'platform=macOS' \
   SYMROOT="$symroot" \

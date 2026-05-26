@@ -13,7 +13,7 @@ public final class AudioCapture {
     public var onRawBuffer: ((AVAudioPCMBuffer) -> Void)?
     public var onAmplitude: ((Float) -> Void)?
 
-    private static let log = SteezFlowLogger(category: "audio")
+    private static let log = EposLogger(category: "audio")
 
     /// Long-lived: the engine is created once and never deallocated while operating.
     /// Releasing an `AVAudioEngine` while CoreAudio's HAL IO thread is still rendering

@@ -1,7 +1,7 @@
 import AVFoundation
 import Speech
 import XCTest
-@testable import SteezFlow
+@testable import Epos
 
 final class SmokeTests: XCTestCase {
     @MainActor
@@ -22,7 +22,7 @@ final class SmokeTests: XCTestCase {
     }
 
     func testSettingsPersistsAudioSampleCaptureFlag() throws {
-        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -118,7 +118,7 @@ final class SmokeTests: XCTestCase {
     }
 
     func testCanonicalizerLoadsSavedRulesFromUserDefaults() throws {
-        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -139,7 +139,7 @@ final class SmokeTests: XCTestCase {
     }
 
     func testCanonicalizerMigratesLegacyCustomRulesBeforeDefaults() throws {
-        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -156,7 +156,7 @@ final class SmokeTests: XCTestCase {
     }
 
     func testCanonicalizerSavesEmptyRuleList() {
-        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let suiteName = "EposTests-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             XCTFail("Unable to create test defaults")
             return
@@ -172,7 +172,7 @@ final class SmokeTests: XCTestCase {
 
     @MainActor
     func testCorrectionStorePersistsAndCanonicalizesWithSavedRules() throws {
-        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
@@ -309,7 +309,7 @@ final class SmokeTests: XCTestCase {
 
 private func makeTemporaryDirectory() throws -> URL {
     let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("SteezFlowTests-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("EposTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
 }
