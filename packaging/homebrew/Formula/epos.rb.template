@@ -1,7 +1,7 @@
 class Epos < Formula
   desc "Push-to-talk dictation app using Apple SpeechTranscriber"
-  homepage "https://github.com/YOUR_GITHUB_OWNER/steezflow2"
-  url "https://github.com/YOUR_GITHUB_OWNER/steezflow2/archive/refs/tags/v2.0.0.tar.gz"
+  homepage "https://github.com/YOUR_GITHUB_OWNER/epos"
+  url "https://github.com/YOUR_GITHUB_OWNER/epos/archive/refs/tags/v2.0.0.tar.gz"
   sha256 "REPLACE_WITH_SOURCE_TARBALL_SHA256"
 
   depends_on xcode: ["17.0", :build]

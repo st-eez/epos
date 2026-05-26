@@ -13,5 +13,6 @@ Epos.xcworkspace/
 # Local editor / agent state
 .claude/settings.local.json
 prompt.md
+todo.md
 .epos/
 .steez/

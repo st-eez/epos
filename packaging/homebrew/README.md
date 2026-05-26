@@ -20,7 +20,7 @@ copy that app into `/Applications`.
 2. Compute the source tarball SHA.
 
    ```sh
-   curl -L "https://github.com/YOUR_GITHUB_OWNER/steezflow2/archive/refs/tags/v2.0.0.tar.gz" \
+   curl -L "https://github.com/YOUR_GITHUB_OWNER/epos/archive/refs/tags/v2.0.0.tar.gz" \
      | shasum -a 256
    ```
 
