@@ -93,16 +93,44 @@ final class SmokeTests: XCTestCase {
                 contexts: ["open"]
             )
         ]
-        let data = try JSONEncoder().encode(rules)
-        defaults.set(
-            String(decoding: data, as: UTF8.self),
-            forKey: TranscriptCanonicalizer.customRulesDefaultsKey
-        )
+        TranscriptCanonicalizer.saveCustomRules(rules, to: defaults)
 
         let canonicalizer = TranscriptCanonicalizer.load(from: defaults)
 
         XCTAssertEqual(canonicalizer.canonicalize("open widget pro"), "open WidgetPro")
         XCTAssertEqual(canonicalizer.canonicalize("compare widget pro"), "compare widget pro")
+    }
+
+    func testCanonicalizerRuntimeRulesOverrideDefaults() {
+        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Unable to create test defaults")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        TranscriptCanonicalizer.saveCustomRules([
+            .init(canonical: "MUX", aliases: ["simux"])
+        ], to: defaults)
+
+        XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open simux"), "open MUX")
+    }
+
+    func testCanonicalizerRemovesEmptyRuntimeRulesFromUserDefaults() {
+        let suiteName = "SteezFlowTests-\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suiteName) else {
+            XCTFail("Unable to create test defaults")
+            return
+        }
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        TranscriptCanonicalizer.saveCustomRules([
+            .init(canonical: "WidgetPro", aliases: ["widget pro"])
+        ], to: defaults)
+        TranscriptCanonicalizer.saveCustomRules([], to: defaults)
+
+        XCTAssertNil(defaults.string(forKey: TranscriptCanonicalizer.customRulesDefaultsKey))
+        XCTAssertTrue(TranscriptCanonicalizer.customRules(from: defaults).isEmpty)
     }
 
     func testInjectorPasteEmptyStringNoop() {

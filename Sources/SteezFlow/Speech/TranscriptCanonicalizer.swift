@@ -57,12 +57,24 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
     }
 
     public static func load(from defaults: UserDefaults = .standard) -> TranscriptCanonicalizer {
+        TranscriptCanonicalizer(rules: customRules(from: defaults) + defaultRules)
+    }
+
+    public static func customRules(from defaults: UserDefaults = .standard) -> [Rule] {
         guard let rawRules = defaults.string(forKey: customRulesDefaultsKey),
-              let data = rawRules.data(using: .utf8),
-              let customRules = try? JSONDecoder().decode([Rule].self, from: data) else {
-            return TranscriptCanonicalizer()
+              let data = rawRules.data(using: .utf8) else {
+            return []
         }
-        return TranscriptCanonicalizer(rules: defaultRules + customRules)
+        return (try? JSONDecoder().decode([Rule].self, from: data)) ?? []
+    }
+
+    public static func saveCustomRules(_ rules: [Rule], to defaults: UserDefaults = .standard) {
+        guard !rules.isEmpty else {
+            defaults.removeObject(forKey: customRulesDefaultsKey)
+            return
+        }
+        guard let data = try? JSONEncoder().encode(rules) else { return }
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: customRulesDefaultsKey)
     }
 
     public func canonicalize(_ text: String) -> String {
@@ -82,22 +94,24 @@ private extension TranscriptCanonicalizer {
         var canonical: String
         var alias: String
         var contexts: [String]
+        var ruleOrder: Int
     }
 
     func replacementSpecs() -> [ReplacementSpec] {
-        rules.flatMap { rule in
+        rules.enumerated().flatMap { ruleOrder, rule in
             Self.allAliases(for: rule)
                 .map {
                     ReplacementSpec(
                         canonical: rule.canonical,
                         alias: $0,
-                        contexts: rule.contexts
+                        contexts: rule.contexts,
+                        ruleOrder: ruleOrder
                     )
                 }
         }
         .sorted { lhs, rhs in
             if lhs.alias.count == rhs.alias.count {
-                return lhs.canonical.count > rhs.canonical.count
+                return lhs.ruleOrder < rhs.ruleOrder
             }
             return lhs.alias.count > rhs.alias.count
         }
