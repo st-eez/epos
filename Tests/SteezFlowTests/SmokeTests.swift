@@ -44,7 +44,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(cleaned, "open CMUX and edit AGENTS.md then run swiftlint")
     }
 
-    func testCanonicalizerGeneratesAcronymAliases() {
+    func testCanonicalizerAppliesExposedAcronymAliases() {
         let canonicalizer = TranscriptCanonicalizer()
 
         XCTAssertEqual(canonicalizer.canonicalize("open see mux"), "open CMUX")
@@ -63,7 +63,7 @@ final class SmokeTests: XCTestCase {
         )
     }
 
-    func testCanonicalizerAppliesContextualCustomRules() {
+    func testCanonicalizerAppliesContextualRules() {
         let canonicalizer = TranscriptCanonicalizer(rules: [
             .init(canonical: "Aster", aliases: ["esther"], contexts: ["message to"])
         ])
@@ -81,7 +81,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(cleaned, "pass --verbose then use $HOME and /goal")
     }
 
-    func testCanonicalizerLoadsRuntimeRulesFromUserDefaults() throws {
+    func testCanonicalizerLoadsSavedRulesFromUserDefaults() throws {
         let suiteName = "SteezFlowTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -93,30 +93,33 @@ final class SmokeTests: XCTestCase {
                 contexts: ["open"]
             )
         ]
-        TranscriptCanonicalizer.saveCustomRules(rules, to: defaults)
+        TranscriptCanonicalizer.saveRules(rules, to: defaults)
 
         let canonicalizer = TranscriptCanonicalizer.load(from: defaults)
 
         XCTAssertEqual(canonicalizer.canonicalize("open widget pro"), "open WidgetPro")
         XCTAssertEqual(canonicalizer.canonicalize("compare widget pro"), "compare widget pro")
+        XCTAssertEqual(canonicalizer.canonicalize("open siemux"), "open siemux")
     }
 
-    func testCanonicalizerRuntimeRulesOverrideDefaults() {
+    func testCanonicalizerMigratesLegacyCustomRulesBeforeDefaults() throws {
         let suiteName = "SteezFlowTests-\(UUID().uuidString)"
-        guard let defaults = UserDefaults(suiteName: suiteName) else {
-            XCTFail("Unable to create test defaults")
-            return
-        }
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        TranscriptCanonicalizer.saveCustomRules([
+        let legacyCustomRules: [TranscriptCanonicalizer.Rule] = [
             .init(canonical: "MUX", aliases: ["simux"])
-        ], to: defaults)
+        ]
+        let data = try JSONEncoder().encode(legacyCustomRules)
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: TranscriptCanonicalizer.rulesDefaultsKey)
 
-        XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open simux"), "open MUX")
+        let canonicalizer = TranscriptCanonicalizer.load(from: defaults)
+
+        XCTAssertEqual(canonicalizer.canonicalize("open simux"), "open MUX")
+        XCTAssertEqual(canonicalizer.canonicalize("edit agents dot md"), "edit AGENTS.md")
     }
 
-    func testCanonicalizerRemovesEmptyRuntimeRulesFromUserDefaults() {
+    func testCanonicalizerSavesEmptyRuleList() {
         let suiteName = "SteezFlowTests-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             XCTFail("Unable to create test defaults")
@@ -124,13 +127,11 @@ final class SmokeTests: XCTestCase {
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        TranscriptCanonicalizer.saveCustomRules([
-            .init(canonical: "WidgetPro", aliases: ["widget pro"])
-        ], to: defaults)
-        TranscriptCanonicalizer.saveCustomRules([], to: defaults)
+        TranscriptCanonicalizer.saveRules([], to: defaults)
 
-        XCTAssertNil(defaults.string(forKey: TranscriptCanonicalizer.customRulesDefaultsKey))
-        XCTAssertTrue(TranscriptCanonicalizer.customRules(from: defaults).isEmpty)
+        XCTAssertNotNil(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey))
+        XCTAssertTrue(TranscriptCanonicalizer.rules(from: defaults).isEmpty)
+        XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open siemux"), "open siemux")
     }
 
     func testInjectorPasteEmptyStringNoop() {

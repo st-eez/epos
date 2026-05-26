@@ -1,29 +1,27 @@
 import Foundation
 
 /// Deterministic post-final transcript cleanup for recurring ASR misses.
-/// This intentionally stays narrow: known developer terms and user-provided
-/// custom rules, not general grammar or style rewriting.
+/// This intentionally stays narrow: exposed correction rules, not general grammar
+/// or style rewriting.
 public struct TranscriptCanonicalizer: Equatable, Sendable {
-    public static let customRulesDefaultsKey = "settings.canonicalizer.rulesJSON"
+    public static let rulesDefaultsKey = "settings.canonicalizer.rulesJSON"
+    private static let storedRulesVersion = 1
 
     public struct Rule: Codable, Equatable, Sendable {
         public var canonical: String
         public var aliases: [String]
         public var contexts: [String]
-        public var generateAcronymAliases: Bool
 
-        public init(canonical: String, aliases: [String] = [], contexts: [String] = [], generateAcronymAliases: Bool = false) {
+        public init(canonical: String, aliases: [String] = [], contexts: [String] = []) {
             self.canonical = canonical
             self.aliases = aliases
             self.contexts = contexts
-            self.generateAcronymAliases = generateAcronymAliases
         }
 
         private enum CodingKeys: String, CodingKey {
             case canonical
             case aliases
             case contexts
-            case generateAcronymAliases
         }
 
         public init(from decoder: any Decoder) throws {
@@ -31,14 +29,16 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
             canonical = try container.decode(String.self, forKey: .canonical)
             aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
             contexts = try container.decodeIfPresent([String].self, forKey: .contexts) ?? []
-            generateAcronymAliases = try container.decodeIfPresent(Bool.self, forKey: .generateAcronymAliases) ?? false
         }
     }
 
     public var rules: [Rule]
 
     public static let defaultRules: [Rule] = [
-        Rule(canonical: "CMUX", aliases: ["simux", "siemux", "cmox"], generateAcronymAliases: true),
+        Rule(
+            canonical: "CMUX",
+            aliases: ["simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
+        ),
         Rule(canonical: "AGENTS.md", aliases: ["agents dot md", "agents dot m d", "agents md", "agents dot markdown"]),
         Rule(canonical: "README.md", aliases: ["read me dot md", "readme dot md", "read me md"]),
         Rule(canonical: "Package.swift", aliases: ["package dot swift"]),
@@ -57,24 +57,30 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
     }
 
     public static func load(from defaults: UserDefaults = .standard) -> TranscriptCanonicalizer {
-        TranscriptCanonicalizer(rules: customRules(from: defaults) + defaultRules)
+        TranscriptCanonicalizer(rules: rules(from: defaults))
     }
 
-    public static func customRules(from defaults: UserDefaults = .standard) -> [Rule] {
-        guard let rawRules = defaults.string(forKey: customRulesDefaultsKey),
+    public static func rules(from defaults: UserDefaults = .standard) -> [Rule] {
+        guard let rawRules = defaults.string(forKey: rulesDefaultsKey),
               let data = rawRules.data(using: .utf8) else {
-            return []
+            return defaultRules
         }
-        return (try? JSONDecoder().decode([Rule].self, from: data)) ?? []
+
+        if let storedRules = try? JSONDecoder().decode(StoredRules.self, from: data) {
+            return storedRules.rules
+        }
+
+        if let legacyCustomRules = try? JSONDecoder().decode([Rule].self, from: data) {
+            return legacyCustomRules + defaultRules
+        }
+
+        return defaultRules
     }
 
-    public static func saveCustomRules(_ rules: [Rule], to defaults: UserDefaults = .standard) {
-        guard !rules.isEmpty else {
-            defaults.removeObject(forKey: customRulesDefaultsKey)
-            return
-        }
-        guard let data = try? JSONEncoder().encode(rules) else { return }
-        defaults.set(String(decoding: data, as: UTF8.self), forKey: customRulesDefaultsKey)
+    public static func saveRules(_ rules: [Rule], to defaults: UserDefaults = .standard) {
+        let storedRules = StoredRules(version: storedRulesVersion, rules: rules)
+        guard let data = try? JSONEncoder().encode(storedRules) else { return }
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: rulesDefaultsKey)
     }
 
     public func canonicalize(_ text: String) -> String {
@@ -90,6 +96,11 @@ public struct TranscriptCanonicalizer: Equatable, Sendable {
 }
 
 private extension TranscriptCanonicalizer {
+    struct StoredRules: Codable {
+        var version: Int
+        var rules: [Rule]
+    }
+
     struct ReplacementSpec {
         var canonical: String
         var alias: String
@@ -119,9 +130,6 @@ private extension TranscriptCanonicalizer {
 
     static func allAliases(for rule: Rule) -> [String] {
         var aliases = rule.aliases
-        if rule.generateAcronymAliases {
-            aliases.append(contentsOf: acronymAliases(for: rule.canonical))
-        }
         if shouldIncludeCanonicalAlias(rule.canonical) {
             aliases.append(rule.canonical)
         }
@@ -133,28 +141,6 @@ private extension TranscriptCanonicalizer {
             seen.insert(key)
             return true
         }
-    }
-
-    static func acronymAliases(for canonical: String) -> [String] {
-        let letters = canonical.filter { $0.isLetter || $0.isNumber }
-        guard letters.count >= 2, letters.allSatisfy({ $0.isUppercase || $0.isNumber }) else {
-            return []
-        }
-
-        let lower = letters.lowercased()
-        var aliases = [letters.map(String.init).joined(separator: " ")]
-
-        if let first = lower.first {
-            let rest = String(lower.dropFirst())
-            aliases.append("\(first) \(rest)")
-
-            if first == "c" {
-                aliases.append("see \(rest)")
-                aliases.append("sea \(rest)")
-            }
-        }
-
-        return aliases
     }
 
     static func shouldIncludeCanonicalAlias(_ canonical: String) -> Bool {
