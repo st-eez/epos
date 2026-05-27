@@ -11,6 +11,22 @@ Source of truth: `specs/baseline.md`.
 - Xcode 17+ (for Swift 6.0 toolchain).
 - [XcodeGen](https://github.com/yonaskolb/XcodeGen) for generating the Xcode project: `brew install xcodegen`.
 
+## Fresh Clone Setup
+
+For a teammate or agent starting from GitHub:
+
+```sh
+git clone https://github.com/st-eez/epos.git
+cd epos
+brew install xcodegen
+scripts/install-local-app.sh
+open /Applications/Epos.app
+```
+
+Then complete the first-run setup below. The local install path builds from
+source on the user's Mac, signs the app locally, and installs it into
+`/Applications`.
+
 ## Build
 
 ```sh
@@ -70,19 +86,23 @@ packaging.
 
 ## Architecture
 
-See `specs/baseline.md` for the full spec. Ten source modules, ~2K LOC ceiling:
+See `specs/baseline.md` for the full spec. The app is organized by workflow
+boundary:
 
 ```
 Sources/Epos/
-  App/{EposApp,AppCoordinator}.swift
+  App/{EposApp,AppCoordinator,Settings}.swift
   Permissions/PermissionsGate.swift
-  Speech/{AssetManager,Transcriber}.swift
-  Audio/AudioCapture.swift
+  Speech/{AssetManager,Transcriber,TranscriptCanonicalizer,CorrectionStore}.swift
+  Audio/{AudioCapture,DogfoodTap}.swift
   Hotkey/FnHotkey.swift
-  UI/{RecordingIndicator,MenuBarView}.swift
+  UI/{MenuBarView,RecordingIndicator,CorrectionsEditorView,...}.swift
   Inject/TextInjector.swift
+  Diagnostics/EposLogger.swift
 ```
 
 ## Status
 
-Scaffolded. All modules are compilable stubs with TODOs marking the real work. See `specs/baseline.md` Acceptance section for the done-bar.
+Source-buildable macOS app with the baseline push-to-talk flow, local signing
+scripts, first-run permissions, diagnostic logging, and correction-rule editing
+in place. See `specs/baseline.md` for scope, non-goals, and backlog items.
