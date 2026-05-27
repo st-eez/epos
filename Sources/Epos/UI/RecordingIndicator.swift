@@ -1,6 +1,11 @@
 import Foundation
 import SwiftUI
 
+enum RecordingIndicatorDisplayMode {
+    case transcriptPreview
+    case inlineStatus
+}
+
 public struct RecordingIndicator: View {
     @ObservedObject var coordinator: AppCoordinator
 
@@ -12,7 +17,8 @@ public struct RecordingIndicator: View {
         RecordingIndicatorSurface(
             state: coordinator.state,
             transcript: coordinator.displayText,
-            amplitude: coordinator.amplitude
+            amplitude: coordinator.amplitude,
+            displayMode: .transcriptPreview
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.horizontal, 20)
@@ -27,20 +33,33 @@ struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
     let transcript: String
     let amplitude: Float
+    let displayMode: RecordingIndicatorDisplayMode
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
     private let teal = EposPalette.teal
     private let amber = EposPalette.amber
-    private let maxTranscriptWidth: CGFloat = 410
+
+    init(
+        state: CoordinatorState,
+        transcript: String,
+        amplitude: Float,
+        displayMode: RecordingIndicatorDisplayMode = .transcriptPreview
+    ) {
+        self.state = state
+        self.transcript = transcript
+        self.amplitude = amplitude
+        self.displayMode = displayMode
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 9) {
             statusCluster
-            transcriptText
+            if let transcriptText = presentation.transcriptText {
+                self.transcriptText(transcriptText)
+            }
         }
-        .padding(.leading, 10)
-        .padding(.trailing, 9)
-        .padding(.vertical, 7)
+        .padding(.horizontal, presentation.horizontalPadding)
+        .padding(.vertical, presentation.verticalPadding)
         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
         .background(
             RoundedRectangle(cornerRadius: 22, style: .continuous)
@@ -48,16 +67,12 @@ struct RecordingIndicatorSurface: View {
         )
         .overlay(surfaceStroke)
         .shadow(color: .black.opacity(0.17), radius: 16, x: 0, y: 9)
-        .frame(minWidth: 260, maxWidth: 500, alignment: .center)
+        .frame(minWidth: presentation.minWidth, maxWidth: presentation.maxWidth, alignment: .center)
         .animation(.easeOut(duration: 0.08), value: amplitude)
     }
 
-    private var displayText: String {
-        Self.recentDisplayText(transcript)
-    }
-
-    private var hasTranscript: Bool {
-        !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    private var presentation: RecordingIndicatorPresentation {
+        Self.presentation(mode: displayMode, transcript: transcript)
     }
 
     private var statusCluster: some View {
@@ -88,15 +103,15 @@ struct RecordingIndicatorSurface: View {
         .frame(width: 24, height: 20)
     }
 
-    private var transcriptText: some View {
-        Text(displayText)
-            .font(.system(size: 14, weight: hasTranscript ? .semibold : .medium))
-            .foregroundStyle(.white.opacity(hasTranscript ? 0.94 : 0.56))
+    private func transcriptText(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 14, weight: presentation.hasTranscript ? .semibold : .medium))
+            .foregroundStyle(.white.opacity(presentation.hasTranscript ? 0.94 : 0.56))
             .lineLimit(Self.maxDisplayLines)
             .lineSpacing(1)
             .truncationMode(.head)
             .fixedSize(horizontal: false, vertical: true)
-            .frame(width: maxTranscriptWidth, alignment: .leading)
+            .frame(width: presentation.maxTranscriptWidth, alignment: .leading)
             .frame(minHeight: 35, alignment: .leading)
             .transaction { transaction in
                 transaction.animation = nil
@@ -120,6 +135,35 @@ struct RecordingIndicatorSurface: View {
         case .recording: teal
         case .finalizing: amber
         case .idle: .white.opacity(0.34)
+        }
+    }
+
+    nonisolated static func presentation(
+        mode: RecordingIndicatorDisplayMode,
+        transcript: String
+    ) -> RecordingIndicatorPresentation {
+        switch mode {
+        case .transcriptPreview:
+            let transcriptText = recentDisplayText(transcript)
+            return RecordingIndicatorPresentation(
+                transcriptText: transcriptText,
+                hasTranscript: !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                minWidth: 260,
+                maxWidth: 500,
+                maxTranscriptWidth: 410,
+                horizontalPadding: 10,
+                verticalPadding: 7
+            )
+        case .inlineStatus:
+            return RecordingIndicatorPresentation(
+                transcriptText: nil,
+                hasTranscript: false,
+                minWidth: 96,
+                maxWidth: 144,
+                maxTranscriptWidth: 0,
+                horizontalPadding: 8,
+                verticalPadding: 6
+            )
         }
     }
 
@@ -156,4 +200,14 @@ struct RecordingIndicatorSurface: View {
         let normalized = min(1, max(0, CGFloat(amplitude) / 0.075))
         return pow(normalized, 0.55)
     }
+}
+
+struct RecordingIndicatorPresentation {
+    let transcriptText: String?
+    let hasTranscript: Bool
+    let minWidth: CGFloat
+    let maxWidth: CGFloat
+    let maxTranscriptWidth: CGFloat
+    let horizontalPadding: CGFloat
+    let verticalPadding: CGFloat
 }

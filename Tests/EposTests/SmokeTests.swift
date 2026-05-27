@@ -195,6 +195,25 @@ final class SmokeTests: XCTestCase {
         XCTAssertGreaterThan(loudHeights.max() ?? 0, quietHeights.max() ?? 0)
     }
 
+    func testInlineStatusIndicatorOmitsTranscript() {
+        let transcript = "native partial text stays in the focused field"
+
+        let preview = RecordingIndicatorSurface.presentation(
+            mode: .transcriptPreview,
+            transcript: transcript
+        )
+        XCTAssertEqual(preview.transcriptText, transcript)
+        XCTAssertGreaterThanOrEqual(preview.minWidth, 260)
+
+        let inline = RecordingIndicatorSurface.presentation(
+            mode: .inlineStatus,
+            transcript: transcript
+        )
+        XCTAssertNil(inline.transcriptText)
+        XCTAssertLessThanOrEqual(inline.minWidth, 120)
+        XCTAssertLessThanOrEqual(inline.maxWidth, 160)
+    }
+
     func testRecordingIndicatorKeepsRecentTranscriptVisible() {
         let transcript = "open the project and run the full test suite then summarize the last failure in the final response"
         let display = RecordingIndicatorSurface.recentDisplayText(transcript, maxCharacters: 54)
