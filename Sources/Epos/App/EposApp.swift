@@ -6,7 +6,7 @@ public struct EposApp: App {
     public init() {}
 
     public var body: some Scene {
-        MenuBarExtra("Epos", systemImage: "mic.fill") {
+        MenuBarExtra("Epos", image: "EposMenuBarIcon") {
             MenuBarView(coordinator: coordinator)
                 .task { await coordinator.bootstrap() }
         }
