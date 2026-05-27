@@ -2,19 +2,23 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+public protocol TextInsertionBackend {
+    func insert(_ text: String)
+}
+
 /// Pastes text into the frontmost app via clipboard + synthesized cmd-v,
 /// restoring the previous clipboard contents afterwards.
-public final class TextInjector {
+public final class PasteTextInjector: TextInsertionBackend {
     private static let log = EposLogger(category: "inject")
 
     public init() {}
 
-    public func paste(_ text: String) {
+    public func insert(_ text: String) {
         guard !text.isEmpty else { return }
 
         let trusted = AXIsProcessTrusted()
         if !trusted {
-            Self.log.error("paste of \(text.count) chars will be DROPPED: Accessibility not trusted (System Settings > Privacy & Security > Accessibility)")
+            Self.log.error("insertion of \(text.count) chars will be DROPPED: Accessibility not trusted (System Settings > Privacy & Security > Accessibility)")
         }
 
         let pasteboard = NSPasteboard.general
@@ -25,7 +29,7 @@ public final class TextInjector {
         let changeCountAfterWrite = pasteboard.changeCount
 
         synthesizeCommandV()
-        Self.log.info("pasted \(text.count) chars (axTrusted=\(trusted))")
+        Self.log.info("inserted \(text.count) chars via paste backend (axTrusted=\(trusted))")
 
         // Restore the prior clipboard after the paste lands — but only if nothing
         // else wrote to the pasteboard in the meantime (changeCount unchanged).

@@ -64,7 +64,7 @@ Sources/Epos/
     MenuBarView.swift           # MenuBarExtra: status, quit, open permissions
     CorrectionsEditorView.swift # correction-rule editor window (+ CorrectionDraft, CorrectionDraftRow)
   Inject/
-    TextInjector.swift          # paste via NSPasteboard + CGEvent cmd-v, restore clipboard
+    TextInsertionBackend.swift  # insertion abstraction; PasteTextInjector is current backend
   Diagnostics/
     EposLogger.swift            # os.Logger + on-disk DiagnosticLogSink (Shipped Since Baseline)
 ```
@@ -86,7 +86,7 @@ FnHotkey.release
      -> Transcriber.finalize -> String
      -> RecordingIndicator.hide
      -> TranscriptCanonicalizer.canonicalize(finalText)   # correction layer, Shipped Since Baseline
-     -> TextInjector.paste(corrected) into frontmost app
+     -> TextInsertionBackend.insert(corrected) into frontmost app
 ```
 
 ### Coordinator state
@@ -135,7 +135,9 @@ No frontmost-app icon, no waveform history, no draggable position in baseline. C
 
 ### Text injection
 
-`NSPasteboard` write → synthesize `cmd+v` via `CGEvent` → restore previous clipboard contents after a short delay. Same approach as v1 `TextInjector` but stripped of paste-strategy abstraction. Requires Accessibility permission.
+Current backend: `NSPasteboard` write → synthesize `cmd+v` via `CGEvent` → restore previous clipboard contents after a short delay. Same approach as v1 paste injection, behind `TextInsertionBackend`. Requires Accessibility permission.
+
+Native text-system insertion is a post-baseline candidate, not baseline behavior. See `specs/native-text-insertion.md`.
 
 ### Concurrency
 
@@ -166,7 +168,7 @@ Test what would silently break, skip the rest.
 - `AssetManager`: status reporting (`missing`, `downloading`, `ready`, `reserved`) — mock `AssetInventory`.
 - `Transcriber`: feeds a known-good wav, asserts a non-empty final string — integration test, only runs when locale asset is installed (`XCTSkipIf`).
 - `AppCoordinator`: state transitions on synthetic hotkey events with a fake transcriber + fake injector.
-- `TextInjector`: clipboard save/restore round-trip.
+- `PasteTextInjector`: clipboard save/restore round-trip.
 - Hotkey, audio capture, indicator UI: not unit tested; verified by running the app.
 
 Target: < 30 tests total. If we cross that, we are testing implementation, not behavior.
@@ -202,5 +204,6 @@ Tracked here so we do not lose them, in rough priority order:
 8. Audio device hot-swap handling.
 9. Agent-specific modes (Codex / Claude Code / Cursor).
 10. Custom hotkey binding UI.
+11. Native text-system insertion via InputMethodKit (`specs/native-text-insertion.md`).
 
 Each is a separate spec when its turn comes. None block the baseline.

@@ -97,7 +97,7 @@ Sources/Epos/
   Audio/{AudioCapture,DogfoodTap}.swift
   Hotkey/FnHotkey.swift
   UI/{MenuBarView,RecordingIndicator,CorrectionsEditorView,...}.swift
-  Inject/TextInjector.swift
+  Inject/TextInsertionBackend.swift
   Diagnostics/EposLogger.swift
 ```
 

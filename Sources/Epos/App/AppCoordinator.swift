@@ -25,7 +25,7 @@ public final class AppCoordinator: ObservableObject {
     private let hotkey: FnHotkey
     private let audio: AudioCapture
     private let transcriber: Transcriber
-    private let injector: TextInjector
+    private let textInsertion: TextInsertionBackend
     private let permissions: PermissionsGate
     private let assets: AssetManager
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
@@ -47,13 +47,13 @@ public final class AppCoordinator: ObservableObject {
     public init(
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
-        injector: TextInjector = TextInjector(),
+        textInsertion: TextInsertionBackend = PasteTextInjector(),
         settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
-        self.injector = injector
+        self.textInsertion = textInsertion
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -198,7 +198,7 @@ public final class AppCoordinator: ObservableObject {
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
         if hasTranscribedText {
-            injector.paste(corrections.canonicalize(finalText))
+            textInsertion.insert(corrections.canonicalize(finalText))
         }
 
         await resetToIdle()

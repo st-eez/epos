@@ -11,7 +11,7 @@
 
 `specs/baseline.md` is the spec. Before changing architecture, scope, or adding a feature, re-read it. If the work doesn't fit, update the spec first.
 
-Architecture in one line: fn key → AudioCapture → Transcriber (Apple SpeechTranscriber) → TranscriptCanonicalizer (correction layer) → TextInjector. Coordinator wires them. UI shows live partial.
+Architecture in one line: fn key → AudioCapture → Transcriber (Apple SpeechTranscriber) → TranscriptCanonicalizer (correction layer) → TextInsertionBackend (paste backend today). Coordinator wires them. UI shows live partial.
 
 ## Non-Goals
 
