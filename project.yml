@@ -45,3 +45,52 @@ targets:
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
         SWIFT_VERSION: "6.0"
+
+  EposInputMethod:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/EposInputMethod
+      - path: Resources/Assets.xcassets/AppIcon.appiconset/app-icon-32.png
+    info:
+      path: Resources/EposInputMethod-Info.plist
+      properties:
+        CFBundleName: EposInputMethod
+        CFBundleDisplayName: Epos
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        CFBundlePackageType: APPL
+        LSMinimumSystemVersion: "26.0"
+        LSUIElement: true
+        NSPrincipalClass: NSApplication
+        NSSupportsSuddenTermination: true
+        InputMethodConnectionName: $(PRODUCT_BUNDLE_IDENTIFIER)_Connection
+        InputMethodServerControllerClass: EposInputController
+        InputMethodServerDelegateClass: EposInputController
+        TISInputSourceID: $(PRODUCT_BUNDLE_IDENTIFIER)
+        TISIntendedLanguage: en
+        TISIconIsTemplate: true
+        tsInputMethodCharacterRepertoireKey:
+          - Latn
+        tsInputMethodIconFileKey: app-icon-32.png
+        ComponentInputModeDict:
+          tsInputModeListKey:
+            com.steez.inputmethod.Epos.Diagnostic:
+              TISInputSourceID: com.steez.inputmethod.Epos.Diagnostic
+              TISIntendedLanguage: en
+              tsInputModeDefaultStateKey: true
+              tsInputModeIsVisibleKey: true
+              tsInputModeMenuIconFileKey: app-icon-32.png
+              tsInputModePrimaryInScriptKey: true
+              tsInputModeScriptKey: 126
+          tsVisibleInputModeOrderedArrayKey:
+            - com.steez.inputmethod.Epos.Diagnostic
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.steez.inputmethod.Epos
+        PRODUCT_NAME: EposInputMethod
+        PRODUCT_MODULE_NAME: EposInputMethod
+        MACOSX_DEPLOYMENT_TARGET: "26.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"

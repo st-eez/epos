@@ -268,6 +268,84 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(nudgedInside.maxX, screen.maxX, accuracy: 0.001)
     }
 
+    func testInputMethodBundleDeclaresServerAndController() throws {
+        let root = repositoryRoot()
+        let plistURL = root.appendingPathComponent("Resources/EposInputMethod-Info.plist")
+        let plistData = try Data(contentsOf: plistURL)
+        let plist = try XCTUnwrap(
+            PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
+        )
+
+        XCTAssertEqual(plist["CFBundlePackageType"] as? String, "APPL")
+        XCTAssertEqual(plist["CFBundleIdentifier"] as? String, "$(PRODUCT_BUNDLE_IDENTIFIER)")
+        XCTAssertEqual(plist["InputMethodConnectionName"] as? String, "$(PRODUCT_BUNDLE_IDENTIFIER)_Connection")
+        XCTAssertEqual(plist["InputMethodServerControllerClass"] as? String, "EposInputController")
+        XCTAssertEqual(plist["InputMethodServerDelegateClass"] as? String, "EposInputController")
+        XCTAssertEqual(plist["TISInputSourceID"] as? String, "$(PRODUCT_BUNDLE_IDENTIFIER)")
+        XCTAssertEqual(plist["TISIntendedLanguage"] as? String, "en")
+        XCTAssertNil(plist["LSBackgroundOnly"])
+        XCTAssertEqual(plist["LSUIElement"] as? Bool, true)
+        XCTAssertEqual(plist["tsInputMethodIconFileKey"] as? String, "app-icon-32.png")
+        XCTAssertEqual(plist["tsInputMethodCharacterRepertoireKey"] as? [String], ["Latn"])
+
+        let inputModeDict = try XCTUnwrap(plist["ComponentInputModeDict"] as? [String: Any])
+        let modeList = try XCTUnwrap(inputModeDict["tsInputModeListKey"] as? [String: Any])
+        let diagnosticMode = try XCTUnwrap(
+            modeList["com.steez.inputmethod.Epos.Diagnostic"] as? [String: Any]
+        )
+        XCTAssertEqual(diagnosticMode["TISInputSourceID"] as? String, "com.steez.inputmethod.Epos.Diagnostic")
+        XCTAssertEqual(diagnosticMode["TISIntendedLanguage"] as? String, "en")
+        XCTAssertEqual(diagnosticMode["tsInputModeIsVisibleKey"] as? Bool, true)
+        XCTAssertEqual(diagnosticMode["tsInputModeScriptKey"] as? Int, 126)
+        XCTAssertEqual(
+            inputModeDict["tsVisibleInputModeOrderedArrayKey"] as? [String],
+            ["com.steez.inputmethod.Epos.Diagnostic"]
+        )
+
+        let project = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
+        XCTAssertTrue(project.contains("EposInputMethod:"))
+        XCTAssertTrue(project.contains("Resources/EposInputMethod-Info.plist"))
+        XCTAssertTrue(project.contains("PRODUCT_BUNDLE_IDENTIFIER: com.steez.inputmethod.Epos"))
+    }
+
+    func testInputMethodDiagnosticCommitRequiresExplicitTrigger() throws {
+        let root = repositoryRoot()
+        let controller = try String(
+            contentsOf: root.appendingPathComponent("Sources/EposInputMethod/EposInputController.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(controller.contains("private static let diagnosticTriggerKey = \"d\""))
+        XCTAssertTrue(controller.contains("private static let diagnosticTriggerKeyCode = 2"))
+        XCTAssertTrue(controller.contains("private static let diagnosticTriggerModifiers"))
+        XCTAssertTrue(controller.contains("override func activateServer"))
+        XCTAssertTrue(controller.contains("TISSetInputMethodKeyboardLayoutOverride"))
+        XCTAssertTrue(controller.contains("Self.shouldCommitDiagnosticText(from: event)"))
+        XCTAssertTrue(controller.contains("Self.shouldCommitDiagnosticText(keyCode: keyCode, modifiers: flags)"))
+
+        let inputTextBody = try XCTUnwrap(
+            methodBody(named: "inputText(_ string: String!, client sender: Any!)", in: controller)
+        )
+        XCTAssertEqual(inputTextBody.trimmingCharacters(in: .whitespacesAndNewlines), "false")
+
+        let commitCompositionBody = try XCTUnwrap(
+            methodBody(named: "commitComposition", in: controller)
+        )
+        XCTAssertFalse(commitCompositionBody.contains("commitDiagnosticText"))
+    }
+
+    func testLocalInstallDoesNotEnableInputMethodByDefault() throws {
+        let root = repositoryRoot()
+        let script = try String(
+            contentsOf: root.appendingPathComponent("scripts/install-local-app.sh"),
+            encoding: .utf8
+        )
+
+        XCTAssertTrue(script.contains("enable_input_method=\"${EPOS_ENABLE_INPUT_METHOD:-0}\""))
+        XCTAssertTrue(script.contains("guard shouldEnableInputMethod else"))
+        XCTAssertTrue(script.contains("EPOS_ENABLE_INPUT_METHOD=1 only for a guarded manual input-method smoke"))
+    }
+
     func testRecordingIndicatorKeepsRecentTranscriptVisible() {
         let transcript = "open the project and run the full test suite then summarize the last failure in the final response"
         let display = RecordingIndicatorSurface.recentDisplayText(transcript, maxCharacters: 54)
@@ -385,6 +463,35 @@ private func makeTemporaryDirectory() throws -> URL {
         .appendingPathComponent("EposTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+}
+
+private func repositoryRoot() -> URL {
+    URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+}
+
+private func methodBody(named methodName: String, in source: String) -> String? {
+    guard let methodRange = source.range(of: "func \(methodName)") else { return nil }
+    guard let openingBrace = source[methodRange.upperBound...].firstIndex(of: "{") else { return nil }
+
+    var depth = 0
+    var index = openingBrace
+    while index < source.endIndex {
+        let character = source[index]
+        if character == "{" {
+            depth += 1
+        } else if character == "}" {
+            depth -= 1
+            if depth == 0 {
+                return String(source[source.index(after: openingBrace)..<index])
+            }
+        }
+        index = source.index(after: index)
+    }
+
+    return nil
 }
 
 private func makePCMBuffer() throws -> AVAudioPCMBuffer {
