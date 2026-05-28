@@ -625,6 +625,33 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(files.isEmpty)
     }
 
+    func testTranscriptTimingDiagnosticsDoNotLogTranscriptText() {
+        var diagnostics = TranscriptTimingDiagnostics()
+        diagnostics.start(now: Date(timeIntervalSince1970: 100))
+
+        let message = diagnostics.eventMessage(
+            kind: .partial,
+            eventText: "private dictated phrase",
+            finalText: "private",
+            partialText: "dictated phrase",
+            displayMode: .inlineStatus,
+            now: Date(timeIntervalSince1970: 101.234)
+        )
+
+        XCTAssertTrue(message.contains("transcript timing"))
+        XCTAssertTrue(message.contains("seq=1"))
+        XCTAssertTrue(message.contains("kind=partial"))
+        XCTAssertTrue(message.contains("elapsedMs=1234"))
+        XCTAssertTrue(message.contains("eventChars=23"))
+        XCTAssertTrue(message.contains("finalChars=7"))
+        XCTAssertTrue(message.contains("partialChars=15"))
+        XCTAssertTrue(message.contains("displayChars=22"))
+        XCTAssertTrue(message.contains("mode=inlineStatus"))
+        XCTAssertFalse(message.contains("private"))
+        XCTAssertFalse(message.contains("dictated"))
+        XCTAssertFalse(message.contains("phrase"))
+    }
+
     func testDogfoodTapDiscardsRecordingWhenTranscriptIsEmpty() throws {
         let directory = try makeTemporaryDirectory()
         let tap = DogfoodTap(recordingsDirectory: directory)

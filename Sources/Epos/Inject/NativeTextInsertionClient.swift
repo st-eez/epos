@@ -7,6 +7,7 @@ public final class NativeTextInsertionClient: FallibleTextInsertionBackend, Live
 
     private let currentInputSourceID: () -> String?
     private let sendRequest: (NativeTextInsertionRequest) -> Bool
+    private let log = EposLogger(category: "inject")
 
     public convenience init() {
         self.init(
@@ -40,8 +41,14 @@ public final class NativeTextInsertionClient: FallibleTextInsertionBackend, Live
 
     public func tryInsert(_ text: String) -> Bool {
         guard !text.isEmpty else { return true }
-        guard currentInputSourceID() == Self.diagnosticInputSourceID else { return false }
-        return send(.insert(text))
+        let chars = text.utf16.count
+        guard currentInputSourceID() == Self.diagnosticInputSourceID else {
+            log.info("native insert skipped reason=inputSource chars=\(chars)")
+            return false
+        }
+        let didSend = send(.insert(text))
+        log.info("native insert sent chars=\(chars) success=\(didSend)")
+        return didSend
     }
 
     public func updateMarkedText(_ text: String) {
@@ -49,13 +56,22 @@ public final class NativeTextInsertionClient: FallibleTextInsertionBackend, Live
             cancelMarkedText()
             return
         }
-        guard currentInputSourceID() == Self.diagnosticInputSourceID else { return }
-        _ = send(.mark(text))
+        let chars = text.utf16.count
+        guard currentInputSourceID() == Self.diagnosticInputSourceID else {
+            log.info("native marked text skipped reason=inputSource chars=\(chars)")
+            return
+        }
+        let didSend = send(.mark(text))
+        log.info("native marked text sent chars=\(chars) success=\(didSend)")
     }
 
     public func cancelMarkedText() {
-        guard currentInputSourceID() == Self.diagnosticInputSourceID else { return }
-        _ = send(.cancel)
+        guard currentInputSourceID() == Self.diagnosticInputSourceID else {
+            log.info("native marked text cancel skipped reason=inputSource")
+            return
+        }
+        let didSend = send(.cancel)
+        log.info("native marked text cancel sent success=\(didSend)")
     }
 
     private func send(_ request: NativeTextInsertionRequest) -> Bool {

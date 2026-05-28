@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-enum RecordingIndicatorDisplayMode: Equatable {
+enum RecordingIndicatorDisplayMode: String, Equatable {
     case transcriptPreview
     case inlineStatus
 }

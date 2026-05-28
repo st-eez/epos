@@ -38,6 +38,7 @@ public final class AppCoordinator: ObservableObject {
     // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
     private let log = EposLogger(category: "coordinator")
+    private var transcriptTiming = TranscriptTimingDiagnostics()
 
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
@@ -138,8 +139,9 @@ public final class AppCoordinator: ObservableObject {
         partial = ""
         amplitude = 0
         updateIndicatorDisplayModeForCurrentBackend()
+        transcriptTiming.start()
         indicator.show()
-        log.info("recording start")
+        log.info("recording start mode=\(indicatorDisplayMode.rawValue)")
 
         transcriptionTask = Task { [weak self] in
             await self?.runSession(format: format)
@@ -194,8 +196,10 @@ public final class AppCoordinator: ObservableObject {
             switch event {
             case .partial(let text):
                 handlePartialTranscript(text)
+                logTranscriptTiming(kind: .partial, eventText: text)
             case .final(let text):
                 handleFinalTranscriptSegment(text)
+                logTranscriptTiming(kind: .final, eventText: text)
             case .failed(let message):
                 log.error("transcription failed: \(message)")
             }
@@ -233,6 +237,16 @@ public final class AppCoordinator: ObservableObject {
         indicatorDisplayMode = liveTextInsertion?.supportsMarkedText == true ? .inlineStatus : .transcriptPreview
     }
 
+    func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {
+        log.info(transcriptTiming.eventMessage(
+            kind: kind,
+            eventText: eventText,
+            finalText: finalText,
+            partialText: partial,
+            displayMode: indicatorDisplayMode
+        ))
+    }
+
     func cancelMarkedTranscript() {
         guard let liveTextInsertion, liveTextInsertion.supportsMarkedText else { return }
         liveTextInsertion.cancelMarkedText()
@@ -260,6 +274,7 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         partial = ""
         transcriptionTask = nil
+        transcriptTiming.finish()
         state = .idle
     }
 }
