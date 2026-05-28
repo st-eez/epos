@@ -3,93 +3,80 @@ import ApplicationServices
 import Foundation
 
 public protocol TextInsertionBackend {
+    func startInsertionSession() -> any TextInsertionSession
+}
+
+public protocol TextInsertionSession: AnyObject {
     func insert(_ text: String)
-}
-
-public protocol FallibleTextInsertionBackend: TextInsertionBackend {
-    var isHealthy: Bool { get }
-
-    @discardableResult
-    func tryInsert(_ text: String) -> Bool
-}
-
-public protocol LiveTextInsertionBackend: TextInsertionBackend {
-    var supportsMarkedText: Bool { get }
-
-    func updateMarkedText(_ text: String)
-    func cancelMarkedText()
-}
-
-public final class TextInsertionBackendRouter: LiveTextInsertionBackend {
-    private let native: (any FallibleTextInsertionBackend)?
-    private let fallback: any TextInsertionBackend
-
-    public init(
-        native: (any FallibleTextInsertionBackend)?,
-        fallback: any TextInsertionBackend
-    ) {
-        self.native = native
-        self.fallback = fallback
-    }
-
-    public var supportsMarkedText: Bool {
-        guard let native, let liveNative = native as? any LiveTextInsertionBackend else { return false }
-        return native.isHealthy && liveNative.supportsMarkedText
-    }
-
-    public func insert(_ text: String) {
-        guard !text.isEmpty else { return }
-
-        if let native, native.isHealthy, native.tryInsert(text) {
-            return
-        }
-
-        fallback.insert(text)
-    }
-
-    public func updateMarkedText(_ text: String) {
-        guard let native, let liveNative = native as? any LiveTextInsertionBackend,
-              native.isHealthy, liveNative.supportsMarkedText else {
-            return
-        }
-
-        liveNative.updateMarkedText(text)
-    }
-
-    public func cancelMarkedText() {
-        guard let native, let liveNative = native as? any LiveTextInsertionBackend,
-              native.isHealthy, liveNative.supportsMarkedText else {
-            return
-        }
-
-        liveNative.cancelMarkedText()
-    }
+    func finish()
+    func cancel()
 }
 
 /// Pastes text into the frontmost app via clipboard + synthesized cmd-v,
 /// restoring the previous clipboard contents afterwards.
 public final class PasteTextInjector: TextInsertionBackend {
-    private static let log = EposLogger(category: "inject")
+    fileprivate static let log = EposLogger(category: "inject")
 
     public init() {}
 
-    public func insert(_ text: String) {
-        guard !text.isEmpty else { return }
+    public func startInsertionSession() -> any TextInsertionSession {
+        PasteTextInsertionSession()
+    }
+}
 
+private final class PasteTextInsertionSession: TextInsertionSession {
+    private let savedPasteboardItems: [PasteboardItemSnapshot]
+    private var lastWriteChangeCount: Int?
+    private var didClose = false
+
+    init(pasteboard: NSPasteboard = .general) {
+        self.savedPasteboardItems = Self.snapshot(pasteboard)
+    }
+
+    func insert(_ text: String) {
+        guard !didClose, !text.isEmpty else { return }
         let trusted = AXIsProcessTrusted()
         if !trusted {
-            Self.log.error("insertion of \(text.count) chars will be DROPPED: Accessibility not trusted (System Settings > Privacy & Security > Accessibility)")
+            PasteTextInjector.log.error("insertion of \(text.count) chars will be DROPPED: Accessibility not trusted (System Settings > Privacy & Security > Accessibility)")
         }
 
         let pasteboard = NSPasteboard.general
-        let saved = Self.snapshot(pasteboard)
-
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
-        let changeCountAfterWrite = pasteboard.changeCount
+        lastWriteChangeCount = pasteboard.changeCount
 
         synthesizeCommandV()
-        Self.log.info("inserted \(text.count) chars via paste backend (axTrusted=\(trusted))")
+        PasteTextInjector.log.info("inserted \(text.count) chars via paste backend (axTrusted=\(trusted))")
+    }
+
+    func finish() {
+        restorePasteboardSoon()
+    }
+
+    func cancel() {
+        restorePasteboardSoon()
+    }
+
+    /// Deep-copies every type of every current pasteboard item into sendable
+    /// snapshots that survive a `clearContents()`.
+    private static func snapshot(_ pasteboard: NSPasteboard) -> [PasteboardItemSnapshot] {
+        guard let items = pasteboard.pasteboardItems else { return [] }
+        return items.map { item in
+            PasteboardItemSnapshot(
+                contents: item.types.compactMap { type in
+                    item.data(forType: type).map {
+                        PasteboardItemSnapshot.Content(type: type.rawValue, data: $0)
+                    }
+                }
+            )
+        }
+    }
+
+    private func restorePasteboardSoon() {
+        guard !didClose else { return }
+        didClose = true
+        guard let lastWriteChangeCount, !savedPasteboardItems.isEmpty else { return }
+        let savedPasteboardItems = savedPasteboardItems
 
         // Restore the prior clipboard after the paste lands — but only if nothing
         // else wrote to the pasteboard in the meantime (changeCount unchanged).
@@ -98,24 +85,9 @@ public final class PasteTextInjector: TextInsertionBackend {
             // capturing the outer reference, which would be sent across the
             // concurrency boundary while still in use here (Swift 6 data-race).
             let pasteboard = NSPasteboard.general
-            guard pasteboard.changeCount == changeCountAfterWrite, !saved.isEmpty else { return }
+            guard pasteboard.changeCount == lastWriteChangeCount else { return }
             pasteboard.clearContents()
-            pasteboard.writeObjects(saved)
-        }
-    }
-
-    /// Deep-copies every type of every current pasteboard item into detached
-    /// `NSPasteboardItem`s that survive a `clearContents()`.
-    private static func snapshot(_ pasteboard: NSPasteboard) -> [NSPasteboardItem] {
-        guard let items = pasteboard.pasteboardItems else { return [] }
-        return items.map { item in
-            let copy = NSPasteboardItem()
-            for type in item.types {
-                if let data = item.data(forType: type) {
-                    copy.setData(data, forType: type)
-                }
-            }
-            return copy
+            pasteboard.writeObjects(savedPasteboardItems.map(\.pasteboardItem))
         }
     }
 
@@ -127,5 +99,22 @@ public final class PasteTextInjector: TextInsertionBackend {
         vUp?.flags = .maskCommand
         vDown?.post(tap: .cghidEventTap)
         vUp?.post(tap: .cghidEventTap)
+    }
+}
+
+private struct PasteboardItemSnapshot: Sendable {
+    struct Content: Sendable {
+        let type: String
+        let data: Data
+    }
+
+    let contents: [Content]
+
+    var pasteboardItem: NSPasteboardItem {
+        let item = NSPasteboardItem()
+        for content in contents {
+            item.setData(content.data, forType: NSPasteboard.PasteboardType(content.type))
+        }
+        return item
     }
 }

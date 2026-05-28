@@ -3,7 +3,7 @@ import Foundation
 /// Single in-memory source of truth for correction rules, shared by the coordinator
 /// (which canonicalizes each final transcript) and the Corrections editor (which mutates
 /// the rules). Backed by `UserDefaults` but loaded once — replacing the prior design where
-/// the coordinator re-decoded rules from defaults on every paste and the editor reached it
+/// the coordinator re-decoded rules from defaults on every insertion and the editor reached it
 /// only through that global side channel.
 @MainActor
 public final class CorrectionStore: ObservableObject {
@@ -21,7 +21,7 @@ public final class CorrectionStore: ObservableObject {
         canonicalizer.canonicalize(text)
     }
 
-    /// Persist `rules` and refresh the live canonicalizer so the next paste uses them.
+    /// Persist `rules` and refresh the live canonicalizer so the next insertion uses them.
     public func save(_ rules: [TranscriptCanonicalizer.Rule]) {
         TranscriptCanonicalizer.saveRules(rules, to: defaults)
         canonicalizer = TranscriptCanonicalizer(rules: rules)

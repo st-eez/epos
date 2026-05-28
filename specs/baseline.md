@@ -1,12 +1,12 @@
 # Epos — Baseline Spec
 
-Date: 2026-05-22 · Revised: 2026-05-26 (added "Shipped Since Baseline"; see that section)
+Date: 2026-05-22 · Revised: 2026-05-28 (added stable progressive insertion; see "Shipped Since Baseline")
 
 A clean-sheet rebuild of Epos as a minimal dictation app on top of Apple's `SpeechTranscriber` (macOS 26+). No WhisperKit, no MLX, no LLM polish, no filler detector. Those become post-baseline candidates, not baseline requirements. A deterministic, user-editable correction layer has since shipped on top of this baseline — see "Shipped Since Baseline".
 
 ## Product
 
-Hold fn → record → see indicator with live partial text → release → final transcript pastes into the frontmost app. That is the whole product.
+Hold fn → record → stable words stream into the frontmost app while the volatile tail stays visible in the indicator → release → remaining final transcript commits. That is the whole product.
 
 ## Constraints
 
@@ -35,9 +35,10 @@ Explicitly out of scope. Each is a candidate for a later, opt-in module:
 
 Built and validated after the original baseline and promoted from the backlog. Listed here so the source of truth matches the code — these are part of the app, not aspirational.
 
-- **Correction layer** (`Speech/TranscriptCanonicalizer.swift`, `UI/CorrectionsEditorView.swift`, `CorrectionDraft.swift`, `CorrectionDraftRow.swift`). Deterministic spoken→canonical rewriting applied to the final transcript before paste: user-editable alias→canonical rules with optional context guards, plus built-in developer-token normalization (`dash dash` → `--`, `slash goal` → `/goal`, `dollar home` → `$HOME`). Backlog #1 + #4. Rules persist under their own `UserDefaults` key and are edited in a dedicated Corrections window. Exposed rules only — not grammar or style rewriting.
+- **Correction layer** (`Speech/TranscriptCanonicalizer.swift`, `UI/CorrectionsEditorView.swift`, `CorrectionDraft.swift`, `CorrectionDraftRow.swift`). Deterministic spoken→canonical rewriting applied before progressive insertion and final suffix insertion: user-editable alias→canonical rules with optional context guards, plus built-in developer-token normalization (`dash dash` → `--`, `slash goal` → `/goal`, `dollar home` → `$HOME`). Backlog #1 + #4. Rules persist under their own `UserDefaults` key and are edited in a dedicated Corrections window. Exposed rules only — not grammar or style rewriting.
 - **Opt-in audio sample capture** (`Audio/DogfoodTap.swift`). Per-recording `.wav` capture to the app cache as local eval material. Off by default, gated by `Settings.saveAudioSamples`; recordings that produced no transcript are discarded.
 - **On-disk diagnostic log** (`Diagnostics/EposLogger.swift` → `DiagnosticLogSink`). Mirrors `os.Logger` events to a size-capped, rotated app-owned log under `~/Library/Caches/Epos/logs/` (writes direct events instead of polling the unified-log store). Privacy-aware: no transcript text. Disable with `EPOS_DIAGNOSTIC_LOGS=0`.
+- **Stable progressive insertion** (`Inject/ProgressiveTranscriptInsertion.swift`, `Inject/TextInsertionBackend.swift`). During recording, Epos inserts only canonicalized word-boundary prefixes that have remained stable across consecutive partial snapshots. The current word stays in the overlay until it stabilizes. The paste backend is session-aware, so one dictation session snapshots the clipboard once, streams multiple stable deltas, and restores the original clipboard after finalization.
 
 ## Architecture
 
@@ -64,7 +65,8 @@ Sources/Epos/
     MenuBarView.swift           # MenuBarExtra: status, quit, open permissions
     CorrectionsEditorView.swift # correction-rule editor window (+ CorrectionDraft, CorrectionDraftRow)
   Inject/
-    TextInsertionBackend.swift  # insertion abstraction; PasteTextInjector is current backend
+    TextInsertionBackend.swift  # session-aware paste insertion backend
+    ProgressiveTranscriptInsertion.swift  # stable word-boundary streaming policy
   Diagnostics/
     EposLogger.swift            # os.Logger + on-disk DiagnosticLogSink (Shipped Since Baseline)
 ```
@@ -79,14 +81,15 @@ FnHotkey.press
      -> AudioCapture.start (16 kHz mono Float32 buffers)
      -> Transcriber.start (SpeechAnalyzer + SpeechTranscriber module)
      -> RecordingIndicator.show
-  // streams partial transcripts -> RecordingIndicator
+  // streams stable word deltas -> TextInsertionBackend session
+  // streams volatile tail -> RecordingIndicator
 FnHotkey.release
   -> AppCoordinator.finishRecording
      -> AudioCapture.stop
      -> Transcriber.finalize -> String
      -> RecordingIndicator.hide
      -> TranscriptCanonicalizer.canonicalize(finalText)   # correction layer, Shipped Since Baseline
-     -> TextInsertionBackend.insert(corrected) into frontmost app
+     -> TextInsertionBackend session inserts remaining corrected suffix into frontmost app
 ```
 
 ### Coordinator state
@@ -95,7 +98,7 @@ Three states, nothing more:
 
 - `idle`
 - `recording` (audio + transcription streaming, indicator visible)
-- `finalizing` (input stopped, awaiting final result, then paste)
+- `finalizing` (input stopped, awaiting final result, then remaining suffix insertion)
 
 No retry loop, no circuit breaker, no error recovery state. Errors log + reset to `idle` + brief indicator flash. The v1 `RecordingStateMachine` (`Sources/SteezFlow/Core/StateMachine/`) is intentionally not ported — its surface is larger than the baseline needs.
 
@@ -135,9 +138,9 @@ No frontmost-app icon, no waveform history, no draggable position in baseline. C
 
 ### Text injection
 
-Current backend: `NSPasteboard` write → synthesize `cmd+v` via `CGEvent` → restore previous clipboard contents after a short delay. Same approach as v1 paste injection, behind `TextInsertionBackend`. Requires Accessibility permission.
+Current backend: session-aware `NSPasteboard` write → synthesize `cmd+v` via `CGEvent` → restore previous clipboard contents after finalization. Same insertion primitive as v1 paste injection, behind `TextInsertionBackend`, but the session owns clipboard restoration across multiple progressive deltas. Requires Accessibility permission.
 
-Native text-system insertion is a post-baseline candidate, not baseline behavior. See `specs/native-text-insertion.md`.
+Progressive insertion only commits stable word-boundary prefixes. Raw volatile partials are never repeatedly rewritten inside the target app. Epos does not install or require a selected InputMethodKit input source in the default product path.
 
 ### Concurrency
 
@@ -168,7 +171,8 @@ Test what would silently break, skip the rest.
 - `AssetManager`: status reporting (`missing`, `downloading`, `ready`, `reserved`) — mock `AssetInventory`.
 - `Transcriber`: feeds a known-good wav, asserts a non-empty final string — integration test, only runs when locale asset is installed (`XCTSkipIf`).
 - `AppCoordinator`: state transitions on synthetic hotkey events with a fake transcriber + fake injector.
-- `PasteTextInjector`: clipboard save/restore round-trip.
+- `ProgressiveTranscriptInsertionSession`: stable word-boundary commit policy, final suffix insertion, and no transcript text in logs.
+- `PasteTextInjector`: session-scoped clipboard save/restore.
 - Hotkey, audio capture, indicator UI: not unit tested; verified by running the app.
 
 Target: < 30 tests total. If we cross that, we are testing implementation, not behavior.
@@ -204,6 +208,6 @@ Tracked here so we do not lose them, in rough priority order:
 8. Audio device hot-swap handling.
 9. Agent-specific modes (Codex / Claude Code / Cursor).
 10. Custom hotkey binding UI.
-11. Native text-system insertion via InputMethodKit (`specs/native-text-insertion.md`).
+11. Target-aware progressive insertion guards for risky apps (terminal denylist, focused-element verification, and stop/fallback behavior when focus changes mid-recording).
 
 Each is a separate spec when its turn comes. None block the baseline.

@@ -24,7 +24,6 @@ struct TranscriptTimingDiagnostics {
         eventText: String,
         finalText: String,
         partialText: String,
-        displayMode: RecordingIndicatorDisplayMode,
         now: Date = Date()
     ) -> String {
         sequence += 1
@@ -40,8 +39,7 @@ struct TranscriptTimingDiagnostics {
             "eventChars=\(Self.characterCount(eventText))",
             "finalChars=\(finalChars)",
             "partialChars=\(partialChars)",
-            "displayChars=\(finalChars + partialChars)",
-            "mode=\(displayMode.rawValue)"
+            "displayChars=\(finalChars + partialChars)"
         ].joined(separator: " ")
     }
 

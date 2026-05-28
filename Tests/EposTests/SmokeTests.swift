@@ -195,23 +195,15 @@ final class SmokeTests: XCTestCase {
         XCTAssertGreaterThan(loudHeights.max() ?? 0, quietHeights.max() ?? 0)
     }
 
-    func testInlineStatusIndicatorOmitsTranscript() {
-        let transcript = "native partial text stays in the focused field"
+    func testRecordingIndicatorPresentationIncludesTranscript() {
+        let transcript = "stable words stream into the focused field"
 
-        let preview = RecordingIndicatorSurface.presentation(
-            mode: .transcriptPreview,
-            transcript: transcript
-        )
+        let preview = RecordingIndicatorSurface.presentation(transcript: transcript)
+
         XCTAssertEqual(preview.transcriptText, transcript)
+        XCTAssertTrue(preview.hasTranscript)
         XCTAssertGreaterThanOrEqual(preview.minWidth, 260)
-
-        let inline = RecordingIndicatorSurface.presentation(
-            mode: .inlineStatus,
-            transcript: transcript
-        )
-        XCTAssertNil(inline.transcriptText)
-        XCTAssertLessThanOrEqual(inline.minWidth, 120)
-        XCTAssertLessThanOrEqual(inline.maxWidth, 160)
+        XCTAssertGreaterThanOrEqual(preview.maxTranscriptWidth, 400)
     }
 
     func testInlineIndicatorFallsBackWhenCaretRectIsUnavailable() {
@@ -268,319 +260,144 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(nudgedInside.maxX, screen.maxX, accuracy: 0.001)
     }
 
-    func testInputMethodBundleDeclaresServerAndController() throws {
-        let root = repositoryRoot()
-        let plistURL = root.appendingPathComponent("Resources/EposInputMethod-Info.plist")
-        let plistData = try Data(contentsOf: plistURL)
-        let plist = try XCTUnwrap(
-            PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
-        )
-
-        XCTAssertEqual(plist["CFBundlePackageType"] as? String, "APPL")
-        XCTAssertEqual(plist["CFBundleIdentifier"] as? String, "$(PRODUCT_BUNDLE_IDENTIFIER)")
-        XCTAssertEqual(plist["InputMethodConnectionName"] as? String, "$(PRODUCT_BUNDLE_IDENTIFIER)_Connection")
-        XCTAssertEqual(plist["InputMethodServerControllerClass"] as? String, "EposInputController")
-        XCTAssertEqual(plist["InputMethodServerDelegateClass"] as? String, "EposInputController")
-        XCTAssertEqual(plist["TISInputSourceID"] as? String, "$(PRODUCT_BUNDLE_IDENTIFIER)")
-        XCTAssertEqual(plist["TISIntendedLanguage"] as? String, "en")
-        XCTAssertNil(plist["LSBackgroundOnly"])
-        XCTAssertEqual(plist["LSUIElement"] as? Bool, true)
-        XCTAssertEqual(plist["tsInputMethodIconFileKey"] as? String, "app-icon-32.png")
-        XCTAssertEqual(plist["tsInputMethodCharacterRepertoireKey"] as? [String], ["Latn"])
-
-        let inputModeDict = try XCTUnwrap(plist["ComponentInputModeDict"] as? [String: Any])
-        let modeList = try XCTUnwrap(inputModeDict["tsInputModeListKey"] as? [String: Any])
-        let diagnosticMode = try XCTUnwrap(
-            modeList["com.steez.inputmethod.Epos.Diagnostic"] as? [String: Any]
-        )
-        XCTAssertEqual(diagnosticMode["TISInputSourceID"] as? String, "com.steez.inputmethod.Epos.Diagnostic")
-        XCTAssertEqual(diagnosticMode["TISIntendedLanguage"] as? String, "en")
-        XCTAssertEqual(diagnosticMode["tsInputModeIsVisibleKey"] as? Bool, true)
-        XCTAssertEqual(diagnosticMode["tsInputModeScriptKey"] as? Int, 126)
-        XCTAssertEqual(
-            inputModeDict["tsVisibleInputModeOrderedArrayKey"] as? [String],
-            ["com.steez.inputmethod.Epos.Diagnostic"]
-        )
-
-        let project = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
-        XCTAssertTrue(project.contains("EposInputMethod:"))
-        XCTAssertTrue(project.contains("Resources/EposInputMethod-Info.plist"))
-        XCTAssertTrue(project.contains("PRODUCT_BUNDLE_IDENTIFIER: com.steez.inputmethod.Epos"))
-    }
-
-    func testInputMethodDiagnosticCommitRequiresExplicitTrigger() throws {
-        let root = repositoryRoot()
-        let controller = try String(
-            contentsOf: root.appendingPathComponent("Sources/EposInputMethod/EposInputController.swift"),
-            encoding: .utf8
-        )
-
-        XCTAssertTrue(controller.contains("private static let diagnosticTriggerKey = \"d\""))
-        XCTAssertTrue(controller.contains("private static let diagnosticTriggerKeyCode = 2"))
-        XCTAssertTrue(controller.contains("private static let diagnosticTriggerModifiers"))
-        XCTAssertTrue(controller.contains("override func activateServer"))
-        XCTAssertTrue(controller.contains("TISSetInputMethodKeyboardLayoutOverride"))
-        XCTAssertTrue(controller.contains("Self.shouldCommitDiagnosticText(from: event)"))
-        XCTAssertTrue(controller.contains("Self.shouldCommitDiagnosticText(keyCode: keyCode, modifiers: flags)"))
-        XCTAssertTrue(controller.contains("override func handle(_ event"))
-        XCTAssertTrue(controller.contains("commitPassthroughText(event.characters, flags: event.modifierFlags, to: sender)"))
-
-        let inputTextBody = try XCTUnwrap(
-            methodBody(named: "inputText(_ string: String!, client sender: Any!)", in: controller)
-        )
-        XCTAssertTrue(inputTextBody.contains("commitPassthroughText(string, to: sender)"))
-
-        let keyedInputTextBody = try XCTUnwrap(
-            methodBody(named: "inputText(_ string: String!, key keyCode: Int, modifiers flags: Int, client sender: Any!)", in: controller)
-        )
-        XCTAssertTrue(keyedInputTextBody.contains("commitText(Self.diagnosticText, to: sender)"))
-        XCTAssertTrue(keyedInputTextBody.contains("commitPassthroughText(string, modifiers: flags, to: sender)"))
-
-        let commitCompositionBody = try XCTUnwrap(
-            methodBody(named: "commitComposition", in: controller)
-        )
-        XCTAssertFalse(commitCompositionBody.contains("commitDiagnosticText"))
-
-        XCTAssertTrue(controller.contains("private static func passthroughText"))
-        XCTAssertTrue(controller.contains("flags.contains(.command) || flags.contains(.control)"))
-        XCTAssertTrue(controller.contains("CharacterSet.controlCharacters.contains(scalar)"))
-    }
-
-    func testLocalInstallDoesNotEnableInputMethodByDefault() throws {
+    func testLocalInstallDoesNotRegisterInputMethod() throws {
         let root = repositoryRoot()
         let script = try String(
             contentsOf: root.appendingPathComponent("scripts/install-local-app.sh"),
             encoding: .utf8
         )
 
-        XCTAssertTrue(script.contains("enable_input_method=\"${EPOS_ENABLE_INPUT_METHOD:-0}\""))
-        XCTAssertTrue(script.contains("guard shouldEnableInputMethod else"))
-        XCTAssertTrue(script.contains("EPOS_ENABLE_INPUT_METHOD=1 only for a guarded manual input-method smoke"))
+        XCTAssertFalse(script.contains("InputMethod"))
+        XCTAssertFalse(script.contains("TISRegisterInputSource"))
     }
 
-    func testInputMethodSmokeScriptLaunchesProcessBeforeSelecting() throws {
+    func testProjectDoesNotDeclareInputMethodTarget() throws {
         let root = repositoryRoot()
-        let script = try String(
-            contentsOf: root.appendingPathComponent("scripts/smoke-input-method.sh"),
-            encoding: .utf8
+        let project = try String(contentsOf: root.appendingPathComponent("project.yml"), encoding: .utf8)
+
+        XCTAssertFalse(project.contains("EposInputMethod"))
+        XCTAssertFalse(project.contains("com.steez.inputmethod.Epos"))
+    }
+
+    func testProgressiveInsertionWaitsForRepeatedStableWords() {
+        let backend = RecordingTextInsertionBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
         )
 
-        let launchRange = try XCTUnwrap(script.range(of: "open -na \"$install_input_method_path\""))
-        let selectRange = try XCTUnwrap(script.range(of: "select_input_source \"$diagnostic_input_source_id\""))
+        session.acceptPartialTranscript("hello")
+        session.acceptPartialTranscript("hello world")
+        session.acceptPartialTranscript("hello world from")
+        session.acceptPartialTranscript("hello world from epos")
+        session.acceptFinalTranscript("hello world from epos")
+        session.finish()
 
-        XCTAssertLessThan(launchRange.lowerBound, selectRange.lowerBound)
-        XCTAssertTrue(script.contains("TISSelectInputSource(mode)"))
-        XCTAssertTrue(script.contains("trap cleanup EXIT INT TERM"))
-        XCTAssertTrue(script.contains("letters_text"))
-        XCTAssertTrue(script.contains("diagnostic_text"))
-        XCTAssertTrue(script.contains("pasteboard_before"))
-        XCTAssertTrue(script.contains("pasteboard_after"))
-        XCTAssertFalse(script.contains("DisabledInputMethods"))
+        XCTAssertEqual(backend.insertedTexts, ["hello ", "world ", "from epos"])
+        XCTAssertEqual(backend.finishCount, 1)
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testProgressiveInsertionDoesNotCommitOneOffRevision() {
+        let backend = RecordingTextInsertionBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
+        )
+
+        session.acceptPartialTranscript("open the")
+        session.acceptPartialTranscript("open the door")
+        session.acceptPartialTranscript("open a door")
+        session.acceptFinalTranscript("open a door")
+        session.finish()
+
+        XCTAssertEqual(backend.insertedTexts, ["open ", "a door"])
+    }
+
+    func testProgressiveInsertionAppliesCanonicalizerBeforeStreaming() {
+        let backend = RecordingTextInsertionBackend()
+        let canonicalizer = TranscriptCanonicalizer()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: canonicalizer.canonicalize
+        )
+
+        session.acceptPartialTranscript("run dash dash verbose mode")
+        session.acceptPartialTranscript("run dash dash verbose mode now")
+        session.acceptFinalTranscript("run dash dash verbose mode now")
+        session.finish()
+
+        XCTAssertEqual(backend.insertedTexts, ["run --verbose ", "mode now"])
+    }
+
+    func testProgressiveInsertionPausesWhenStableTextIsContradicted() {
+        let backend = RecordingTextInsertionBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
+        )
+
+        session.acceptPartialTranscript("hello world foo")
+        session.acceptPartialTranscript("hello world bar")
+        // The recognizer revises an already-committed word ("world" -> "there").
+        // Epos must not delete or rewrite the inserted prefix; it stops streaming.
+        session.acceptPartialTranscript("hello there bar")
+        // Final still does not extend the inserted prefix, so it inserts nothing more.
+        session.acceptFinalTranscript("hello there bar")
+        session.finish()
+
+        XCTAssertEqual(backend.insertedTexts, ["hello world "])
+        XCTAssertEqual(backend.finishCount, 1)
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testProgressiveInsertionCancelClosesSessionWithoutFinishing() {
+        let backend = RecordingTextInsertionBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
+        )
+
+        session.acceptPartialTranscript("hello world from")
+        session.acceptPartialTranscript("hello world from epos")
+        session.cancel()
+        // Post-cancel calls are no-ops; cancel is idempotent.
+        session.acceptPartialTranscript("hello world from epos now")
+        session.cancel()
+
+        XCTAssertEqual(backend.insertedTexts, ["hello world "])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testProgressiveInsertionRepeatedFinalCommitInsertsOnce() {
+        // Mirrors the coordinator flow where handleFinalTranscriptSegment and
+        // insertFinalTranscript both call acceptFinalTranscript with the same text.
+        let backend = RecordingTextInsertionBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
+        )
+
+        session.acceptPartialTranscript("hello world from")
+        session.acceptPartialTranscript("hello world from epos")
+        session.acceptFinalTranscript("hello world from epos")
+        session.acceptFinalTranscript("hello world from epos")
+        session.finish()
+
+        XCTAssertEqual(backend.insertedTexts, ["hello world ", "from epos"])
+        XCTAssertEqual(backend.finishCount, 1)
     }
 
     @MainActor
-    func testCoordinatorUsesPasteFallbackWhenNativeInsertionUnavailable() {
-        let native = FakeNativeInsertionBackend(isHealthy: false)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
+    func testCoordinatorFinalInsertionUsesProgressiveSession() {
+        let backend = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(textInsertion: backend, autoStart: false)
 
-        coordinator.insertFinalTranscript("hello fallback")
+        coordinator.insertFinalTranscript("hello final")
 
-        XCTAssertEqual(native.insertedTexts, [])
-        XCTAssertEqual(paste.insertedTexts, ["hello fallback"])
-    }
-
-    @MainActor
-    func testCoordinatorUsesNativeInsertionWhenAvailable() {
-        let native = FakeNativeInsertionBackend(isHealthy: true)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
-
-        coordinator.insertFinalTranscript("hello native")
-
-        XCTAssertEqual(native.insertedTexts, ["hello native"])
-        XCTAssertEqual(paste.insertedTexts, [])
-    }
-
-    @MainActor
-    func testCoordinatorFallsBackWhenNativeInsertionAttemptFails() {
-        let native = FakeNativeInsertionBackend(isHealthy: true, shouldSucceed: false)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
-
-        coordinator.insertFinalTranscript("hello after failed native")
-
-        XCTAssertEqual(native.insertedTexts, ["hello after failed native"])
-        XCTAssertEqual(paste.insertedTexts, ["hello after failed native"])
-    }
-
-    @MainActor
-    func testNativeBackendReceivesPartialMarkedTextBeforeFinalCommit() {
-        let native = FakeNativeInsertionBackend(isHealthy: true)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
-
-        coordinator.handlePartialTranscript("hello par")
-        coordinator.insertFinalTranscript("hello partial")
-
-        XCTAssertEqual(native.markedTexts, ["hello par"])
-        XCTAssertEqual(native.insertedTexts, ["hello partial"])
-        XCTAssertEqual(native.cancelCount, 0)
-        XCTAssertEqual(paste.insertedTexts, [])
-    }
-
-    @MainActor
-    func testCoordinatorUsesInlineStatusIndicatorWhenNativeMarkedTextIsAvailable() {
-        let native = FakeNativeInsertionBackend(isHealthy: true)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
-
-        coordinator.updateIndicatorDisplayModeForCurrentBackend()
-
-        XCTAssertEqual(coordinator.indicatorDisplayMode, .inlineStatus)
-    }
-
-    @MainActor
-    func testCoordinatorUsesTranscriptPreviewIndicatorWhenNativeMarkedTextIsUnavailable() {
-        let native = FakeNativeInsertionBackend(isHealthy: false)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
-
-        coordinator.updateIndicatorDisplayModeForCurrentBackend()
-
-        XCTAssertEqual(coordinator.indicatorDisplayMode, .transcriptPreview)
-    }
-
-    @MainActor
-    func testPasteFallbackDoesNotReceivePartialMarkedText() {
-        let native = FakeNativeInsertionBackend(isHealthy: false)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
-
-        coordinator.handlePartialTranscript("partial should stay in preview only")
-        coordinator.insertFinalTranscript("final fallback")
-
-        XCTAssertEqual(native.markedTexts, [])
-        XCTAssertEqual(native.insertedTexts, [])
-        XCTAssertEqual(paste.insertedTexts, ["final fallback"])
-    }
-
-    @MainActor
-    func testCoordinatorCancelsNativeMarkedTextOnCancellation() {
-        let native = FakeNativeInsertionBackend(isHealthy: true)
-        let paste = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(
-            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
-            autoStart: false
-        )
-
-        coordinator.handlePartialTranscript("abandoned partial")
-        coordinator.cancelMarkedTranscript()
-
-        XCTAssertEqual(native.markedTexts, ["abandoned partial"])
-        XCTAssertEqual(native.cancelCount, 1)
-        XCTAssertEqual(native.insertedTexts, [])
-        XCTAssertEqual(paste.insertedTexts, [])
-    }
-
-    func testNativeInsertionHealthRequiresSelectedInputMethod() {
-        var requests: [NativeTextInsertionRequest] = []
-        let client = NativeTextInsertionClient(
-            currentInputSourceID: { "com.apple.keylayout.ABC" },
-            sendRequest: { request in
-                requests.append(request)
-                return true
-            }
-        )
-
-        XCTAssertFalse(client.isHealthy)
-        XCTAssertEqual(requests, [])
-    }
-
-    func testNativeInsertionHealthPingsWhenInputMethodIsSelected() {
-        var requests: [NativeTextInsertionRequest] = []
-        let client = NativeTextInsertionClient(
-            currentInputSourceID: { NativeTextInsertionClient.diagnosticInputSourceID },
-            sendRequest: { request in
-                requests.append(request)
-                return true
-            }
-        )
-
-        XCTAssertTrue(client.isHealthy)
-        XCTAssertEqual(requests, [.ping])
-    }
-
-    func testNativeInsertionSendsFinalTextOnlyWhenInputMethodIsSelected() {
-        var selectedRequests: [NativeTextInsertionRequest] = []
-        let selectedClient = NativeTextInsertionClient(
-            currentInputSourceID: { NativeTextInsertionClient.diagnosticInputSourceID },
-            sendRequest: { request in
-                selectedRequests.append(request)
-                return true
-            }
-        )
-        var fallbackRequests: [NativeTextInsertionRequest] = []
-        let fallbackClient = NativeTextInsertionClient(
-            currentInputSourceID: { "com.apple.keylayout.ABC" },
-            sendRequest: { request in
-                fallbackRequests.append(request)
-                return true
-            }
-        )
-
-        XCTAssertTrue(selectedClient.tryInsert("hello native"))
-        XCTAssertFalse(fallbackClient.tryInsert("hello fallback"))
-        XCTAssertEqual(selectedRequests, [.insert("hello native")])
-        XCTAssertEqual(fallbackRequests, [])
-    }
-
-    func testNativeInsertionSendsMarkedTextAndCancelOnlyWhenInputMethodIsSelected() {
-        var selectedRequests: [NativeTextInsertionRequest] = []
-        let selectedClient = NativeTextInsertionClient(
-            currentInputSourceID: { NativeTextInsertionClient.diagnosticInputSourceID },
-            sendRequest: { request in
-                selectedRequests.append(request)
-                return true
-            }
-        )
-        var fallbackRequests: [NativeTextInsertionRequest] = []
-        let fallbackClient = NativeTextInsertionClient(
-            currentInputSourceID: { "com.apple.keylayout.ABC" },
-            sendRequest: { request in
-                fallbackRequests.append(request)
-                return true
-            }
-        )
-
-        selectedClient.updateMarkedText("hello mark")
-        selectedClient.cancelMarkedText()
-        fallbackClient.updateMarkedText("ignored mark")
-        fallbackClient.cancelMarkedText()
-
-        XCTAssertEqual(selectedRequests, [.mark("hello mark"), .cancel])
-        XCTAssertEqual(fallbackRequests, [])
+        XCTAssertEqual(backend.insertedTexts, ["hello final"])
+        XCTAssertEqual(backend.finishCount, 1)
     }
 
     func testRecordingIndicatorKeepsRecentTranscriptVisible() {
@@ -646,7 +463,6 @@ final class SmokeTests: XCTestCase {
             eventText: "private dictated phrase",
             finalText: "private",
             partialText: "dictated phrase",
-            displayMode: .inlineStatus,
             now: Date(timeIntervalSince1970: 101.234)
         )
 
@@ -658,7 +474,6 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(message.contains("finalChars=7"))
         XCTAssertTrue(message.contains("partialChars=15"))
         XCTAssertTrue(message.contains("displayChars=22"))
-        XCTAssertTrue(message.contains("mode=inlineStatus"))
         XCTAssertFalse(message.contains("private"))
         XCTAssertFalse(message.contains("dictated"))
         XCTAssertFalse(message.contains("phrase"))
@@ -742,64 +557,45 @@ private func repositoryRoot() -> URL {
         .deletingLastPathComponent()
 }
 
-private func methodBody(named methodName: String, in source: String) -> String? {
-    guard let methodRange = source.range(of: "func \(methodName)") else { return nil }
-    guard let openingBrace = source[methodRange.upperBound...].firstIndex(of: "{") else { return nil }
-
-    var depth = 0
-    var index = openingBrace
-    while index < source.endIndex {
-        let character = source[index]
-        if character == "{" {
-            depth += 1
-        } else if character == "}" {
-            depth -= 1
-            if depth == 0 {
-                return String(source[source.index(after: openingBrace)..<index])
-            }
-        }
-        index = source.index(after: index)
-    }
-
-    return nil
-}
-
 private final class RecordingTextInsertionBackend: TextInsertionBackend {
     private(set) var insertedTexts: [String] = []
-
-    func insert(_ text: String) {
-        insertedTexts.append(text)
-    }
-}
-
-private final class FakeNativeInsertionBackend: FallibleTextInsertionBackend, LiveTextInsertionBackend {
-    var isHealthy: Bool
-    var supportsMarkedText: Bool { isHealthy }
-    private let shouldSucceed: Bool
-    private(set) var insertedTexts: [String] = []
-    private(set) var markedTexts: [String] = []
+    private(set) var finishCount = 0
     private(set) var cancelCount = 0
 
-    init(isHealthy: Bool, shouldSucceed: Bool = true) {
-        self.isHealthy = isHealthy
-        self.shouldSucceed = shouldSucceed
+    func startInsertionSession() -> any TextInsertionSession {
+        RecordingTextInsertionSession(backend: self)
     }
 
-    func insert(_ text: String) {
-        _ = tryInsert(text)
-    }
-
-    func tryInsert(_ text: String) -> Bool {
+    fileprivate func record(_ text: String) {
         insertedTexts.append(text)
-        return shouldSucceed
     }
 
-    func updateMarkedText(_ text: String) {
-        markedTexts.append(text)
+    private func finishSession() {
+        finishCount += 1
     }
 
-    func cancelMarkedText() {
+    private func cancelSession() {
         cancelCount += 1
+    }
+
+    private final class RecordingTextInsertionSession: TextInsertionSession {
+        private let backend: RecordingTextInsertionBackend
+
+        init(backend: RecordingTextInsertionBackend) {
+            self.backend = backend
+        }
+
+        func insert(_ text: String) {
+            backend.record(text)
+        }
+
+        func finish() {
+            backend.finishSession()
+        }
+
+        func cancel() {
+            backend.cancelSession()
+        }
     }
 }
 

@@ -16,7 +16,6 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
     @Published public private(set) var settings: Settings
-    @Published private(set) var indicatorDisplayMode: RecordingIndicatorDisplayMode = .transcriptPreview
 
     /// Running display: committed finals + in-progress partial. The partial replaces
     /// only the tail because `SpeechTranscriber` emits volatile partials for the
@@ -27,9 +26,6 @@ public final class AppCoordinator: ObservableObject {
     private let audio: AudioCapture
     private let transcriber: Transcriber
     private let textInsertion: TextInsertionBackend
-    private var liveTextInsertion: (any LiveTextInsertionBackend)? {
-        textInsertion as? any LiveTextInsertionBackend
-    }
     private let permissions: PermissionsGate
     private let assets: AssetManager
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
@@ -42,6 +38,7 @@ public final class AppCoordinator: ObservableObject {
 
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
+    private var textInsertionSession: ProgressiveTranscriptInsertionSession?
     private var didBootstrap = false
     private lazy var indicator: RecordingIndicatorController = {
         let controller = RecordingIndicatorController()
@@ -52,10 +49,7 @@ public final class AppCoordinator: ObservableObject {
     public init(
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
-        textInsertion: TextInsertionBackend = TextInsertionBackendRouter(
-            native: NativeTextInsertionClient(),
-            fallback: PasteTextInjector()
-        ),
+        textInsertion: TextInsertionBackend = PasteTextInjector(),
         settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {
@@ -138,10 +132,13 @@ public final class AppCoordinator: ObservableObject {
         finalText = ""
         partial = ""
         amplitude = 0
-        updateIndicatorDisplayModeForCurrentBackend()
+        textInsertionSession = ProgressiveTranscriptInsertionSession(
+            insertionSession: textInsertion.startInsertionSession(),
+            canonicalize: { [corrections] text in corrections.canonicalize(text) }
+        )
         transcriptTiming.start()
         indicator.show()
-        log.info("recording start mode=\(indicatorDisplayMode.rawValue)")
+        log.info("recording start")
 
         transcriptionTask = Task { [weak self] in
             await self?.runSession(format: format)
@@ -167,7 +164,7 @@ public final class AppCoordinator: ObservableObject {
         do {
             events = try await transcriber.start()
             guard state == .recording else {
-                cancelMarkedTranscript()
+                cancelTextInsertionSession()
                 await resetToIdle()
                 return
             }
@@ -187,7 +184,7 @@ public final class AppCoordinator: ObservableObject {
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
             dogfood.stop(keeping: false)
-            cancelMarkedTranscript()
+            cancelTextInsertionSession()
             await resetToIdle()
             return
         }
@@ -211,7 +208,11 @@ public final class AppCoordinator: ObservableObject {
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
         if hasTranscribedText { insertFinalTranscript(finalText) }
-        if !hasTranscribedText { cancelMarkedTranscript() }
+        if hasTranscribedText {
+            finishTextInsertionSession()
+        } else {
+            cancelTextInsertionSession()
+        }
 
         await resetToIdle()
         log.info("recording done (finalChars=\(self.finalText.count))")
@@ -219,22 +220,28 @@ public final class AppCoordinator: ObservableObject {
 
     func handlePartialTranscript(_ text: String) {
         partial = text
-        updateMarkedTranscript(displayText)
+        textInsertionSession?.acceptPartialTranscript(displayText)
     }
 
     func handleFinalTranscriptSegment(_ text: String) {
         finalText += text
         partial = ""
-        updateMarkedTranscript(displayText)
+        textInsertionSession?.acceptFinalTranscript(finalText)
     }
 
     func insertFinalTranscript(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        textInsertion.insert(corrections.canonicalize(text))
-    }
+        if let textInsertionSession {
+            textInsertionSession.acceptFinalTranscript(text)
+            return
+        }
 
-    func updateIndicatorDisplayModeForCurrentBackend() {
-        indicatorDisplayMode = liveTextInsertion?.supportsMarkedText == true ? .inlineStatus : .transcriptPreview
+        let oneShotSession = ProgressiveTranscriptInsertionSession(
+            insertionSession: textInsertion.startInsertionSession(),
+            canonicalize: { [corrections] text in corrections.canonicalize(text) }
+        )
+        oneShotSession.acceptFinalTranscript(text)
+        oneShotSession.finish()
     }
 
     func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {
@@ -242,29 +249,24 @@ public final class AppCoordinator: ObservableObject {
             kind: kind,
             eventText: eventText,
             finalText: finalText,
-            partialText: partial,
-            displayMode: indicatorDisplayMode
+            partialText: partial
         ))
     }
 
-    func cancelMarkedTranscript() {
-        guard let liveTextInsertion, liveTextInsertion.supportsMarkedText else { return }
-        liveTextInsertion.cancelMarkedText()
+    private func finishTextInsertionSession() {
+        textInsertionSession?.finish()
+        textInsertionSession = nil
     }
 
-    private func updateMarkedTranscript(_ text: String) {
-        guard let liveTextInsertion, liveTextInsertion.supportsMarkedText else { return }
-        if text.isEmpty {
-            liveTextInsertion.cancelMarkedText()
-        } else {
-            liveTextInsertion.updateMarkedText(text)
-        }
+    private func cancelTextInsertionSession() {
+        textInsertionSession?.cancel()
+        textInsertionSession = nil
     }
 
     /// Common teardown shared by every exit from `runSession`. Each piece is idempotent
     /// (callbacks set to nil, `finish()` is idempotent). Path-specific work — `audio.stop()`,
-    /// `dogfood.stop(keeping:)`, the paste — stays at the call sites; only what every path
-    /// does identically lives here, so the three exits can't drift apart again.
+    /// `dogfood.stop(keeping:)`, insertion session closeout — stays at the call sites; only
+    /// what every path does identically lives here, so the three exits can't drift apart again.
     private func resetToIdle() async {
         audio.onBuffer = nil
         audio.onAmplitude = nil

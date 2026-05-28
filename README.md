@@ -1,6 +1,6 @@
 # Epos
 
-Minimal macOS dictation app built on Apple's `SpeechTranscriber`. Hold fn, speak, release — the text pastes into the frontmost app.
+Minimal macOS dictation app built on Apple's `SpeechTranscriber`. Hold fn, speak, stable words stream into the focused app, and release commits the remaining final text.
 
 Source of truth: `specs/baseline.md`.
 
@@ -104,5 +104,6 @@ Sources/Epos/
 ## Status
 
 Source-buildable macOS app with the baseline push-to-talk flow, local signing
-scripts, first-run permissions, diagnostic logging, and correction-rule editing
-in place. See `specs/baseline.md` for scope, non-goals, and backlog items.
+scripts, first-run permissions, session-aware progressive insertion, diagnostic
+logging, and correction-rule editing in place. See `specs/baseline.md` for
+scope, non-goals, and backlog items.

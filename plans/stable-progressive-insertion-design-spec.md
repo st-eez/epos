@@ -2,11 +2,11 @@
 
 ## Metadata
 
-- Status: draft for implementation
+- Status: initial implementation shipped; target guards remain backlog
 - Date: 2026-05-28
 - Owner: Epos
 - Related shipped spec: `specs/baseline.md`
-- Supersedes for default product path: `plans/native-inline-dictation-mvp-design-spec.md`
+- Supersedes for default product path: selected InputMethodKit input-source insertion
 
 ## Context
 
@@ -135,24 +135,9 @@ The MVP does not attempt destructive final repair. If final canonicalization wou
 
 ### Insertion Architecture
 
-Keep `TextInsertionBackend` for final insertion. Add a separate progressive capability:
+`TextInsertionBackend` now has an optional session capability. The production backend is still `PasteTextInjector`, but it snapshots the clipboard once per dictation session and restores it after the session finishes. `ProgressiveTranscriptInsertionSession` owns the stable-prefix policy and sends exact text deltas to that insertion session.
 
-```swift
-protocol ProgressiveTextInsertionBackend {
-    var supportsProgressiveInsertion: Bool { get }
-    func beginProgressiveInsertion() -> ProgressiveInsertionSession?
-}
-
-protocol ProgressiveInsertionSession {
-    func insertStableText(_ text: String) -> Bool
-    func finish()
-    func cancel()
-}
-```
-
-`PasteTextInjector` remains final-only.
-
-Add a new production backend, tentatively `SyntheticTypingInjector`, for progressive deltas. It uses Accessibility plus `CGEvent.keyboardSetUnicodeString` style Unicode key events for short stable text deltas. It does not use the clipboard for every word.
+Synthetic Unicode typing and target-aware guarding remain follow-up work. They should be added only after the stable-prefix policy and session lifecycle stay green.
 
 ### Target Guarding
 

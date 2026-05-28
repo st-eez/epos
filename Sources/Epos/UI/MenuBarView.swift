@@ -224,7 +224,7 @@ public struct MenuBarView: View {
         case .idle:
             Readiness(icon: "mic", title: "Ready to dictate", subtitle: "Hold fn in any text field", color: teal)
         case .recording:
-            Readiness(icon: "waveform", title: "Recording", subtitle: "Release fn to paste", color: red)
+            Readiness(icon: "waveform", title: "Recording", subtitle: "Release fn to finish", color: red)
         case .finalizing:
             Readiness(icon: "arrow.down.doc", title: "Finishing dictation", subtitle: "Pasting into the frontmost app", color: teal)
         }

@@ -1,11 +1,6 @@
 import Foundation
 import SwiftUI
 
-enum RecordingIndicatorDisplayMode: String, Equatable {
-    case transcriptPreview
-    case inlineStatus
-}
-
 public struct RecordingIndicator: View {
     @ObservedObject var coordinator: AppCoordinator
 
@@ -17,8 +12,7 @@ public struct RecordingIndicator: View {
         RecordingIndicatorSurface(
             state: coordinator.state,
             transcript: coordinator.displayText,
-            amplitude: coordinator.amplitude,
-            displayMode: coordinator.indicatorDisplayMode
+            amplitude: coordinator.amplitude
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.horizontal, 20)
@@ -33,7 +27,6 @@ struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
     let transcript: String
     let amplitude: Float
-    let displayMode: RecordingIndicatorDisplayMode
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
     private let teal = EposPalette.teal
@@ -42,13 +35,11 @@ struct RecordingIndicatorSurface: View {
     init(
         state: CoordinatorState,
         transcript: String,
-        amplitude: Float,
-        displayMode: RecordingIndicatorDisplayMode = .transcriptPreview
+        amplitude: Float
     ) {
         self.state = state
         self.transcript = transcript
         self.amplitude = amplitude
-        self.displayMode = displayMode
     }
 
     var body: some View {
@@ -72,7 +63,7 @@ struct RecordingIndicatorSurface: View {
     }
 
     private var presentation: RecordingIndicatorPresentation {
-        Self.presentation(mode: displayMode, transcript: transcript)
+        Self.presentation(transcript: transcript)
     }
 
     private var statusCluster: some View {
@@ -139,32 +130,18 @@ struct RecordingIndicatorSurface: View {
     }
 
     nonisolated static func presentation(
-        mode: RecordingIndicatorDisplayMode,
         transcript: String
     ) -> RecordingIndicatorPresentation {
-        switch mode {
-        case .transcriptPreview:
-            let transcriptText = recentDisplayText(transcript)
-            return RecordingIndicatorPresentation(
-                transcriptText: transcriptText,
-                hasTranscript: !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                minWidth: 260,
-                maxWidth: 500,
-                maxTranscriptWidth: 410,
-                horizontalPadding: 10,
-                verticalPadding: 7
-            )
-        case .inlineStatus:
-            return RecordingIndicatorPresentation(
-                transcriptText: nil,
-                hasTranscript: false,
-                minWidth: 96,
-                maxWidth: 144,
-                maxTranscriptWidth: 0,
-                horizontalPadding: 8,
-                verticalPadding: 6
-            )
-        }
+        let transcriptText = recentDisplayText(transcript)
+        return RecordingIndicatorPresentation(
+            transcriptText: transcriptText,
+            hasTranscript: !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            minWidth: 260,
+            maxWidth: 500,
+            maxTranscriptWidth: 410,
+            horizontalPadding: 10,
+            verticalPadding: 7
+        )
     }
 
     nonisolated static func barHeight(_ index: Int, amplitude: Float) -> CGFloat {

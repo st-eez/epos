@@ -41,7 +41,6 @@ MSG
 configuration="${CONFIGURATION:-Release}"
 symroot="$repo_root/.build/xcode"
 app_path="$symroot/$configuration/Epos.app"
-input_method_path="$symroot/$configuration/EposInputMethod.app"
 signing_mode="${EPOS_LOCAL_SIGNING:-auto}"
 
 cd "$repo_root"
@@ -84,15 +83,6 @@ if [[ "$signing_mode" != "adhoc" ]]; then
       DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
       CODE_SIGN_IDENTITY="$code_sign_identity" \
       build >&2
-    xcodebuild \
-      -project Epos.xcodeproj \
-      -target EposInputMethod \
-      -configuration "$configuration" \
-      -destination 'platform=macOS' \
-      SYMROOT="$symroot" \
-      DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
-      CODE_SIGN_IDENTITY="$code_sign_identity" \
-      build >&2
   elif [[ "$signing_mode" == "development" ]]; then
     cat >&2 <<'MSG'
 error: DEVELOPMENT_TEAM is required for EPOS_LOCAL_SIGNING=development.
@@ -126,19 +116,8 @@ MSG
     DEVELOPMENT_TEAM="" \
     CODE_SIGN_IDENTITY="-" \
     build >&2
-  xcodebuild \
-    -project Epos.xcodeproj \
-    -target EposInputMethod \
-    -configuration "$configuration" \
-    -destination 'platform=macOS' \
-    SYMROOT="$symroot" \
-    CODE_SIGN_STYLE=Manual \
-    DEVELOPMENT_TEAM="" \
-    CODE_SIGN_IDENTITY="-" \
-    build >&2
 fi
 
 codesign --verify --deep --strict "$app_path"
-codesign --verify --deep --strict "$input_method_path"
 
 printf '%s\n' "$app_path"
