@@ -2,7 +2,7 @@
 
 ## Metadata
 
-- Status: draft for implementation
+- Status: superseded for default product path; keep only as an opt-in InputMethodKit spike reference
 - Date: 2026-05-27
 - Owner: Epos
 - Related shipped spec: `specs/native-text-insertion.md`
