@@ -322,16 +322,28 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(controller.contains("TISSetInputMethodKeyboardLayoutOverride"))
         XCTAssertTrue(controller.contains("Self.shouldCommitDiagnosticText(from: event)"))
         XCTAssertTrue(controller.contains("Self.shouldCommitDiagnosticText(keyCode: keyCode, modifiers: flags)"))
+        XCTAssertTrue(controller.contains("override func handle(_ event"))
+        XCTAssertTrue(controller.contains("commitPassthroughText(event.characters, flags: event.modifierFlags, to: sender)"))
 
         let inputTextBody = try XCTUnwrap(
             methodBody(named: "inputText(_ string: String!, client sender: Any!)", in: controller)
         )
-        XCTAssertEqual(inputTextBody.trimmingCharacters(in: .whitespacesAndNewlines), "false")
+        XCTAssertTrue(inputTextBody.contains("commitPassthroughText(string, to: sender)"))
+
+        let keyedInputTextBody = try XCTUnwrap(
+            methodBody(named: "inputText(_ string: String!, key keyCode: Int, modifiers flags: Int, client sender: Any!)", in: controller)
+        )
+        XCTAssertTrue(keyedInputTextBody.contains("commitText(Self.diagnosticText, to: sender)"))
+        XCTAssertTrue(keyedInputTextBody.contains("commitPassthroughText(string, modifiers: flags, to: sender)"))
 
         let commitCompositionBody = try XCTUnwrap(
             methodBody(named: "commitComposition", in: controller)
         )
         XCTAssertFalse(commitCompositionBody.contains("commitDiagnosticText"))
+
+        XCTAssertTrue(controller.contains("private static func passthroughText"))
+        XCTAssertTrue(controller.contains("flags.contains(.command) || flags.contains(.control)"))
+        XCTAssertTrue(controller.contains("CharacterSet.controlCharacters.contains(scalar)"))
     }
 
     func testLocalInstallDoesNotEnableInputMethodByDefault() throws {

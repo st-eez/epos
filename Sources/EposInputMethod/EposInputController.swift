@@ -29,21 +29,22 @@ final class EposInputController: IMKInputController {
     }
 
     override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
-        guard let event,
-              event.type == .keyDown,
-              Self.shouldCommitDiagnosticText(from: event) else {
-            return false
+        guard let event, event.type == .keyDown else { return false }
+        if Self.shouldCommitDiagnosticText(from: event) {
+            return commitText(Self.diagnosticText, to: sender)
         }
-        return commitText(Self.diagnosticText, to: sender)
+        return commitPassthroughText(event.characters, flags: event.modifierFlags, to: sender)
     }
 
     override func inputText(_ string: String!, client sender: Any!) -> Bool {
-        false
+        commitPassthroughText(string, to: sender)
     }
 
     override func inputText(_ string: String!, key keyCode: Int, modifiers flags: Int, client sender: Any!) -> Bool {
-        guard Self.shouldCommitDiagnosticText(keyCode: keyCode, modifiers: flags) else { return false }
-        return commitText(Self.diagnosticText, to: sender)
+        if Self.shouldCommitDiagnosticText(keyCode: keyCode, modifiers: flags) {
+            return commitText(Self.diagnosticText, to: sender)
+        }
+        return commitPassthroughText(string, modifiers: flags, to: sender)
     }
 
     override func commitComposition(_ sender: Any!) {
@@ -78,6 +79,28 @@ final class EposInputController: IMKInputController {
             && !flags.contains(.command)
     }
 
+    private static func passthroughText(_ string: String?, modifiers rawFlags: Int? = nil) -> String? {
+        guard let string, !string.isEmpty else { return nil }
+        if let rawFlags {
+            let flags = NSEvent.ModifierFlags(rawValue: UInt(rawFlags)).intersection(.deviceIndependentFlagsMask)
+            if flags.contains(.command) || flags.contains(.control) {
+                return nil
+            }
+        }
+        guard string.unicodeScalars.allSatisfy({ scalar in !CharacterSet.controlCharacters.contains(scalar) }) else {
+            return nil
+        }
+        return string
+    }
+
+    private static func passthroughText(_ string: String?, flags: NSEvent.ModifierFlags) -> String? {
+        let flags = flags.intersection(.deviceIndependentFlagsMask)
+        if flags.contains(.command) || flags.contains(.control) {
+            return nil
+        }
+        return passthroughText(string)
+    }
+
     private func commitText(_ text: String, to sender: Any?) -> Bool {
         guard !text.isEmpty else { return true }
 
@@ -94,6 +117,20 @@ final class EposInputController: IMKInputController {
             return true
         }
         return false
+    }
+
+    private func commitPassthroughText(_ string: String?, modifiers rawFlags: Int? = nil, to sender: Any?) -> Bool {
+        guard let text = Self.passthroughText(string, modifiers: rawFlags) else {
+            return false
+        }
+        return commitText(text, to: sender)
+    }
+
+    private func commitPassthroughText(_ string: String?, flags: NSEvent.ModifierFlags, to sender: Any?) -> Bool {
+        guard let text = Self.passthroughText(string, flags: flags) else {
+            return false
+        }
+        return commitText(text, to: sender)
     }
 
     private func updateMarkedText(_ text: String, to sender: Any?) -> Bool {
