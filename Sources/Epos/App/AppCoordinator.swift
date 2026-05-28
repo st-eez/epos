@@ -16,6 +16,7 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
     @Published public private(set) var settings: Settings
+    @Published private(set) var indicatorDisplayMode: RecordingIndicatorDisplayMode = .transcriptPreview
 
     /// Running display: committed finals + in-progress partial. The partial replaces
     /// only the tail because `SpeechTranscriber` emits volatile partials for the
@@ -136,6 +137,7 @@ public final class AppCoordinator: ObservableObject {
         finalText = ""
         partial = ""
         amplitude = 0
+        updateIndicatorDisplayModeForCurrentBackend()
         indicator.show()
         log.info("recording start")
 
@@ -225,6 +227,10 @@ public final class AppCoordinator: ObservableObject {
     func insertFinalTranscript(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         textInsertion.insert(corrections.canonicalize(text))
+    }
+
+    func updateIndicatorDisplayModeForCurrentBackend() {
+        indicatorDisplayMode = liveTextInsertion?.supportsMarkedText == true ? .inlineStatus : .transcriptPreview
     }
 
     func cancelMarkedTranscript() {

@@ -1,7 +1,7 @@
 import Foundation
 import SwiftUI
 
-enum RecordingIndicatorDisplayMode {
+enum RecordingIndicatorDisplayMode: Equatable {
     case transcriptPreview
     case inlineStatus
 }
@@ -18,7 +18,7 @@ public struct RecordingIndicator: View {
             state: coordinator.state,
             transcript: coordinator.displayText,
             amplitude: coordinator.amplitude,
-            displayMode: .transcriptPreview
+            displayMode: coordinator.indicatorDisplayMode
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.horizontal, 20)

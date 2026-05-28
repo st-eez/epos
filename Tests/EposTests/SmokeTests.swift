@@ -430,6 +430,34 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinatorUsesInlineStatusIndicatorWhenNativeMarkedTextIsAvailable() {
+        let native = FakeNativeInsertionBackend(isHealthy: true)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.updateIndicatorDisplayModeForCurrentBackend()
+
+        XCTAssertEqual(coordinator.indicatorDisplayMode, .inlineStatus)
+    }
+
+    @MainActor
+    func testCoordinatorUsesTranscriptPreviewIndicatorWhenNativeMarkedTextIsUnavailable() {
+        let native = FakeNativeInsertionBackend(isHealthy: false)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.updateIndicatorDisplayModeForCurrentBackend()
+
+        XCTAssertEqual(coordinator.indicatorDisplayMode, .transcriptPreview)
+    }
+
+    @MainActor
     func testPasteFallbackDoesNotReceivePartialMarkedText() {
         let native = FakeNativeInsertionBackend(isHealthy: false)
         let paste = RecordingTextInsertionBackend()
