@@ -13,7 +13,14 @@ public protocol FallibleTextInsertionBackend: TextInsertionBackend {
     func tryInsert(_ text: String) -> Bool
 }
 
-public final class TextInsertionBackendRouter: TextInsertionBackend {
+public protocol LiveTextInsertionBackend: TextInsertionBackend {
+    var supportsMarkedText: Bool { get }
+
+    func updateMarkedText(_ text: String)
+    func cancelMarkedText()
+}
+
+public final class TextInsertionBackendRouter: LiveTextInsertionBackend {
     private let native: (any FallibleTextInsertionBackend)?
     private let fallback: any TextInsertionBackend
 
@@ -25,6 +32,11 @@ public final class TextInsertionBackendRouter: TextInsertionBackend {
         self.fallback = fallback
     }
 
+    public var supportsMarkedText: Bool {
+        guard let native, let liveNative = native as? any LiveTextInsertionBackend else { return false }
+        return native.isHealthy && liveNative.supportsMarkedText
+    }
+
     public func insert(_ text: String) {
         guard !text.isEmpty else { return }
 
@@ -33,6 +45,24 @@ public final class TextInsertionBackendRouter: TextInsertionBackend {
         }
 
         fallback.insert(text)
+    }
+
+    public func updateMarkedText(_ text: String) {
+        guard let native, let liveNative = native as? any LiveTextInsertionBackend,
+              native.isHealthy, liveNative.supportsMarkedText else {
+            return
+        }
+
+        liveNative.updateMarkedText(text)
+    }
+
+    public func cancelMarkedText() {
+        guard let native, let liveNative = native as? any LiveTextInsertionBackend,
+              native.isHealthy, liveNative.supportsMarkedText else {
+            return
+        }
+
+        liveNative.cancelMarkedText()
     }
 }
 

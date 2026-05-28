@@ -2,7 +2,7 @@ import Carbon
 import Darwin
 import Foundation
 
-public final class NativeTextInsertionClient: FallibleTextInsertionBackend {
+public final class NativeTextInsertionClient: FallibleTextInsertionBackend, LiveTextInsertionBackend {
     public static let diagnosticInputSourceID = "com.steez.inputmethod.Epos.Diagnostic"
 
     private let currentInputSourceID: () -> String?
@@ -30,6 +30,10 @@ public final class NativeTextInsertionClient: FallibleTextInsertionBackend {
         currentInputSourceID() == Self.diagnosticInputSourceID && send(.ping)
     }
 
+    public var supportsMarkedText: Bool {
+        isHealthy
+    }
+
     public func insert(_ text: String) {
         _ = tryInsert(text)
     }
@@ -38,6 +42,20 @@ public final class NativeTextInsertionClient: FallibleTextInsertionBackend {
         guard !text.isEmpty else { return true }
         guard currentInputSourceID() == Self.diagnosticInputSourceID else { return false }
         return send(.insert(text))
+    }
+
+    public func updateMarkedText(_ text: String) {
+        guard !text.isEmpty else {
+            cancelMarkedText()
+            return
+        }
+        guard currentInputSourceID() == Self.diagnosticInputSourceID else { return }
+        _ = send(.mark(text))
+    }
+
+    public func cancelMarkedText() {
+        guard currentInputSourceID() == Self.diagnosticInputSourceID else { return }
+        _ = send(.cancel)
     }
 
     private func send(_ request: NativeTextInsertionRequest) -> Bool {
@@ -68,6 +86,8 @@ public final class NativeTextInsertionClient: FallibleTextInsertionBackend {
 enum NativeTextInsertionRequest: Equatable {
     case ping
     case insert(String)
+    case mark(String)
+    case cancel
 
     var payload: [String: String] {
         switch self {
@@ -75,6 +95,10 @@ enum NativeTextInsertionRequest: Equatable {
             ["operation": "ping"]
         case .insert(let text):
             ["operation": "insert", "text": text]
+        case .mark(let text):
+            ["operation": "mark", "text": text]
+        case .cancel:
+            ["operation": "cancel"]
         }
     }
 }

@@ -411,6 +411,59 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(paste.insertedTexts, ["hello after failed native"])
     }
 
+    @MainActor
+    func testNativeBackendReceivesPartialMarkedTextBeforeFinalCommit() {
+        let native = FakeNativeInsertionBackend(isHealthy: true)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.handlePartialTranscript("hello par")
+        coordinator.insertFinalTranscript("hello partial")
+
+        XCTAssertEqual(native.markedTexts, ["hello par"])
+        XCTAssertEqual(native.insertedTexts, ["hello partial"])
+        XCTAssertEqual(native.cancelCount, 0)
+        XCTAssertEqual(paste.insertedTexts, [])
+    }
+
+    @MainActor
+    func testPasteFallbackDoesNotReceivePartialMarkedText() {
+        let native = FakeNativeInsertionBackend(isHealthy: false)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.handlePartialTranscript("partial should stay in preview only")
+        coordinator.insertFinalTranscript("final fallback")
+
+        XCTAssertEqual(native.markedTexts, [])
+        XCTAssertEqual(native.insertedTexts, [])
+        XCTAssertEqual(paste.insertedTexts, ["final fallback"])
+    }
+
+    @MainActor
+    func testCoordinatorCancelsNativeMarkedTextOnCancellation() {
+        let native = FakeNativeInsertionBackend(isHealthy: true)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.handlePartialTranscript("abandoned partial")
+        coordinator.cancelMarkedTranscript()
+
+        XCTAssertEqual(native.markedTexts, ["abandoned partial"])
+        XCTAssertEqual(native.cancelCount, 1)
+        XCTAssertEqual(native.insertedTexts, [])
+        XCTAssertEqual(paste.insertedTexts, [])
+    }
+
     func testNativeInsertionHealthRequiresSelectedInputMethod() {
         var requests: [NativeTextInsertionRequest] = []
         let client = NativeTextInsertionClient(
@@ -460,6 +513,33 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(selectedClient.tryInsert("hello native"))
         XCTAssertFalse(fallbackClient.tryInsert("hello fallback"))
         XCTAssertEqual(selectedRequests, [.insert("hello native")])
+        XCTAssertEqual(fallbackRequests, [])
+    }
+
+    func testNativeInsertionSendsMarkedTextAndCancelOnlyWhenInputMethodIsSelected() {
+        var selectedRequests: [NativeTextInsertionRequest] = []
+        let selectedClient = NativeTextInsertionClient(
+            currentInputSourceID: { NativeTextInsertionClient.diagnosticInputSourceID },
+            sendRequest: { request in
+                selectedRequests.append(request)
+                return true
+            }
+        )
+        var fallbackRequests: [NativeTextInsertionRequest] = []
+        let fallbackClient = NativeTextInsertionClient(
+            currentInputSourceID: { "com.apple.keylayout.ABC" },
+            sendRequest: { request in
+                fallbackRequests.append(request)
+                return true
+            }
+        )
+
+        selectedClient.updateMarkedText("hello mark")
+        selectedClient.cancelMarkedText()
+        fallbackClient.updateMarkedText("ignored mark")
+        fallbackClient.cancelMarkedText()
+
+        XCTAssertEqual(selectedRequests, [.mark("hello mark"), .cancel])
         XCTAssertEqual(fallbackRequests, [])
     }
 
@@ -619,10 +699,13 @@ private final class RecordingTextInsertionBackend: TextInsertionBackend {
     }
 }
 
-private final class FakeNativeInsertionBackend: FallibleTextInsertionBackend {
+private final class FakeNativeInsertionBackend: FallibleTextInsertionBackend, LiveTextInsertionBackend {
     var isHealthy: Bool
+    var supportsMarkedText: Bool { isHealthy }
     private let shouldSucceed: Bool
     private(set) var insertedTexts: [String] = []
+    private(set) var markedTexts: [String] = []
+    private(set) var cancelCount = 0
 
     init(isHealthy: Bool, shouldSucceed: Bool = true) {
         self.isHealthy = isHealthy
@@ -636,6 +719,14 @@ private final class FakeNativeInsertionBackend: FallibleTextInsertionBackend {
     func tryInsert(_ text: String) -> Bool {
         insertedTexts.append(text)
         return shouldSucceed
+    }
+
+    func updateMarkedText(_ text: String) {
+        markedTexts.append(text)
+    }
+
+    func cancelMarkedText() {
+        cancelCount += 1
     }
 }
 

@@ -4,10 +4,18 @@ import Foundation
 final class EposNativeMessageServer: @unchecked Sendable {
     private static let maxRequestBytes = 64 * 1024
     private let commitText: @Sendable (String) -> Bool
+    private let updateMarkedText: @Sendable (String) -> Bool
+    private let cancelMarkedText: @Sendable () -> Bool
     private let queue = DispatchQueue(label: "com.steez.EposInputMethod.native-message-server")
 
-    init(commitText: @escaping @Sendable (String) -> Bool) {
+    init(
+        commitText: @escaping @Sendable (String) -> Bool,
+        updateMarkedText: @escaping @Sendable (String) -> Bool,
+        cancelMarkedText: @escaping @Sendable () -> Bool
+    ) {
         self.commitText = commitText
+        self.updateMarkedText = updateMarkedText
+        self.cancelMarkedText = cancelMarkedText
     }
 
     func start() {
@@ -64,6 +72,20 @@ final class EposNativeMessageServer: @unchecked Sendable {
                 commitText(text)
             }
             write(didCommit ? "ok\n" : "error\n", to: client)
+        case "mark":
+            guard let text = request.text else {
+                write("error\n", to: client)
+                return
+            }
+            let didMark = DispatchQueue.main.sync {
+                updateMarkedText(text)
+            }
+            write(didMark ? "ok\n" : "error\n", to: client)
+        case "cancel":
+            let didCancel = DispatchQueue.main.sync {
+                cancelMarkedText()
+            }
+            write(didCancel ? "ok\n" : "error\n", to: client)
         default:
             write("error\n", to: client)
         }

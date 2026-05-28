@@ -4,9 +4,11 @@ import InputMethodKit
 @MainActor
 private final class EposInputMethodApplication {
     private let server: IMKServer
-    private let nativeMessageServer = EposNativeMessageServer { text in
-        EposInputController.commitExternalText(text)
-    }
+    private let nativeMessageServer = EposNativeMessageServer(
+        commitText: { text in EposInputController.commitExternalText(text) },
+        updateMarkedText: { text in EposInputController.updateExternalMarkedText(text) },
+        cancelMarkedText: { EposInputController.cancelExternalMarkedText() }
+    )
 
     init() {
         guard let bundleIdentifier = Bundle.main.bundleIdentifier else {

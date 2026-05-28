@@ -26,6 +26,9 @@ public final class AppCoordinator: ObservableObject {
     private let audio: AudioCapture
     private let transcriber: Transcriber
     private let textInsertion: TextInsertionBackend
+    private var liveTextInsertion: (any LiveTextInsertionBackend)? {
+        textInsertion as? any LiveTextInsertionBackend
+    }
     private let permissions: PermissionsGate
     private let assets: AssetManager
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
@@ -160,6 +163,7 @@ public final class AppCoordinator: ObservableObject {
         do {
             events = try await transcriber.start()
             guard state == .recording else {
+                cancelMarkedTranscript()
                 await resetToIdle()
                 return
             }
@@ -179,6 +183,7 @@ public final class AppCoordinator: ObservableObject {
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
             dogfood.stop(keeping: false)
+            cancelMarkedTranscript()
             await resetToIdle()
             return
         }
@@ -186,10 +191,9 @@ public final class AppCoordinator: ObservableObject {
         for await event in events {
             switch event {
             case .partial(let text):
-                partial = text
+                handlePartialTranscript(text)
             case .final(let text):
-                finalText += text
-                partial = ""
+                handleFinalTranscriptSegment(text)
             case .failed(let message):
                 log.error("transcription failed: \(message)")
             }
@@ -201,14 +205,40 @@ public final class AppCoordinator: ObservableObject {
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
         if hasTranscribedText { insertFinalTranscript(finalText) }
+        if !hasTranscribedText { cancelMarkedTranscript() }
 
         await resetToIdle()
         log.info("recording done (finalChars=\(self.finalText.count))")
     }
 
+    func handlePartialTranscript(_ text: String) {
+        partial = text
+        updateMarkedTranscript(displayText)
+    }
+
+    func handleFinalTranscriptSegment(_ text: String) {
+        finalText += text
+        partial = ""
+        updateMarkedTranscript(displayText)
+    }
+
     func insertFinalTranscript(_ text: String) {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         textInsertion.insert(corrections.canonicalize(text))
+    }
+
+    func cancelMarkedTranscript() {
+        guard let liveTextInsertion, liveTextInsertion.supportsMarkedText else { return }
+        liveTextInsertion.cancelMarkedText()
+    }
+
+    private func updateMarkedTranscript(_ text: String) {
+        guard let liveTextInsertion, liveTextInsertion.supportsMarkedText else { return }
+        if text.isEmpty {
+            liveTextInsertion.cancelMarkedText()
+        } else {
+            liveTextInsertion.updateMarkedText(text)
+        }
     }
 
     /// Common teardown shared by every exit from `runSession`. Each piece is idempotent

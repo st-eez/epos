@@ -9,6 +9,7 @@ final class EposInputController: IMKInputController {
     private static let diagnosticTriggerModifiers: NSEvent.ModifierFlags = [.control, .option, .shift]
     private static let diagnosticText = "Epos input method diagnostic"
     private static let replacementRange = NSRange(location: NSNotFound, length: NSNotFound)
+    private static let unmarkTextSelector = NSSelectorFromString("unmarkText")
     nonisolated(unsafe) private static weak var activeController: EposInputController?
 
     override func activateServer(_ sender: Any!) {
@@ -53,6 +54,16 @@ final class EposInputController: IMKInputController {
         return activeController.commitText(text, to: activeController.client())
     }
 
+    static func updateExternalMarkedText(_ text: String) -> Bool {
+        guard let activeController else { return false }
+        return activeController.updateMarkedText(text, to: activeController.client())
+    }
+
+    static func cancelExternalMarkedText() -> Bool {
+        guard let activeController else { return false }
+        return activeController.cancelMarkedText(to: activeController.client())
+    }
+
     private static func shouldCommitDiagnosticText(from event: NSEvent) -> Bool {
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         return event.charactersIgnoringModifiers?.lowercased() == diagnosticTriggerKey
@@ -83,5 +94,52 @@ final class EposInputController: IMKInputController {
             return true
         }
         return false
+    }
+
+    private func updateMarkedText(_ text: String, to sender: Any?) -> Bool {
+        guard !text.isEmpty else { return cancelMarkedText(to: sender) }
+        let selectionRange = NSRange(location: (text as NSString).length, length: 0)
+
+        if let client = sender as? IMKTextInput {
+            client.setMarkedText(text, selectionRange: selectionRange, replacementRange: Self.replacementRange)
+            return true
+        }
+        if let client = sender as? NSTextInputClient {
+            client.setMarkedText(text, selectedRange: selectionRange, replacementRange: Self.replacementRange)
+            return true
+        }
+        if let client = self.client() {
+            client.setMarkedText(text, selectionRange: selectionRange, replacementRange: Self.replacementRange)
+            return true
+        }
+        return false
+    }
+
+    private func cancelMarkedText(to sender: Any?) -> Bool {
+        if let client = sender as? NSTextInputClient {
+            client.unmarkText()
+            return true
+        }
+        if Self.performUnmarkText(on: sender) {
+            return true
+        }
+        if let client = self.client() as? NSTextInputClient {
+            client.unmarkText()
+            return true
+        }
+        if Self.performUnmarkText(on: self.client()) {
+            return true
+        }
+        return false
+    }
+
+    private static func performUnmarkText(on target: Any?) -> Bool {
+        guard let object = target as? NSObjectProtocol,
+              object.responds(to: unmarkTextSelector) else {
+            return false
+        }
+
+        _ = object.perform(unmarkTextSelector)
+        return true
     }
 }
