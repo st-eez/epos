@@ -346,6 +346,26 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(script.contains("EPOS_ENABLE_INPUT_METHOD=1 only for a guarded manual input-method smoke"))
     }
 
+    func testInputMethodSmokeScriptLaunchesProcessBeforeSelecting() throws {
+        let root = repositoryRoot()
+        let script = try String(
+            contentsOf: root.appendingPathComponent("scripts/smoke-input-method.sh"),
+            encoding: .utf8
+        )
+
+        let launchRange = try XCTUnwrap(script.range(of: "open -na \"$install_input_method_path\""))
+        let selectRange = try XCTUnwrap(script.range(of: "select_input_source \"$diagnostic_input_source_id\""))
+
+        XCTAssertLessThan(launchRange.lowerBound, selectRange.lowerBound)
+        XCTAssertTrue(script.contains("TISSelectInputSource(mode)"))
+        XCTAssertTrue(script.contains("trap cleanup EXIT INT TERM"))
+        XCTAssertTrue(script.contains("letters_text"))
+        XCTAssertTrue(script.contains("diagnostic_text"))
+        XCTAssertTrue(script.contains("pasteboard_before"))
+        XCTAssertTrue(script.contains("pasteboard_after"))
+        XCTAssertFalse(script.contains("DisabledInputMethods"))
+    }
+
     func testRecordingIndicatorKeepsRecentTranscriptVisible() {
         let transcript = "open the project and run the full test suite then summarize the last failure in the final response"
         let display = RecordingIndicatorSurface.recentDisplayText(transcript, maxCharacters: 54)
