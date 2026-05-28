@@ -134,7 +134,8 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         textInsertionSession = ProgressiveTranscriptInsertionSession(
             insertionSession: textInsertion.startInsertionSession(),
-            canonicalize: { [corrections] text in corrections.canonicalize(text) }
+            canonicalize: { [corrections] text in corrections.canonicalize(text) },
+            target: AXInsertionTargetObserver()
         )
         transcriptTiming.start()
         indicator.show()
@@ -238,7 +239,8 @@ public final class AppCoordinator: ObservableObject {
 
         let oneShotSession = ProgressiveTranscriptInsertionSession(
             insertionSession: textInsertion.startInsertionSession(),
-            canonicalize: { [corrections] text in corrections.canonicalize(text) }
+            canonicalize: { [corrections] text in corrections.canonicalize(text) },
+            target: AXInsertionTargetObserver()
         )
         oneShotSession.acceptFinalTranscript(text)
         oneShotSession.finish()
