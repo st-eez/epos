@@ -49,7 +49,7 @@ public final class AppCoordinator: ObservableObject {
     public init(
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
-        textInsertion: TextInsertionBackend = PasteTextInjector(),
+        textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {

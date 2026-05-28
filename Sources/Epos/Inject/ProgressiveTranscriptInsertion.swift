@@ -1,5 +1,11 @@
 import Foundation
 
+/// Streams a live transcript into a `TextInsertionSession`, converging on the
+/// recognizer's final text. Volatile partials only ever *extend* the inserted
+/// text (append-only, so they never thrash the field), while each authoritative
+/// per-segment final *reconciles* — backspacing any diverged suffix and retyping
+/// it — so a recognizer revision corrects the field instead of stranding a stale
+/// word. End state equals the canonicalized final transcript exactly.
 public final class ProgressiveTranscriptInsertionSession {
     private let insertionSession: any TextInsertionSession
     private let canonicalize: (String) -> String
@@ -29,7 +35,7 @@ public final class ProgressiveTranscriptInsertionSession {
     public func acceptFinalTranscript(_ text: String) {
         guard !didFinish else { return }
         previousStableCandidate = ""
-        commitPrefix(canonicalize(text))
+        reconcile(to: canonicalize(text))
     }
 
     public func finish() {
@@ -44,9 +50,13 @@ public final class ProgressiveTranscriptInsertionSession {
         insertionSession.cancel()
     }
 
+    /// Append-only commit used for volatile partials: only grows the inserted text
+    /// when `targetPrefix` extends what's already committed. A partial that revises
+    /// committed text is ignored here — partials thrash, so we never retract on
+    /// them; the authoritative per-segment final reconciles any divergence.
     private func commitPrefix(_ targetPrefix: String) {
         guard targetPrefix.hasPrefix(committedText) else {
-            log.info("progressive insert paused reason=prefix-revision committedChars=\(committedText.utf16.count) targetChars=\(targetPrefix.utf16.count)")
+            log.info("progressive insert held reason=partial-revision committedChars=\(committedText.utf16.count) targetChars=\(targetPrefix.utf16.count)")
             return
         }
 
@@ -56,6 +66,24 @@ public final class ProgressiveTranscriptInsertionSession {
         insertionSession.insert(delta)
         committedText = targetPrefix
         log.info("progressive insert committed deltaChars=\(delta.utf16.count) totalChars=\(committedText.utf16.count)")
+    }
+
+    /// Authoritative reconcile used for finals: converge the inserted text to
+    /// `target` exactly. Backspaces the suffix that diverges from `target` and
+    /// types the corrected remainder, so a final that revised an earlier word
+    /// fixes the field instead of stranding the stale word and dropping the tail.
+    private func reconcile(to target: String) {
+        guard target != committedText else { return }
+
+        let shared = committedText.commonPrefix(with: target)
+        let deleteCount = committedText.count - shared.count
+        let insertion = String(target.dropFirst(shared.count))
+
+        if deleteCount > 0 { insertionSession.deleteBackward(count: deleteCount) }
+        if !insertion.isEmpty { insertionSession.insert(insertion) }
+
+        committedText = target
+        log.info("progressive reconcile deletedChars=\(deleteCount) insertedChars=\(insertion.utf16.count) totalChars=\(committedText.utf16.count)")
     }
 
     static func stablePrefixCandidate(in text: String) -> String {

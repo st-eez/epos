@@ -195,17 +195,6 @@ final class SmokeTests: XCTestCase {
         XCTAssertGreaterThan(loudHeights.max() ?? 0, quietHeights.max() ?? 0)
     }
 
-    func testRecordingIndicatorPresentationIncludesTranscript() {
-        let transcript = "stable words stream into the focused field"
-
-        let preview = RecordingIndicatorSurface.presentation(transcript: transcript)
-
-        XCTAssertEqual(preview.transcriptText, transcript)
-        XCTAssertTrue(preview.hasTranscript)
-        XCTAssertGreaterThanOrEqual(preview.minWidth, 260)
-        XCTAssertGreaterThanOrEqual(preview.maxTranscriptWidth, 400)
-    }
-
     func testInlineIndicatorFallsBackWhenCaretRectIsUnavailable() {
         let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
         let pillSize = CGSize(width: 144, height: 36)
@@ -279,6 +268,31 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(project.contains("com.steez.inputmethod.Epos"))
     }
 
+    func testKeystrokeInjectorChunksWithinUnicodeLimitOnGraphemeBoundaries() {
+        // Short text stays a single event.
+        XCTAssertEqual(
+            KeystrokeTextInjector.unicodeChunks(of: "hello world", maxUTF16Units: 20)
+                .map { String(utf16CodeUnits: $0, count: $0.count) },
+            ["hello world"]
+        )
+
+        // Long text splits without exceeding the per-event UTF-16 budget and
+        // reassembles to the original.
+        let long = String(repeating: "ab", count: 40) // 80 UTF-16 units
+        let chunks = KeystrokeTextInjector.unicodeChunks(of: long, maxUTF16Units: 20)
+        XCTAssertTrue(chunks.allSatisfy { $0.count <= 20 })
+        XCTAssertEqual(chunks.map { String(utf16CodeUnits: $0, count: $0.count) }.joined(), long)
+
+        // A grapheme whose UTF-16 width exceeds the budget is never split across
+        // events — it rides intact in its own chunk.
+        let emoji = "👍🏽" // surrogate pair + skin-tone modifier: 4 UTF-16 units
+        let emojiChunks = KeystrokeTextInjector.unicodeChunks(of: "a" + emoji + "b", maxUTF16Units: 2)
+        XCTAssertEqual(
+            emojiChunks.map { String(utf16CodeUnits: $0, count: $0.count) },
+            ["a", emoji, "b"]
+        )
+    }
+
     func testProgressiveInsertionWaitsForRepeatedStableWords() {
         let backend = RecordingTextInsertionBackend()
         let session = ProgressiveTranscriptInsertionSession(
@@ -330,7 +344,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(backend.insertedTexts, ["run --verbose ", "mode now"])
     }
 
-    func testProgressiveInsertionPausesWhenStableTextIsContradicted() {
+    func testProgressiveInsertionSelfCorrectsWhenFinalRevisesCommittedWord() {
         let backend = RecordingTextInsertionBackend()
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
@@ -339,14 +353,19 @@ final class SmokeTests: XCTestCase {
 
         session.acceptPartialTranscript("hello world foo")
         session.acceptPartialTranscript("hello world bar")
-        // The recognizer revises an already-committed word ("world" -> "there").
-        // Epos must not delete or rewrite the inserted prefix; it stops streaming.
+        // Partials only append, so the volatile revision is held, not retracted.
         session.acceptPartialTranscript("hello there bar")
-        // Final still does not extend the inserted prefix, so it inserts nothing more.
+        // The authoritative final revises an already-typed word ("world" -> "there").
+        // The session backspaces the diverged suffix and retypes the corrected text.
         session.acceptFinalTranscript("hello there bar")
         session.finish()
 
-        XCTAssertEqual(backend.insertedTexts, ["hello world "])
+        XCTAssertEqual(
+            backend.operations,
+            [.insert("hello world "), .delete(6), .insert("there bar")]
+        )
+        // The field converges exactly to the recognizer's final transcript.
+        XCTAssertEqual(backend.fieldText, "hello there bar")
         XCTAssertEqual(backend.finishCount, 1)
         XCTAssertEqual(backend.cancelCount, 0)
     }
@@ -398,24 +417,6 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertEqual(backend.insertedTexts, ["hello final"])
         XCTAssertEqual(backend.finishCount, 1)
-    }
-
-    func testRecordingIndicatorKeepsRecentTranscriptVisible() {
-        let transcript = "open the project and run the full test suite then summarize the last failure in the final response"
-        let display = RecordingIndicatorSurface.recentDisplayText(transcript, maxCharacters: 54)
-
-        XCTAssertTrue(display.hasPrefix("..."))
-        XCTAssertFalse(display.contains("open the project"))
-        XCTAssertTrue(display.contains("last failure in the final response"))
-    }
-
-    func testRecordingIndicatorDefaultPreviewKeepsNewestText() {
-        let transcript = (0..<80).map { "word\($0)" }.joined(separator: " ")
-        let display = RecordingIndicatorSurface.recentDisplayText(transcript)
-
-        XCTAssertTrue(display.hasPrefix("..."))
-        XCTAssertFalse(display.contains("word0 word1 word2"))
-        XCTAssertTrue(display.contains("word77 word78 word79"))
     }
 
     func testDiagnosticLogSinkWritesDirectFile() throws {
@@ -558,16 +559,38 @@ private func repositoryRoot() -> URL {
 }
 
 private final class RecordingTextInsertionBackend: TextInsertionBackend {
-    private(set) var insertedTexts: [String] = []
+    enum Operation: Equatable {
+        case insert(String)
+        case delete(Int)
+    }
+
+    private(set) var operations: [Operation] = []
     private(set) var finishCount = 0
     private(set) var cancelCount = 0
+
+    /// Inserted strings, in order — convenience for tests that only care about
+    /// what was typed.
+    var insertedTexts: [String] {
+        operations.compactMap { if case .insert(let text) = $0 { text } else { nil } }
+    }
+
+    /// Replays the recorded inserts/deletes to reconstruct the focused field's
+    /// contents — the assertion that matters for self-correction.
+    var fieldText: String {
+        operations.reduce(into: "") { field, operation in
+            switch operation {
+            case .insert(let text): field += text
+            case .delete(let count): field.removeLast(min(count, field.count))
+            }
+        }
+    }
 
     func startInsertionSession() -> any TextInsertionSession {
         RecordingTextInsertionSession(backend: self)
     }
 
-    fileprivate func record(_ text: String) {
-        insertedTexts.append(text)
+    fileprivate func record(_ operation: Operation) {
+        operations.append(operation)
     }
 
     private func finishSession() {
@@ -586,7 +609,11 @@ private final class RecordingTextInsertionBackend: TextInsertionBackend {
         }
 
         func insert(_ text: String) {
-            backend.record(text)
+            backend.record(.insert(text))
+        }
+
+        func deleteBackward(count: Int) {
+            backend.record(.delete(count))
         }
 
         func finish() {

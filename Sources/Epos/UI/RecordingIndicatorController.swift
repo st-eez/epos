@@ -10,7 +10,7 @@ public final class RecordingIndicatorController {
     private var panel: NSPanel?
     private let log = EposLogger(category: "indicator")
 
-    private static let panelSize = CGSize(width: 700, height: 150)
+    private static let panelSize = CGSize(width: 180, height: 90)
 
     public init() {}
 
@@ -33,6 +33,8 @@ public final class RecordingIndicatorController {
         panel.backgroundColor = .clear
         panel.isOpaque = false
         panel.hasShadow = false
+        // Purely informational HUD — never intercept clicks meant for the app below.
+        panel.ignoresMouseEvents = true
 
         let host = NSHostingView(rootView: content)
         host.frame = frame

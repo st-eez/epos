@@ -11,21 +11,18 @@ public struct RecordingIndicator: View {
     public var body: some View {
         RecordingIndicatorSurface(
             state: coordinator.state,
-            transcript: coordinator.displayText,
             amplitude: coordinator.amplitude
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.horizontal, 20)
-        .padding(.bottom, 10)
+        .padding(.bottom, 20)
     }
 }
 
+/// Compact, non-interactive recording pill: a status dot + live audio meter.
+/// The transcript itself streams straight into the focused field, so the pill
+/// never echoes it — it only signals that Epos is listening and how loud.
 struct RecordingIndicatorSurface: View {
-    nonisolated private static let maxDisplayLines = 5
-    nonisolated private static let maxDisplayCharacters = 240
-
     let state: CoordinatorState
-    let transcript: String
     let amplitude: Float
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
@@ -34,46 +31,24 @@ struct RecordingIndicatorSurface: View {
 
     init(
         state: CoordinatorState,
-        transcript: String,
         amplitude: Float
     ) {
         self.state = state
-        self.transcript = transcript
         self.amplitude = amplitude
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 9) {
-            statusCluster
-            if let transcriptText = presentation.transcriptText {
-                self.transcriptText(transcriptText)
-            }
-        }
-        .padding(.horizontal, presentation.horizontalPadding)
-        .padding(.vertical, presentation.verticalPadding)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-        .background(
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .fill(panelColor.opacity(0.9))
-        )
-        .overlay(surfaceStroke)
-        .shadow(color: .black.opacity(0.17), radius: 16, x: 0, y: 9)
-        .frame(minWidth: presentation.minWidth, maxWidth: presentation.maxWidth, alignment: .center)
-        .animation(.easeOut(duration: 0.08), value: amplitude)
-    }
-
-    private var presentation: RecordingIndicatorPresentation {
-        Self.presentation(transcript: transcript)
-    }
-
-    private var statusCluster: some View {
         HStack(spacing: 7) {
             statusDot
             amplitudeMeter
         }
-        .frame(height: 24)
-        .padding(.horizontal, 6)
-        .background(.white.opacity(0.035), in: Capsule())
+        .padding(.horizontal, 12)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
+        .background(Capsule(style: .continuous).fill(panelColor.opacity(0.9)))
+        .overlay(surfaceStroke)
+        .shadow(color: .black.opacity(0.17), radius: 12, x: 0, y: 6)
+        .animation(.easeOut(duration: 0.08), value: amplitude)
     }
 
     private var statusDot: some View {
@@ -94,23 +69,8 @@ struct RecordingIndicatorSurface: View {
         .frame(width: 24, height: 20)
     }
 
-    private func transcriptText(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: 14, weight: presentation.hasTranscript ? .semibold : .medium))
-            .foregroundStyle(.white.opacity(presentation.hasTranscript ? 0.94 : 0.56))
-            .lineLimit(Self.maxDisplayLines)
-            .lineSpacing(1)
-            .truncationMode(.head)
-            .fixedSize(horizontal: false, vertical: true)
-            .frame(width: presentation.maxTranscriptWidth, alignment: .leading)
-            .frame(minHeight: 35, alignment: .leading)
-            .transaction { transaction in
-                transaction.animation = nil
-            }
-    }
-
     private var surfaceStroke: some View {
-        RoundedRectangle(cornerRadius: 22, style: .continuous)
+        Capsule(style: .continuous)
             .strokeBorder(
                 LinearGradient(
                     colors: [.white.opacity(0.18), .white.opacity(0.07), teal.opacity(0.1)],
@@ -129,21 +89,6 @@ struct RecordingIndicatorSurface: View {
         }
     }
 
-    nonisolated static func presentation(
-        transcript: String
-    ) -> RecordingIndicatorPresentation {
-        let transcriptText = recentDisplayText(transcript)
-        return RecordingIndicatorPresentation(
-            transcriptText: transcriptText,
-            hasTranscript: !transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-            minWidth: 260,
-            maxWidth: 500,
-            maxTranscriptWidth: 410,
-            horizontalPadding: 10,
-            verticalPadding: 7
-        )
-    }
-
     nonisolated static func barHeight(_ index: Int, amplitude: Float) -> CGFloat {
         let quiet: [CGFloat] = [4, 6, 5, 7, 5]
         let loud: [CGFloat] = [10, 17, 14, 19, 15]
@@ -158,33 +103,8 @@ struct RecordingIndicatorSurface: View {
         return quiet[index] + (loud[index] - quiet[index]) * level
     }
 
-    nonisolated static func recentDisplayText(
-        _ text: String,
-        maxCharacters: Int = maxDisplayCharacters
-    ) -> String {
-        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !cleaned.isEmpty else { return "Listening..." }
-        guard cleaned.count > maxCharacters else { return cleaned }
-
-        let suffixStart = cleaned.index(cleaned.endIndex, offsetBy: -maxCharacters)
-        let suffix = cleaned[suffixStart...]
-        let boundary = suffix.firstIndex(where: { $0.isWhitespace }) ?? suffix.startIndex
-        let recent = suffix[boundary...].trimmingCharacters(in: .whitespacesAndNewlines)
-        return recent.isEmpty ? String(suffix) : "... \(recent)"
-    }
-
     nonisolated private static func visualLevel(_ amplitude: Float) -> CGFloat {
         let normalized = min(1, max(0, CGFloat(amplitude) / 0.075))
         return pow(normalized, 0.55)
     }
-}
-
-struct RecordingIndicatorPresentation {
-    let transcriptText: String?
-    let hasTranscript: Bool
-    let minWidth: CGFloat
-    let maxWidth: CGFloat
-    let maxTranscriptWidth: CGFloat
-    let horizontalPadding: CGFloat
-    let verticalPadding: CGFloat
 }
