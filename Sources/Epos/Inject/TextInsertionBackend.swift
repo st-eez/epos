@@ -6,6 +6,36 @@ public protocol TextInsertionBackend {
     func insert(_ text: String)
 }
 
+public protocol FallibleTextInsertionBackend: TextInsertionBackend {
+    var isHealthy: Bool { get }
+
+    @discardableResult
+    func tryInsert(_ text: String) -> Bool
+}
+
+public final class TextInsertionBackendRouter: TextInsertionBackend {
+    private let native: (any FallibleTextInsertionBackend)?
+    private let fallback: any TextInsertionBackend
+
+    public init(
+        native: (any FallibleTextInsertionBackend)?,
+        fallback: any TextInsertionBackend
+    ) {
+        self.native = native
+        self.fallback = fallback
+    }
+
+    public func insert(_ text: String) {
+        guard !text.isEmpty else { return }
+
+        if let native, native.isHealthy, native.tryInsert(text) {
+            return
+        }
+
+        fallback.insert(text)
+    }
+}
+
 /// Pastes text into the frontmost app via clipboard + synthesized cmd-v,
 /// restoring the previous clipboard contents afterwards.
 public final class PasteTextInjector: TextInsertionBackend {

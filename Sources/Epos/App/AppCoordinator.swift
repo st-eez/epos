@@ -47,7 +47,10 @@ public final class AppCoordinator: ObservableObject {
     public init(
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
-        textInsertion: TextInsertionBackend = PasteTextInjector(),
+        textInsertion: TextInsertionBackend = TextInsertionBackendRouter(
+            native: NativeTextInsertionClient(),
+            fallback: PasteTextInjector()
+        ),
         settings: Settings = Settings.load(),
         autoStart: Bool = true
     ) {
@@ -197,12 +200,15 @@ public final class AppCoordinator: ObservableObject {
         let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
-        if hasTranscribedText {
-            textInsertion.insert(corrections.canonicalize(finalText))
-        }
+        if hasTranscribedText { insertFinalTranscript(finalText) }
 
         await resetToIdle()
         log.info("recording done (finalChars=\(self.finalText.count))")
+    }
+
+    func insertFinalTranscript(_ text: String) {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+        textInsertion.insert(corrections.canonicalize(text))
     }
 
     /// Common teardown shared by every exit from `runSession`. Each piece is idempotent

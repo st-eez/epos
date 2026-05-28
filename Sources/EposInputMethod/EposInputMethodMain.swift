@@ -4,6 +4,9 @@ import InputMethodKit
 @MainActor
 private final class EposInputMethodApplication {
     private let server: IMKServer
+    private let nativeMessageServer = EposNativeMessageServer { text in
+        EposInputController.commitExternalText(text)
+    }
 
     init() {
         guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
@@ -18,6 +21,7 @@ private final class EposInputMethodApplication {
 
     func run() -> Never {
         NSApplication.shared.setActivationPolicy(.accessory)
+        nativeMessageServer.start()
         withExtendedLifetime(server) {
             NSApplication.shared.run()
         }

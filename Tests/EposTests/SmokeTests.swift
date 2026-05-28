@@ -366,6 +366,103 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(script.contains("DisabledInputMethods"))
     }
 
+    @MainActor
+    func testCoordinatorUsesPasteFallbackWhenNativeInsertionUnavailable() {
+        let native = FakeNativeInsertionBackend(isHealthy: false)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.insertFinalTranscript("hello fallback")
+
+        XCTAssertEqual(native.insertedTexts, [])
+        XCTAssertEqual(paste.insertedTexts, ["hello fallback"])
+    }
+
+    @MainActor
+    func testCoordinatorUsesNativeInsertionWhenAvailable() {
+        let native = FakeNativeInsertionBackend(isHealthy: true)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.insertFinalTranscript("hello native")
+
+        XCTAssertEqual(native.insertedTexts, ["hello native"])
+        XCTAssertEqual(paste.insertedTexts, [])
+    }
+
+    @MainActor
+    func testCoordinatorFallsBackWhenNativeInsertionAttemptFails() {
+        let native = FakeNativeInsertionBackend(isHealthy: true, shouldSucceed: false)
+        let paste = RecordingTextInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: TextInsertionBackendRouter(native: native, fallback: paste),
+            autoStart: false
+        )
+
+        coordinator.insertFinalTranscript("hello after failed native")
+
+        XCTAssertEqual(native.insertedTexts, ["hello after failed native"])
+        XCTAssertEqual(paste.insertedTexts, ["hello after failed native"])
+    }
+
+    func testNativeInsertionHealthRequiresSelectedInputMethod() {
+        var requests: [NativeTextInsertionRequest] = []
+        let client = NativeTextInsertionClient(
+            currentInputSourceID: { "com.apple.keylayout.ABC" },
+            sendRequest: { request in
+                requests.append(request)
+                return true
+            }
+        )
+
+        XCTAssertFalse(client.isHealthy)
+        XCTAssertEqual(requests, [])
+    }
+
+    func testNativeInsertionHealthPingsWhenInputMethodIsSelected() {
+        var requests: [NativeTextInsertionRequest] = []
+        let client = NativeTextInsertionClient(
+            currentInputSourceID: { NativeTextInsertionClient.diagnosticInputSourceID },
+            sendRequest: { request in
+                requests.append(request)
+                return true
+            }
+        )
+
+        XCTAssertTrue(client.isHealthy)
+        XCTAssertEqual(requests, [.ping])
+    }
+
+    func testNativeInsertionSendsFinalTextOnlyWhenInputMethodIsSelected() {
+        var selectedRequests: [NativeTextInsertionRequest] = []
+        let selectedClient = NativeTextInsertionClient(
+            currentInputSourceID: { NativeTextInsertionClient.diagnosticInputSourceID },
+            sendRequest: { request in
+                selectedRequests.append(request)
+                return true
+            }
+        )
+        var fallbackRequests: [NativeTextInsertionRequest] = []
+        let fallbackClient = NativeTextInsertionClient(
+            currentInputSourceID: { "com.apple.keylayout.ABC" },
+            sendRequest: { request in
+                fallbackRequests.append(request)
+                return true
+            }
+        )
+
+        XCTAssertTrue(selectedClient.tryInsert("hello native"))
+        XCTAssertFalse(fallbackClient.tryInsert("hello fallback"))
+        XCTAssertEqual(selectedRequests, [.insert("hello native")])
+        XCTAssertEqual(fallbackRequests, [])
+    }
+
     func testRecordingIndicatorKeepsRecentTranscriptVisible() {
         let transcript = "open the project and run the full test suite then summarize the last failure in the final response"
         let display = RecordingIndicatorSurface.recentDisplayText(transcript, maxCharacters: 54)
@@ -512,6 +609,34 @@ private func methodBody(named methodName: String, in source: String) -> String? 
     }
 
     return nil
+}
+
+private final class RecordingTextInsertionBackend: TextInsertionBackend {
+    private(set) var insertedTexts: [String] = []
+
+    func insert(_ text: String) {
+        insertedTexts.append(text)
+    }
+}
+
+private final class FakeNativeInsertionBackend: FallibleTextInsertionBackend {
+    var isHealthy: Bool
+    private let shouldSucceed: Bool
+    private(set) var insertedTexts: [String] = []
+
+    init(isHealthy: Bool, shouldSucceed: Bool = true) {
+        self.isHealthy = isHealthy
+        self.shouldSucceed = shouldSucceed
+    }
+
+    func insert(_ text: String) {
+        _ = tryInsert(text)
+    }
+
+    func tryInsert(_ text: String) -> Bool {
+        insertedTexts.append(text)
+        return shouldSucceed
+    }
 }
 
 private func makePCMBuffer() throws -> AVAudioPCMBuffer {
