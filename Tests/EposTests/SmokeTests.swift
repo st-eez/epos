@@ -293,7 +293,7 @@ final class SmokeTests: XCTestCase {
         )
     }
 
-    func testProgressiveInsertionWaitsForRepeatedStableWords() {
+    func testProgressiveInsertionStreamsEachPartialImmediately() {
         let backend = RecordingTextInsertionBackend()
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
@@ -307,12 +307,15 @@ final class SmokeTests: XCTestCase {
         session.acceptFinalTranscript("hello world from epos")
         session.finish()
 
-        XCTAssertEqual(backend.insertedTexts, ["hello ", "world ", "from epos"])
+        // Each partial appends its new tail with no confirmation delay; the final
+        // equals the committed text and is a no-op.
+        XCTAssertEqual(backend.insertedTexts, ["hello", " world", " from", " epos"])
+        XCTAssertEqual(backend.fieldText, "hello world from epos")
         XCTAssertEqual(backend.finishCount, 1)
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
-    func testProgressiveInsertionDoesNotCommitOneOffRevision() {
+    func testProgressiveInsertionCorrectsRevisionLiveOnPartials() {
         let backend = RecordingTextInsertionBackend()
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
@@ -321,11 +324,17 @@ final class SmokeTests: XCTestCase {
 
         session.acceptPartialTranscript("open the")
         session.acceptPartialTranscript("open the door")
+        // The partial revises an already-typed word ("the" -> "a"); the session
+        // backspaces the diverged suffix and retypes it live, no waiting for a final.
         session.acceptPartialTranscript("open a door")
         session.acceptFinalTranscript("open a door")
         session.finish()
 
-        XCTAssertEqual(backend.insertedTexts, ["open ", "a door"])
+        XCTAssertEqual(
+            backend.operations,
+            [.insert("open the"), .insert(" door"), .delete(8), .insert("a door")]
+        )
+        XCTAssertEqual(backend.fieldText, "open a door")
     }
 
     func testProgressiveInsertionAppliesCanonicalizerBeforeStreaming() {
@@ -341,10 +350,11 @@ final class SmokeTests: XCTestCase {
         session.acceptFinalTranscript("run dash dash verbose mode now")
         session.finish()
 
-        XCTAssertEqual(backend.insertedTexts, ["run --verbose ", "mode now"])
+        XCTAssertEqual(backend.insertedTexts, ["run --verbose mode", " now"])
+        XCTAssertEqual(backend.fieldText, "run --verbose mode now")
     }
 
-    func testProgressiveInsertionSelfCorrectsWhenFinalRevisesCommittedWord() {
+    func testProgressiveInsertionSelfCorrectsLiveWhenPartialRevisesTypedWord() {
         let backend = RecordingTextInsertionBackend()
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
@@ -352,17 +362,20 @@ final class SmokeTests: XCTestCase {
         )
 
         session.acceptPartialTranscript("hello world foo")
+        // Each revising partial backspaces the diverged suffix and retypes it, so
+        // the correction lands live instead of waiting for the segment final.
         session.acceptPartialTranscript("hello world bar")
-        // Partials only append, so the volatile revision is held, not retracted.
         session.acceptPartialTranscript("hello there bar")
-        // The authoritative final revises an already-typed word ("world" -> "there").
-        // The session backspaces the diverged suffix and retypes the corrected text.
         session.acceptFinalTranscript("hello there bar")
         session.finish()
 
         XCTAssertEqual(
             backend.operations,
-            [.insert("hello world "), .delete(6), .insert("there bar")]
+            [
+                .insert("hello world foo"),
+                .delete(3), .insert("bar"),
+                .delete(9), .insert("there bar")
+            ]
         )
         // The field converges exactly to the recognizer's final transcript.
         XCTAssertEqual(backend.fieldText, "hello there bar")
@@ -384,7 +397,7 @@ final class SmokeTests: XCTestCase {
         session.acceptPartialTranscript("hello world from epos now")
         session.cancel()
 
-        XCTAssertEqual(backend.insertedTexts, ["hello world "])
+        XCTAssertEqual(backend.insertedTexts, ["hello world from", " epos"])
         XCTAssertEqual(backend.cancelCount, 1)
         XCTAssertEqual(backend.finishCount, 0)
     }
@@ -404,7 +417,7 @@ final class SmokeTests: XCTestCase {
         session.acceptFinalTranscript("hello world from epos")
         session.finish()
 
-        XCTAssertEqual(backend.insertedTexts, ["hello world ", "from epos"])
+        XCTAssertEqual(backend.insertedTexts, ["hello world from", " epos"])
         XCTAssertEqual(backend.finishCount, 1)
     }
 
@@ -512,6 +525,25 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.volatileResults))
         XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.fastResults))
         XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.alternativeTranscriptions))
+    }
+
+    func testSpeechContextualStringsSkipsPureSymbolsAndDeduplicates() {
+        let canonicalizer = TranscriptCanonicalizer(rules: [
+            .init(canonical: "CMUX", aliases: ["see mux"]),
+            .init(canonical: "--", aliases: ["dash dash"]),
+            .init(canonical: "/", aliases: ["slash"]),
+            .init(canonical: "cmux", aliases: ["cmox"]),
+            .init(canonical: "Epos", aliases: ["epos"])
+        ])
+
+        // Pure-punctuation canonicals are dropped; case-insensitive duplicates collapse.
+        XCTAssertEqual(canonicalizer.speechContextualStrings, ["CMUX", "Epos"])
+    }
+
+    func testAnalysisContextNilForEmptyOrBlankVocabulary() {
+        XCTAssertNil(Transcriber.analysisContext(contextualStrings: []))
+        XCTAssertNil(Transcriber.analysisContext(contextualStrings: ["   ", ""]))
+        XCTAssertNotNil(Transcriber.analysisContext(contextualStrings: ["Epos"]))
     }
 
     /// Regression: pre-fix, `Transcriber.finish()` hung in `await drain?.value`

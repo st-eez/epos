@@ -61,12 +61,18 @@ public final class Transcriber: @unchecked Sendable {
     /// installed under `lock` BEFORE the await, so a concurrent `finish()` sees the session
     /// and can drive teardown via `startTask.value`.
     /// Throws `TranscriberError.alreadyRunning` if a prior session hasn't been `finish`ed.
-    public func start() async throws -> AsyncStream<TranscriptEvent> {
+    ///
+    /// `contextualStrings` biases recognition toward known vocabulary via
+    /// `AnalysisContext`. It defaults to empty, so the live recording path runs
+    /// unbiased; only the recognition-bias evaluation passes a non-empty list while
+    /// the approach is being validated.
+    public func start(contextualStrings: [String] = []) async throws -> AsyncStream<TranscriptEvent> {
         let alreadyRunning = lock.withLock { self.session != nil }
         if alreadyRunning {
             throw TranscriberError.alreadyRunning
         }
         let transcriber = Self.makeTranscriber(locale: locale)
+        let analysisContext = Self.analysisContext(contextualStrings: contextualStrings)
 
         let (inputStream, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
         let (eventStream, eventCont) = AsyncStream<TranscriptEvent>.makeStream()
@@ -97,6 +103,15 @@ public final class Transcriber: @unchecked Sendable {
         }
 
         let startT = Task<Void, Error> {
+            if let analysisContext {
+                do {
+                    try await analyzer.setContext(analysisContext)
+                } catch {
+                    // Context is a recognition-quality optimization, not load-bearing:
+                    // a failure to apply it must not abort the session.
+                    Self.log.error("speech context apply failed: \(String(describing: error))")
+                }
+            }
             try await analyzer.start(inputSequence: inputStream)
         }
 
@@ -127,6 +142,21 @@ public final class Transcriber: @unchecked Sendable {
 
     static func makeTranscriber(locale: Locale) -> SpeechTranscriber {
         SpeechTranscriber(locale: locale, preset: speechPreset)
+    }
+
+    /// Build an `AnalysisContext` from a bias list, trimming and de-duplicating.
+    /// Returns nil for an empty list so the caller skips `setContext` entirely.
+    static func analysisContext(contextualStrings: [String]) -> AnalysisContext? {
+        let strings = Array(contextualStrings
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .prefix(TranscriptCanonicalizer.maxSpeechContextualStringCount))
+        guard !strings.isEmpty else { return nil }
+
+        let context = AnalysisContext()
+        context.contextualStrings[.general] = strings
+        log.info("applying speech context count=\(strings.count)")
+        return context
     }
 
     private static func logFinalAlternativesIfEnabled(_ result: SpeechTranscriber.Result) {

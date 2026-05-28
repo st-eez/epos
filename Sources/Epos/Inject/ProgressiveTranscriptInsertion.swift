@@ -1,18 +1,27 @@
 import Foundation
 
 /// Streams a live transcript into a `TextInsertionSession`, converging on the
-/// recognizer's final text. Volatile partials only ever *extend* the inserted
-/// text (append-only, so they never thrash the field), while each authoritative
-/// per-segment final *reconciles* — backspacing any diverged suffix and retyping
-/// it — so a recognizer revision corrects the field instead of stranding a stale
-/// word. End state equals the canonicalized final transcript exactly.
+/// recognizer's text as it arrives. Every update — volatile partial or
+/// authoritative per-segment final — reconciles the inserted text with a minimal
+/// edit: it backspaces the suffix that diverges from the new target and types the
+/// corrected remainder.
+///
+/// So the freshest words stream in as soon as the recognizer produces them (the
+/// lowest latency it allows), and a later revision — even of a word already
+/// typed — corrects the field in place instead of stranding a stale word or
+/// waiting for the segment final to catch up. End state equals the canonicalized
+/// final transcript exactly.
+///
+/// The trade-off is visible churn: when the recognizer revises a word it has
+/// already emitted, that word is backspaced and retyped live. This is the
+/// deliberate choice to favor latency over the earlier append-only policy, which
+/// held back the newest words by ~1 confirmation cycle to avoid that churn.
 public final class ProgressiveTranscriptInsertionSession {
     private let insertionSession: any TextInsertionSession
     private let canonicalize: (String) -> String
     private let log = EposLogger(category: "inject")
 
     private var committedText = ""
-    private var previousStableCandidate = ""
     private var didFinish = false
 
     public init(
@@ -23,18 +32,18 @@ public final class ProgressiveTranscriptInsertionSession {
         self.canonicalize = canonicalize
     }
 
+    /// Volatile partial: reconcile to the latest text immediately so the newest
+    /// words appear with the lowest latency the recognizer allows. A revised word
+    /// is corrected live rather than held back.
     public func acceptPartialTranscript(_ text: String) {
         guard !didFinish else { return }
-        let canonicalText = canonicalize(text)
-        let stableCandidate = Self.stablePrefixCandidate(in: canonicalText)
-        let confirmedPrefix = Self.commonPrefixAtWordBoundary(previousStableCandidate, stableCandidate)
-        previousStableCandidate = stableCandidate
-        commitPrefix(confirmedPrefix)
+        reconcile(to: canonicalize(text))
     }
 
+    /// Authoritative per-segment final: reconcile to the committed transcript so
+    /// the field matches the recognizer's final text for the segment exactly.
     public func acceptFinalTranscript(_ text: String) {
         guard !didFinish else { return }
-        previousStableCandidate = ""
         reconcile(to: canonicalize(text))
     }
 
@@ -50,28 +59,11 @@ public final class ProgressiveTranscriptInsertionSession {
         insertionSession.cancel()
     }
 
-    /// Append-only commit used for volatile partials: only grows the inserted text
-    /// when `targetPrefix` extends what's already committed. A partial that revises
-    /// committed text is ignored here — partials thrash, so we never retract on
-    /// them; the authoritative per-segment final reconciles any divergence.
-    private func commitPrefix(_ targetPrefix: String) {
-        guard targetPrefix.hasPrefix(committedText) else {
-            log.info("progressive insert held reason=partial-revision committedChars=\(committedText.utf16.count) targetChars=\(targetPrefix.utf16.count)")
-            return
-        }
-
-        let delta = String(targetPrefix.dropFirst(committedText.count))
-        guard !delta.isEmpty else { return }
-
-        insertionSession.insert(delta)
-        committedText = targetPrefix
-        log.info("progressive insert committed deltaChars=\(delta.utf16.count) totalChars=\(committedText.utf16.count)")
-    }
-
-    /// Authoritative reconcile used for finals: converge the inserted text to
-    /// `target` exactly. Backspaces the suffix that diverges from `target` and
-    /// types the corrected remainder, so a final that revised an earlier word
-    /// fixes the field instead of stranding the stale word and dropping the tail.
+    /// Converge the inserted text to `target` with a minimal edit: backspace the
+    /// suffix that diverges from `target`, then type the corrected remainder.
+    /// Shared by partials and finals so the field always tracks the recognizer's
+    /// current best transcript and self-heals even when canonicalization reflows
+    /// text across a previously committed boundary.
     private func reconcile(to target: String) {
         guard target != committedText else { return }
 
@@ -84,72 +76,5 @@ public final class ProgressiveTranscriptInsertionSession {
 
         committedText = target
         log.info("progressive reconcile deletedChars=\(deleteCount) insertedChars=\(insertion.utf16.count) totalChars=\(committedText.utf16.count)")
-    }
-
-    static func stablePrefixCandidate(in text: String) -> String {
-        guard !text.isEmpty else { return "" }
-
-        let wordRanges = text.wordRanges
-        guard wordRanges.count > 1 else { return "" }
-
-        return String(text[..<wordRanges[wordRanges.count - 1].lowerBound])
-    }
-
-    static func commonPrefixAtWordBoundary(_ lhs: String, _ rhs: String) -> String {
-        var lhsIndex = lhs.startIndex
-        var rhsIndex = rhs.startIndex
-        var commonEnd = lhs.startIndex
-
-        while lhsIndex < lhs.endIndex, rhsIndex < rhs.endIndex, lhs[lhsIndex] == rhs[rhsIndex] {
-            lhs.formIndex(after: &lhsIndex)
-            rhs.formIndex(after: &rhsIndex)
-            commonEnd = lhsIndex
-        }
-
-        let common = String(lhs[..<commonEnd])
-        return common.prefixThroughLastWordBoundary()
-    }
-}
-
-private extension String {
-    var wordRanges: [Range<String.Index>] {
-        var ranges: [Range<String.Index>] = []
-        var index = startIndex
-
-        while index < endIndex {
-            while index < endIndex, !self[index].isWordCharacter {
-                formIndex(after: &index)
-            }
-            guard index < endIndex else { break }
-
-            let start = index
-            while index < endIndex, self[index].isWordCharacter {
-                formIndex(after: &index)
-            }
-            ranges.append(start..<index)
-        }
-
-        return ranges
-    }
-
-    func prefixThroughLastWordBoundary() -> String {
-        guard !isEmpty else { return "" }
-        var index = endIndex
-
-        while index > startIndex {
-            let previous = self.index(before: index)
-            if !self[previous].isWordCharacter {
-                return String(self[..<index])
-            }
-            index = previous
-        }
-
-        return ""
-    }
-}
-
-private extension Character {
-    var isWordCharacter: Bool {
-        unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || $0.value == 95 }
     }
 }

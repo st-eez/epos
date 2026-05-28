@@ -5,6 +5,10 @@ import Foundation
 /// or style rewriting.
 public struct TranscriptCanonicalizer: Sendable {
     public static let rulesDefaultsKey = "settings.canonicalizer.rulesJSON"
+    /// `AnalysisContext.contextualStrings` is bounded; cap the bias list so a large
+    /// rule set can't flood it. Apple does not document a hard limit, so this is a
+    /// conservative ceiling, not a guarantee.
+    public static let maxSpeechContextualStringCount = 100
     private static let storedRulesVersion = 1
 
     public struct Rule: Codable, Equatable, Sendable {
@@ -122,6 +126,33 @@ public struct TranscriptCanonicalizer: Sendable {
         }
         return output
     }
+
+    /// Canonical vocabulary to feed the recognizer as `AnalysisContext` bias so it
+    /// can produce these terms up front instead of relying on the post-hoc rewrite.
+    /// Yields each rule's canonical form once (de-duplicated, capped), skipping
+    /// pure-symbol canonicals like `--` or `/` that carry no pronounceable token.
+    ///
+    /// Note: a canonical's *written* form (`CLAUDE.md`) is not how it is *spoken*
+    /// (`claude dot md`), so biasing helps most for terms pronounced as written
+    /// (proper nouns, acronyms). This is the recognition-bias surface under
+    /// evaluation; it is not yet wired into the live recording path.
+    public var speechContextualStrings: [String] {
+        var phrases: [String] = []
+        var seen: Set<String> = []
+
+        for rule in rules {
+            let phrase = rule.canonical.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard Self.isUsefulSpeechContext(phrase) else { continue }
+
+            let key = phrase.lowercased()
+            guard seen.insert(key).inserted else { continue }
+
+            phrases.append(phrase)
+            if phrases.count == Self.maxSpeechContextualStringCount { break }
+        }
+
+        return phrases
+    }
 }
 
 private extension TranscriptCanonicalizer {
@@ -236,5 +267,11 @@ private extension TranscriptCanonicalizer {
             .lowercased()
             .split { !$0.isLetter && !$0.isNumber }
             .joined(separator: " ")
+    }
+
+    /// A canonical worth biasing the recognizer toward carries at least one letter
+    /// or digit; pure punctuation (`--`, `/`) has nothing for the model to match.
+    static func isUsefulSpeechContext(_ phrase: String) -> Bool {
+        phrase.contains { $0.isLetter || $0.isNumber }
     }
 }
