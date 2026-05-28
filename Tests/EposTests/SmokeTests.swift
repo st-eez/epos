@@ -680,6 +680,12 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(files.filter { $0.pathExtension == "wav" }.count, 1)
     }
 
+    func testTranscriberPresetRequestsFastVolatileResults() {
+        XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.volatileResults))
+        XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.fastResults))
+        XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.alternativeTranscriptions))
+    }
+
     /// Regression: pre-fix, `Transcriber.finish()` hung in `await drain?.value`
     /// because Apple's `SpeechTranscriber.results` does not terminate after
     /// `cancelAndFinishNow()` on an analyzer that received zero input. Reproduces
