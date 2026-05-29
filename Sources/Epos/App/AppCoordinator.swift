@@ -26,6 +26,7 @@ public final class AppCoordinator: ObservableObject {
     private let audio: AudioCapture
     private let transcriber: Transcriber
     private let textInsertion: TextInsertionBackend
+    private let polishEngine: any PolishEngine
     private let permissions: PermissionsGate
     private let assets: AssetManager
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
@@ -51,11 +52,13 @@ public final class AppCoordinator: ObservableObject {
         audio: AudioCapture = AudioCapture(),
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         settings: Settings = Settings.load(),
+        polishEngine: any PolishEngine = FoundationModelsPolishEngine(),
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
         self.textInsertion = textInsertion
+        self.polishEngine = polishEngine
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -76,6 +79,21 @@ public final class AppCoordinator: ObservableObject {
         settings.saveAudioSamples = enabled
         settings.save()
         log.info("audio sample capture \(enabled ? "enabled" : "disabled")")
+    }
+
+    public var polishEnabled: Bool { settings.polishEnabled }
+
+    public func setPolishEnabled(_ enabled: Bool) {
+        guard settings.polishEnabled != enabled else { return }
+        settings.polishEnabled = enabled
+        settings.save()
+        log.info("dictation polish \(enabled ? "enabled" : "disabled")")
+    }
+
+    /// Built fresh from current settings so a mid-session toggle takes effect on
+    /// the next recording. The engine is shared (model assets are global).
+    private var polisher: TranscriptPolisher {
+        TranscriptPolisher(enabled: settings.polishEnabled, engine: polishEngine)
     }
 
     /// Live launch-at-login state from the system — the source of truth, which the user
@@ -139,6 +157,7 @@ public final class AppCoordinator: ObservableObject {
         )
         transcriptTiming.start()
         indicator.show()
+        polisher.prewarm()
         log.info("recording start")
 
         transcriptionTask = Task { [weak self] in
@@ -208,8 +227,13 @@ public final class AppCoordinator: ObservableObject {
         let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
 
-        if hasTranscribedText { insertFinalTranscript(finalText) }
         if hasTranscribedText {
+            // Opt-in LLM polish runs once on the final transcript while the
+            // indicator is still up (state == .finalizing). It never throws and
+            // falls back to the raw text, so the reconcile below is unchanged
+            // when polish is off, unavailable, or rejected by the guard.
+            let polished = await polisher.polish(finalText)
+            insertFinalTranscript(polished)
             finishTextInsertionSession()
         } else {
             cancelTextInsertionSession()

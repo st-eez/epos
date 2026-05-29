@@ -41,6 +41,13 @@ public struct TranscriptPolisher: Sendable {
         }
     }
 
+    /// Hint the engine to load the model so the first real polish is faster. A
+    /// no-op unless polish is enabled and the engine is available.
+    public func prewarm() {
+        guard enabled, engine.isAvailable else { return }
+        engine.prewarm()
+    }
+
     // MARK: - Content-retention guard
 
     /// Minimum fraction of the raw's significant tokens that must survive in the

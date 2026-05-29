@@ -1,8 +1,8 @@
 # Epos — Baseline Spec
 
-Date: 2026-05-22 · Revised: 2026-05-28 (live self-correcting keystroke insertion now reconciles on every partial for lowest latency; recording HUD slimmed to a pill; see "Shipped Since Baseline")
+Date: 2026-05-22 · Revised: 2026-05-29 (opt-in on-device LLM polish stage added; 2026-05-28 live self-correcting keystroke insertion reconciles on every partial for lowest latency, recording HUD slimmed to a pill; see "Shipped Since Baseline")
 
-A clean-sheet rebuild of Epos as a minimal dictation app on top of Apple's `SpeechTranscriber` (macOS 26+). No WhisperKit, no MLX, no LLM polish, no filler detector. Those become post-baseline candidates, not baseline requirements. A deterministic, user-editable correction layer has since shipped on top of this baseline — see "Shipped Since Baseline".
+A clean-sheet rebuild of Epos as a minimal dictation app on top of Apple's `SpeechTranscriber` (macOS 26+). No WhisperKit, no MLX, no filler detector. Those were post-baseline candidates, not baseline requirements. A deterministic, user-editable correction layer and an opt-in on-device LLM polish stage have since shipped on top of this baseline — see "Shipped Since Baseline".
 
 ## Product
 
@@ -21,7 +21,6 @@ Hold fn → record → words stream live into the frontmost app as you speak, se
 
 Explicitly out of scope. Each is a candidate for a later, opt-in module:
 
-- LLM grammar polish (MLX/Qwen3 etc.)
 - Filler-word detection
 - Persistent transcription history
 - Multiple model choices in settings
@@ -39,6 +38,7 @@ Built and validated after the original baseline and promoted from the backlog. L
 - **Opt-in audio sample capture** (`Audio/DogfoodTap.swift`). Per-recording `.wav` capture to the app cache as local eval material. Off by default, gated by `Settings.saveAudioSamples`; recordings that produced no transcript are discarded.
 - **On-disk diagnostic log** (`Diagnostics/EposLogger.swift` → `DiagnosticLogSink`). Mirrors `os.Logger` events to a size-capped, rotated app-owned log under `~/Library/Caches/Epos/logs/` (writes direct events instead of polling the unified-log store). Privacy-aware: no transcript text. Disable with `EPOS_DIAGNOSTIC_LOGS=0`.
 - **Target-aware insertion guards** (`Inject/InsertionTargetGuard.swift`, wired into `Inject/ProgressiveTranscriptInsertion.swift`). Backlog #11. Stops the self-correcting backspace from ever deleting characters that aren't ours when the on-screen field stops matching the session's private model — focus moving mid-recording, or the field mutating text on its own (autocorrect, autocomplete/suggestions in search boxes and iMessage, IntelliSense bracket/indent insertion). At session start the session captures the focused Accessibility element as "home" (`kAXFocusedUIElementAttribute` off the system-wide element). Two checks, by cost: a cheap focus-identity comparison (`CFEqual` of the current focused element vs home) runs on every reconcile; the expensive full-value read (`kAXValueAttribute`) is gated to the pre-delete moment only — an append lands at the caret and corrupts nothing, so only a backspace pays for the read, which keeps the recognizer's ~1.2s/1s cadence the floor with no added throttle. The guard *decision* is a pure function (`InsertionTargetGuard.decide`, unit-tested) over `(expected committedText, observation)`: focus changed → **abort** (cancel the session in place, no cleanup backspacing — that would itself be the corruption); on-screen value no longer ends with what we believe we typed (`!observed.hasSuffix(committedText)`, conservative so a field-inserted trailing char falls back safely) → **stop and append-only**; otherwise proceed. Both terminal states latch: once aborted or in append-only, the session never backspaces again, because `committedText` no longer models the screen. The append-only fallback types only the new tail past the last commit — it can't corrupt existing text and does not reintroduce clipboard paste. AX I/O is bounded with `AXUIElementSetMessagingTimeout` so a wedged accessibility server can't stall the main-actor reconcile. The Accessibility reads themselves aren't headlessly testable (they need the installed signed app dictating into real apps); only the pure decision and the session's latch behavior under a fake observer are unit-tested.
+- **Opt-in on-device LLM polish** (`Speech/TranscriptPolisher.swift`, `Speech/FoundationModelsPolishEngine.swift`; wired in `App/AppCoordinator.swift`, toggled in `UI/MenuBarView.swift`). Backlog #6. When `Settings.polishEnabled` is on and the on-device model is available, the final transcript at fn-release is passed through a FoundationModels guided-generation pass (`SystemLanguageModel` + `respond(to:generating:)` filling a single `@Generable` field, greedy/temperature-0, the Stage-1 tuned prompt) that removes fillers, converts spoken punctuation, and lightly cleans the text without changing meaning. The cleaned result feeds the existing `acceptFinalTranscript` reconcile, so it erases-and-retypes the live raw dictation to the cleaned text and the deterministic canonicalizer still runs downstream as the authoritative jargon fix — no new insertion mechanism. Default **off**; when off or unavailable the path is the raw transcript byte-for-byte. **Always-safe fallback**: any failure, unavailability, throw, or a content-retention guard rejection falls back to the raw transcript, so the user never loses their words. The guard is the defense against the model over-compressing a multi-clause command into a fragment — it keeps the polished text only when at least 0.6 of the raw's *significant* (non-filler) words survive. Polish runs once on the final transcript (not streamed during recording); the engine is prewarmed at `startRecording`, and because the polish `await` happens while `state == .finalizing` (before `resetToIdle()`), the recording indicator stays visible through the ~1.4s polish window. The gate/guard/fallback policy is unit-tested behind a `PolishEngine` seam with a fake; the model call and the live erase-and-retype are not unit-testable (they need the installed signed app + on-device model). Stage 1 (offline probe, `specs/llm-polish-probe.md`) established that guided generation is the only viable mechanism — plain instruction-only prompting composes, refuses, and blows the context window.
 - **Live self-correcting insertion** (`Inject/ProgressiveTranscriptInsertion.swift`, `Inject/TextInsertionBackend.swift`). During recording Epos types the canonicalized transcript straight into the focused field via synthesized Unicode keystrokes (`KeystrokeTextInjector`, `CGEventKeyboardSetUnicodeString`) — each delta in its own ordered keyboard event, no clipboard. Every update — volatile partial and authoritative per-segment final alike — reconciles with a minimal edit: it backspaces the suffix that diverges from the new target and retypes the corrected remainder, so the freshest words appear with the lowest latency the recognizer allows and a revision corrects the field in place. This replaced the original clipboard-paste backend, whose streamed `cmd+v` raced garbled output; the never-rewrite policy, which stranded mis-recognized words and dropped the corrected tail; and the append-only-partials policy, which held the newest words back by ~1 confirmation cycle (measured ~1s of added latency on the trailing edge) to avoid the live churn reconciling-on-partials can show when the recognizer revises a word it already emitted.
 
 ## Architecture
@@ -56,6 +56,8 @@ Sources/Epos/
     AssetManager.swift          # SpeechTranscriber locale asset reserve + download
     Transcriber.swift           # SpeechAnalyzer + SpeechTranscriber wrapper
     TranscriptCanonicalizer.swift  # deterministic spoken->canonical correction rules (Shipped Since Baseline)
+    TranscriptPolisher.swift    # opt-in LLM polish gate/guard/fallback policy + PolishEngine seam (Shipped Since Baseline)
+    FoundationModelsPolishEngine.swift  # real PolishEngine: FoundationModels guided generation (Shipped Since Baseline)
   Audio/
     AudioCapture.swift          # AVAudioEngine input tap -> AnalyzerInput stream
     DogfoodTap.swift            # opt-in per-recording .wav capture (Shipped Since Baseline)
@@ -89,9 +91,10 @@ FnHotkey.release
   -> AppCoordinator.finishRecording
      -> AudioCapture.stop
      -> Transcriber.finalize -> String
-     -> RecordingIndicator.hide
-     -> TranscriptCanonicalizer.canonicalize(finalText)   # correction layer, Shipped Since Baseline
+     -> TranscriptPolisher.polish(finalText) -> String   # opt-in LLM polish, Shipped Since Baseline (raw on off/unavailable/fail/guard-reject)
+     -> TranscriptCanonicalizer.canonicalize(...)   # correction layer, Shipped Since Baseline
      -> TextInsertionBackend reconciles the field to the canonicalized final (backspaces + retypes any diverged suffix)
+     -> RecordingIndicator.hide   # after polish + reconcile, so the indicator stays visible through the polish window
 ```
 
 ### Coordinator state
@@ -156,7 +159,7 @@ Insertion is retractable, and every update retracts as needed. Both volatile par
 
 ### Settings
 
-A single `UserDefaults`-backed struct: launch-at-login bool, install locale string, and a `saveAudioSamples` bool (opt-in audio capture). Surfaced in the menu bar popover. Correction rules persist separately under their own `UserDefaults` key and are edited in the Corrections window.
+A single `UserDefaults`-backed struct: launch-at-login bool, install locale string, a `saveAudioSamples` bool (opt-in audio capture), and a `polishEnabled` bool (opt-in on-device LLM polish, default off). Surfaced in the menu bar popover. Correction rules persist separately under their own `UserDefaults` key and are edited in the Corrections window.
 
 ## Build & Project Layout
 
@@ -205,7 +208,7 @@ Tracked here so we do not lose them, in rough priority order:
 3. Persistent transcription history (in-memory first, opt-in disk later).
 4. ~~Personal dictionary with spoken→corrected mappings.~~ **Shipped** as user-editable correction rules (see "Shipped Since Baseline").
 5. Locale switching UI + multi-asset management.
-6. LLM polish (local MLX) as opt-in per-recording.
+6. ~~LLM polish (local MLX) as opt-in per-recording.~~ **Shipped** as an opt-in global toggle using on-device FoundationModels guided generation (see "Shipped Since Baseline"). A per-recording toggle is still open.
 7. Filler-word detection.
 8. Audio device hot-swap handling.
 9. Agent-specific modes (Codex / Claude Code / Cursor).

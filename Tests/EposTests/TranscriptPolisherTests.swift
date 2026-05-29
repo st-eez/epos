@@ -72,6 +72,20 @@ final class TranscriptPolisherTests: XCTestCase {
         XCTAssertEqual(result, "   ")
         XCTAssertEqual(engine.polishCallCount, 0)
     }
+
+    func testPrewarmDelegatesToEngineOnlyWhenEnabledAndAvailable() {
+        let enabledAvailable = FakePolishEngine(isAvailable: true)
+        TranscriptPolisher(enabled: true, engine: enabledAvailable).prewarm()
+        XCTAssertEqual(enabledAvailable.prewarmCallCount, 1)
+
+        let disabled = FakePolishEngine(isAvailable: true)
+        TranscriptPolisher(enabled: false, engine: disabled).prewarm()
+        XCTAssertEqual(disabled.prewarmCallCount, 0)
+
+        let unavailable = FakePolishEngine(isAvailable: false)
+        TranscriptPolisher(enabled: true, engine: unavailable).prewarm()
+        XCTAssertEqual(unavailable.prewarmCallCount, 0)
+    }
 }
 
 /// Configurable test double for `PolishEngine`. `@unchecked Sendable` is safe
