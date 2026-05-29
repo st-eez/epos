@@ -66,6 +66,14 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("open c-mux"), "open CMUX")
     }
 
+    func testCanonicalizerNormalizesProjectYamlToYamlExtension() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        XCTAssertEqual(canonicalizer.canonicalize("edit project dot yaml"), "edit project.yaml")
+        XCTAssertEqual(canonicalizer.canonicalize("edit project dot yml"), "edit project.yaml")
+        XCTAssertEqual(canonicalizer.canonicalize("edit project.yml"), "edit project.yaml")
+    }
+
     func testCanonicalizerOnlyAppliesListedAliases() {
         let canonicalizer = TranscriptCanonicalizer(rules: [
             .init(canonical: "WidgetPro", aliases: ["widget pro"])
