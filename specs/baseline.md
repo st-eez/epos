@@ -108,7 +108,7 @@ No retry loop, no circuit breaker, no error recovery state. Errors log + reset t
 
 ### Apple Speech: `SpeechAnalyzer` + `SpeechTranscriber` module
 
-Use the new (macOS 26) `SpeechAnalyzer` pipeline with a `SpeechTranscriber` module — *not* the legacy `SFSpeechRecognizer` and *not* `DictationTranscriber`. The bakeoff has already justified this (`specs/local-transcription-direction.md:82`).
+Use the new (macOS 26) `SpeechAnalyzer` pipeline with a `SpeechTranscriber` module — *not* the legacy `SFSpeechRecognizer` and *not* `DictationTranscriber`. The `DictationTranscriber` + custom-LM path was re-evaluated empirically and rejected on net accuracy (`specs/recognition-bias-decision.md`).
 
 Lifecycle:
 
