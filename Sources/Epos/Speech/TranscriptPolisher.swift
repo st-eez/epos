@@ -130,6 +130,15 @@ public struct TranscriptPolisher: Sendable {
         var matchedContent = false
 
         while rawIndex < rawTokens.count {
+            if let droppedCount = preferredDroppableRawTokenCount(
+                in: rawTokens,
+                at: rawIndex,
+                matchedContent: matchedContent
+            ) {
+                rawIndex += droppedCount
+                continue
+            }
+
             if polishedIndex < polishedTokens.count, rawTokens[rawIndex] == polishedTokens[polishedIndex] {
                 rawIndex += 1
                 polishedIndex += 1
@@ -150,6 +159,26 @@ public struct TranscriptPolisher: Sendable {
         }
 
         return polishedIndex == polishedTokens.count
+    }
+
+    private static func preferredDroppableRawTokenCount(
+        in tokens: [String],
+        at index: Int,
+        matchedContent: Bool
+    ) -> Int? {
+        if tokens[index] == "so", !matchedContent {
+            return 1
+        }
+        if tokens[index] == "like", isPreferablyDroppableLike(in: tokens, at: index, matchedContent: matchedContent) {
+            return 1
+        }
+        if tokens[index] != "like", singleFillers.contains(tokens[index]) {
+            return 1
+        }
+        if let filler = firstMatchingPhrase(in: tokens, at: index, phrases: fillerPhrases) {
+            return filler.count
+        }
+        return nil
     }
 
     private static func droppableRawTokenCount(
@@ -194,6 +223,24 @@ public struct TranscriptPolisher: Sendable {
             return false
         }
         return true
+    }
+
+    private static func isPreferablyDroppableLike(
+        in tokens: [String],
+        at index: Int,
+        matchedContent: Bool
+    ) -> Bool {
+        guard matchedContent else { return true }
+
+        let previous = index > tokens.startIndex ? tokens[index - 1] : nil
+        let next = index + 1 < tokens.endIndex ? tokens[index + 1] : nil
+        if let previous, semanticLikePrevious.contains(previous) {
+            return false
+        }
+        if let next, semanticLikeNext.contains(next) {
+            return false
+        }
+        return next.map { singleFillers.contains($0) || $0 == "so" } ?? false
     }
 
     private static func firstMatchingPhrase(

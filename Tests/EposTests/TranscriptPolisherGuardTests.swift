@@ -39,6 +39,25 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                     "doesn't seem it.",
                 false
             ),
+            (
+                "Uh, like, I'm trying to see the filler words like uh get removed " +
+                    "but it doesn't seem like it.",
+                "I'm trying to see the filler words get removed but it doesn't " +
+                    "seem like it.",
+                true
+            ),
+            (
+                "Uh, like, I'm trying to see the filler words like uh get removed " +
+                    "but it doesn't seem like it.",
+                "I'm trying to see the filler words like get removed but it " +
+                    "doesn't seem like it.",
+                false
+            ),
+            (
+                "I like uh tacos.",
+                "I like tacos.",
+                true
+            ),
             // "I think" is meaningful per the prompt. Dropping it is content loss.
             (
                 "um so like i think we should uh ship it you know",
