@@ -23,23 +23,29 @@ public enum InsertionTargetObservation: Equatable {
     case focusChanged
     /// Focus is unchanged and the full on-screen value was read.
     case value(String)
-    /// Focus is unchanged and we deliberately skipped the expensive value read
-    /// (e.g. this reconcile only appends, so no delete can corrupt anything).
+    /// Focus is unchanged, the read came back empty, AND this element exposes its
+    /// text via Accessibility (we have read a non-empty value from it earlier this
+    /// session). An empty read from a text-exposing field is genuine divergence —
+    /// our text vanished — so a delete here would corrupt content that isn't ours.
+    case emptyExposed
+    /// Focus is unchanged and the read is uninformative: it failed, or the app
+    /// exposes no editable text at all (web/Electron terminals such as cmux return
+    /// empty regardless of content). Neither confirms nor denies our text, so a
+    /// delete is allowed (the cheap focus check is the only guard this cycle).
     case notRead
 }
 
 extension InsertionTargetObservation {
-    /// Build the observation from a raw Accessibility value read. `nil` means the
-    /// read failed (no AX baseline, or the element exposes no text); `""` means
-    /// the app reports no editable text via Accessibility at all (web/Electron
-    /// terminals such as cmux return empty regardless of content). Both are
-    /// uninformative — they neither confirm nor deny our text is on screen — so
-    /// both become `.notRead`. Only a non-empty read becomes a `.value` the guard
-    /// can use to prove divergence. Keeping this at the read boundary means a
-    /// `.value("")` never reaches `decide` from the live path.
-    public static func read(_ value: String?) -> InsertionTargetObservation {
-        guard let value, !value.isEmpty else { return .notRead }
-        return .value(value)
+    /// Build the observation from a raw Accessibility value read and whether this
+    /// element exposes text. A non-empty read is always a usable `.value`. An empty
+    /// or failed read is `.emptyExposed` when the element has shown real text this
+    /// session (a native field that just lost our text → divergence) and `.notRead`
+    /// when it never has (cmux/Electron expose nothing → uninformative, keep
+    /// self-correcting). Keeping this at the boundary means a `.value("")` never
+    /// reaches `decide` from the live path.
+    public static func read(_ value: String?, exposesText: Bool) -> InsertionTargetObservation {
+        if let value, !value.isEmpty { return .value(value) }
+        return exposesText ? .emptyExposed : .notRead
     }
 }
 
@@ -63,6 +69,11 @@ public enum InsertionTargetGuard {
             return .abort
         case .notRead:
             return .proceed
+        case .emptyExposed:
+            // A text-exposing field that now reads empty diverged from what we
+            // typed; deleting would eat content that isn't ours. With nothing
+            // expected there is nothing to delete, so appending stays safe.
+            return expected.isEmpty ? .proceed : .stopAppendOnly
         case .value(let onScreen):
             // An empty expectation has nothing to delete and nothing to match
             // against; appending is always safe.
@@ -88,6 +99,9 @@ public protocol InsertionTargetObserver: AnyObject {
     /// The focused element's full text value, or nil if it can't be read.
     /// Expensive — do not call on every partial.
     func observedValue() -> String?
+    /// True once this element has exposed real (non-empty) text this session, so an
+    /// empty read can be told apart from an app that never exposes text. Cheap.
+    func exposesTextValue() -> Bool
 }
 
 /// A no-op observer: focus never changes, value never readable. The session then
@@ -98,6 +112,7 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
     public func captureBaseline() {}
     public func focusChangedSinceStart() -> Bool { false }
     public func observedValue() -> String? { nil }
+    public func exposesTextValue() -> Bool { false }
 }
 
 /// Live Accessibility-backed observer. Uses the same trust the keystroke backend
@@ -105,6 +120,18 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
 public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private let systemWide: AXUIElement
     private var homeElement: AXUIElement?
+    /// True when the home element advertises `kAXValueAttribute` at session start.
+    /// Set once at `captureBaseline`, before any delete, so the FIRST delete cycle
+    /// already knows a text-exposing field is text-exposing — without it, the
+    /// first empty read would proceed and blind-delete. A field that advertises
+    /// text but reads empty has diverged; treating it as such is safe even if it
+    /// costs an AX-opaque app (that happens to advertise) its self-correction.
+    private var homeElementAdvertisesValue = false
+    /// Latched once any read returns real text, covering elements that expose text
+    /// only once populated. Together with the advertise probe this means an empty
+    /// read counts as divergence whenever the element ever exposes text; an app
+    /// that never does (cmux/Electron) keeps self-correcting.
+    private var everReadNonEmptyValue = false
     private let log = EposLogger(category: "inject")
 
     public init() {
@@ -117,7 +144,9 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
 
     public func captureBaseline() {
         homeElement = copyFocusedElement()
-        if homeElement == nil {
+        if let homeElement {
+            homeElementAdvertisesValue = advertisesValueAttribute(homeElement)
+        } else {
             log.info("insertion guard: no focused element at session start; focus guard inactive")
         }
     }
@@ -142,7 +171,17 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             homeElement, kAXValueAttribute as CFString, &value
         )
         guard result == .success, let text = value as? String else { return nil }
+        if !text.isEmpty { everReadNonEmptyValue = true }
         return text
+    }
+
+    public func exposesTextValue() -> Bool { homeElementAdvertisesValue || everReadNonEmptyValue }
+
+    private func advertisesValueAttribute(_ element: AXUIElement) -> Bool {
+        var names: CFArray?
+        let result = AXUIElementCopyAttributeNames(element, &names)
+        guard result == .success, let attributes = names as? [String] else { return false }
+        return attributes.contains(kAXValueAttribute as String)
     }
 
     private func copyFocusedElement() -> AXUIElement? {

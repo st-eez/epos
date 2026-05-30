@@ -118,6 +118,86 @@ final class TranscriptPolisherTests: XCTestCase {
         XCTAssertEqual(result.text, "Open CMUX.")
         XCTAssertEqual(engine.polishKnownTerms, [["Epos", "CMUX"]])
     }
+
+    func testPolishSurfacesTooLongWhenEngineReportsContextOverflow() async {
+        // A context-window overflow is a distinct outcome, not a silent no-op, so
+        // an over-long dictation is observably skipped.
+        let engine = FakePolishEngine(throwError: PolishInputTooLargeError())
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+
+        let result = await polisher.polish("a very long raw transcript")
+
+        XCTAssertEqual(result.text, "a very long raw transcript")
+        XCTAssertEqual(result.outcome, .tooLong)
+        XCTAssertEqual(engine.polishCallCount, 1)
+    }
+
+    func testGenericEngineThrowStaysUnchangedNotTooLong() async {
+        // Guards the `catch is PolishInputTooLargeError` boundary: any other throw
+        // is an ordinary fallback, not `.tooLong`.
+        let engine = FakePolishEngine(throwError: FakePolishError())
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+
+        let result = await polisher.polish("raw transcript")
+
+        XCTAssertEqual(result.outcome, .unchanged)
+    }
+
+    func testPolishRejectsModelWordSubstitutionAndKeepsRaw() async {
+        // The model "fixed" a misrecognition to a known term the canonicalizer does
+        // not rule. The guard cannot tell a real correction from a corruption (e.g.
+        // "epic" -> "Epos"), so it rejects the substitution and keeps the raw words.
+        // Known-term correction is the canonicalizer's job, applied on both sides.
+        let engine = FakePolishEngine(result: "open Epos cluster")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine, knownTerms: ["Epos"])
+
+        let result = await polisher.polish("open ethos cluster")
+
+        XCTAssertEqual(result.text, "open ethos cluster")
+        XCTAssertEqual(result.outcome, .unchanged)
+    }
+
+    func testGuardComparesCanonicalizedRawSoOneSidedCanonicalizationAccepts() async {
+        // Raw "see mux is down" and engine "CMUX is down." differ as raw strings,
+        // but canonicalize maps "see mux" -> "CMUX" on BOTH sides, so the guard
+        // compares "CMUX is down" vs "CMUX is down." and accepts the cleanup.
+        let engine = FakePolishEngine(result: "CMUX is down.")
+        let canonicalize: @Sendable (String) -> String = {
+            $0.replacingOccurrences(of: "see mux", with: "CMUX")
+        }
+        let polisher = TranscriptPolisher(enabled: true, engine: engine, canonicalize: canonicalize)
+
+        let result = await polisher.polish("see mux is down")
+
+        XCTAssertEqual(result.text, "CMUX is down.")
+        XCTAssertEqual(result.outcome, .applied)
+    }
+
+    func testFallbackOutcomesReturnCanonicalizedRaw() async {
+        // When polish is disabled the returned text is the canonicalized raw, so
+        // the field target is consistent whether or not polish runs.
+        let engine = FakePolishEngine(result: "ignored")
+        let canonicalize: @Sendable (String) -> String = { $0.uppercased() }
+        let polisher = TranscriptPolisher(enabled: false, engine: engine, canonicalize: canonicalize)
+
+        let result = await polisher.polish("hello world")
+
+        XCTAssertEqual(result.text, "HELLO WORLD")
+        XCTAssertEqual(result.outcome, .disabled)
+        XCTAssertEqual(engine.polishCallCount, 0)
+    }
+
+    func testEffectivePolishOutcomeDowngradesAppliedWhenNothingTyped() {
+        let applied = PolishResult(text: "polished", outcome: .applied)
+        XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: false), .unchanged)
+        XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: true), .applied)
+
+        let timedOut = PolishResult(text: "raw", outcome: .timedOut)
+        XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(timedOut, applied: false), .timedOut)
+
+        let tooLong = PolishResult(text: "raw", outcome: .tooLong)
+        XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(tooLong, applied: false), .tooLong)
+    }
 }
 
 /// Configurable test double for `PolishEngine`. `@unchecked Sendable` is safe

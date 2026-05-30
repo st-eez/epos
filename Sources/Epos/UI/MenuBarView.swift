@@ -246,7 +246,7 @@ public struct MenuBarView: View {
 
     private var finalizationReadiness: Readiness {
         switch coordinator.finalizationPhase {
-        case .none, .finalizingSpeech:
+        case .finalizingSpeech:
             Readiness(
                 icon: "waveform.badge.magnifyingglass",
                 title: "Finishing speech",

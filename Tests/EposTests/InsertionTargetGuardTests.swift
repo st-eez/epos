@@ -27,12 +27,31 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
-    func testReadFactoryTreatsNilAndEmptyAsNotRead() {
-        // A failed read (nil) and an app that exposes no AX text ("", e.g. cmux)
-        // are both uninformative — only a non-empty read becomes a usable value.
-        XCTAssertEqual(InsertionTargetObservation.read(nil), .notRead)
-        XCTAssertEqual(InsertionTargetObservation.read(""), .notRead)
-        XCTAssertEqual(InsertionTargetObservation.read("hello"), .value("hello"))
+    func testReadFactoryDistinguishesOpaqueFromTextExposingTargets() {
+        // AX-opaque app that has never exposed text (e.g. cmux): empty/nil reads
+        // are uninformative — keep self-correcting.
+        XCTAssertEqual(InsertionTargetObservation.read(nil, exposesText: false), .notRead)
+        XCTAssertEqual(InsertionTargetObservation.read("", exposesText: false), .notRead)
+        // Field that has shown real text this session but now reads empty/nil: its
+        // text vanished, which is genuine divergence.
+        XCTAssertEqual(InsertionTargetObservation.read("", exposesText: true), .emptyExposed)
+        XCTAssertEqual(InsertionTargetObservation.read(nil, exposesText: true), .emptyExposed)
+        // A non-empty read is always a usable value regardless of the flag.
+        XCTAssertEqual(InsertionTargetObservation.read("hello", exposesText: false), .value("hello"))
+    }
+
+    func testEmptyExposedDivergesUnlessNothingExpected() {
+        // A text-exposing field that now reads empty diverged; deleting would eat
+        // content that isn't ours, so latch append-only.
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(expected: "hello", observed: .emptyExposed),
+            .stopAppendOnly
+        )
+        // Nothing typed yet → nothing to delete → appending is safe.
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(expected: "", observed: .emptyExposed),
+            .proceed
+        )
     }
 
     func testValueEndingWithExpectedProceeds() {
@@ -141,15 +160,17 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
-    func testSessionProceedsWhenValueReadsEmptyRatherThanLatchingAppendOnly() {
+    func testOpaqueAppEmptyReadStillSelfCorrects() {
         // Apps that expose no editable text via Accessibility (web/Electron
-        // terminals like cmux) report an empty value regardless of content. That
-        // is uninformative — not proof the field diverged — so the session must
-        // still backspace-and-retype a revised word, the same as when the value
-        // is unreadable (nil). Latching append-only here would silently break
-        // self-correction (and the polish retype) in every such app.
+        // terminals like cmux) report an empty value regardless of content and
+        // never set `exposesText`. That is uninformative — not proof the field
+        // diverged — so the session must still backspace-and-retype a revised
+        // word, the same as when the value is unreadable (nil). Latching
+        // append-only here would silently break self-correction (and the polish
+        // retype) in every such app.
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
+        observer.exposesText = false // never exposed real text → AX-opaque app
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -170,6 +191,132 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
         XCTAssertEqual(backend.fieldText, "open a door")
         XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testTextExposingFieldEmptyReadLatchesAppendOnlyAndNeverDeletes() {
+        // A native field that HAS shown real text this session (exposesText true)
+        // but now reads empty has genuinely diverged — its content vanished. An
+        // empty read here is divergence, not noise, so the session must latch
+        // append-only and never blind-backspace into content that isn't ours.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("the door")
+        // Field emptied mid-session (focus unchanged); the pending revision would
+        // delete a suffix. The empty read from a text-exposing field is divergence.
+        observer.value = ""
+        session.acceptPartialTranscript("the window")
+        session.acceptFinalTranscript("the window")
+
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "empty read from a text-exposing field must not trigger a blind delete"
+        )
+        XCTAssertEqual(backend.operations, [.insert("the door")])
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    // MARK: - Final polished insert (issue 4) and minimal-edit diff (issue 8)
+
+    func testFinalPolishedReturnsFalseWhenAppendOnlyLatchSuppressesIt() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("the door")
+        observer.value = ""
+        session.acceptPartialTranscript("the window") // latches append-only
+
+        // A polished final that isn't a prefix-extension of the commit types
+        // nothing under the latch, and must report that it did not apply.
+        XCTAssertFalse(session.acceptFinalPolishedTranscript("Completely different polished text."))
+        XCTAssertFalse(backend.operations.contains { if case .delete = $0 { true } else { false } })
+    }
+
+    func testFinalPolishedReturnsTrueWhenItTypes() {
+        let backend = GuardRecordingBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
+        )
+
+        XCTAssertTrue(session.acceptFinalPolishedTranscript("hello world."))
+        XCTAssertEqual(backend.operations, [.insert("hello world.")])
+    }
+
+    func testFinalPolishedReturnsFalseWhenTargetEqualsCommitted() {
+        let backend = GuardRecordingBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
+        )
+
+        session.acceptFinalTranscript("hello world")
+        // Already on screen → no keystrokes, returns false.
+        XCTAssertFalse(session.acceptFinalPolishedTranscript("hello world"))
+    }
+
+    func testFinalPolishedDoesNotReCanonicalizeTheValidatedString() {
+        // insertFinalTranscript hands acceptFinalPolishedTranscript the exact
+        // guard-validated string; the session must type it verbatim, NOT run the
+        // session's own canonicalize over it again.
+        let backend = GuardRecordingBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 + " MUTATED" }
+        )
+
+        XCTAssertTrue(session.acceptFinalPolishedTranscript("run --verbose"))
+        XCTAssertEqual(backend.operations, [.insert("run --verbose")])
+    }
+
+    func testMinimalEditIsPrefixOnly() {
+        let pureAppend = ProgressiveTranscriptInsertionSession.minimalEdit(
+            from: "the server is down", to: "the server is down."
+        )
+        XCTAssertEqual(pureAppend.deleteCount, 0)
+        XCTAssertEqual(pureAppend.insertTail, ".")
+
+        // Leading capitalization breaks the common prefix at char 0, so the whole
+        // line is retyped — the backspace-from-caret backend's floor.
+        let leadingCap = ProgressiveTranscriptInsertionSession.minimalEdit(
+            from: "the server is down", to: "The server is down."
+        )
+        XCTAssertEqual(leadingCap.deleteCount, 18)
+        XCTAssertEqual(leadingCap.insertTail, "The server is down.")
+
+        let midEdit = ProgressiveTranscriptInsertionSession.minimalEdit(
+            from: "open the door", to: "open a door"
+        )
+        XCTAssertEqual(midEdit.deleteCount, 8)
+        XCTAssertEqual(midEdit.insertTail, "a door")
+
+        let noChange = ProgressiveTranscriptInsertionSession.minimalEdit(from: "x", to: "x")
+        XCTAssertEqual(noChange.deleteCount, 0)
+        XCTAssertEqual(noChange.insertTail, "")
+    }
+
+    func testFinalPolishedPureAppendDeletesNothing() {
+        let backend = GuardRecordingBackend()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 }
+        )
+
+        session.acceptPartialTranscript("the server is down")
+        XCTAssertTrue(session.acceptFinalPolishedTranscript("the server is down."))
+        XCTAssertEqual(backend.operations, [.insert("the server is down"), .insert(".")])
     }
 
     func testSessionProceedsNormallyWhenTargetStaysConsistent() {
@@ -202,11 +349,13 @@ final class InsertionTargetGuardTests: XCTestCase {
 private final class FakeTargetObserver: InsertionTargetObserver {
     var focusChanged = false
     var value: String?
+    var exposesText = false
     private(set) var baselineCaptured = false
 
     func captureBaseline() { baselineCaptured = true }
     func focusChangedSinceStart() -> Bool { focusChanged }
     func observedValue() -> String? { value }
+    func exposesTextValue() -> Bool { exposesText }
 }
 
 private final class GuardRecordingBackend: TextInsertionBackend {

@@ -9,33 +9,51 @@ import FoundationModels
 /// the gate/guard/fallback policy lives in `TranscriptPolisher` and is tested
 /// with a fake. Ported from `probes/llm-polish/`.
 public struct FoundationModelsPolishEngine: PolishEngine {
-    public init() {}
+    private let model: SystemLanguageModel
+
+    public init() {
+        // Construct the configured model once and gate on ITS availability, so the
+        // model checked by `isAvailable` is exactly the one that does the work — a
+        // separate `.default` instance could report a different availability.
+        model = SystemLanguageModel(useCase: .general, guardrails: .permissiveContentTransformations)
+    }
 
     public var isAvailable: Bool {
-        SystemLanguageModel.default.availability == .available
+        model.availability == .available
     }
 
     public func prewarm(knownTerms: [String]) {
         guard isAvailable else { return }
-        makeSession(knownTerms: knownTerms).prewarm()
+        session(knownTerms: knownTerms).prewarm()
     }
 
     public func polish(_ raw: String, knownTerms: [String]) async throws -> String {
-        try await makeSession(knownTerms: knownTerms)
-            .respond(to: raw, generating: CleanedTranscript.self, options: Self.options)
-            .content
-            .cleaned
+        // A fresh, stateless session per call keeps transcripts from contaminating
+        // each other; that per-call isolation — not cooperative cancellation — is
+        // the correctness guarantee if a timed-out polish is still decoding when
+        // the next one starts. A context-window overflow maps to a distinct error
+        // so the policy reports `.tooLong` rather than a silent raw fallback.
+        do {
+            return try await session(knownTerms: knownTerms)
+                .respond(to: raw, generating: CleanedTranscript.self, options: Self.options)
+                .content
+                .cleaned
+        } catch let error as LanguageModelSession.GenerationError {
+            if case .exceededContextWindowSize = error { throw PolishInputTooLargeError() }
+            throw error
+        }
     }
 
-    private func makeSession(knownTerms: [String]) -> LanguageModelSession {
-        let model = SystemLanguageModel(useCase: .general, guardrails: .permissiveContentTransformations)
-        return LanguageModelSession(model: model, instructions: Self.makeInstructions(knownTerms: knownTerms))
+    private func session(knownTerms: [String]) -> LanguageModelSession {
+        LanguageModelSession(model: model, instructions: Self.makeInstructions(knownTerms: knownTerms))
     }
 
-    /// Greedy + temperature 0: deterministic decoding. `maximumResponseTokens`
-    /// caps runaway composition (512 ≫ any single cleaned sentence) without
-    /// truncating legitimate cleanup.
-    private static let options = GenerationOptions(sampling: .greedy, temperature: 0, maximumResponseTokens: 512)
+    /// Greedy + temperature 0: deterministic decoding. No `maximumResponseTokens`
+    /// cap — a legitimate long dictation needs as many tokens as it has words, and
+    /// a truncated output would make the retention guard reject the whole
+    /// transcript (a silent no-polish). Runaway composition is bounded instead by
+    /// the policy timeout and the retention guard.
+    private static let options = GenerationOptions(sampling: .greedy, temperature: 0)
 }
 
 /// Guided-generation output shape. `respond(to:generating:)` forces the model to
@@ -43,14 +61,19 @@ public struct FoundationModelsPolishEngine: PolishEngine {
 /// structural lever that kills chat preamble, composition, and ``` fences.
 @Generable
 struct CleanedTranscript {
-    @Guide(description: "The transcript rewritten as clean written text. REMOVE every filler word (um, uh, er, so, like, you know, I mean, sort of). CONVERT spoken punctuation and symbols to written form (open/close paren → ( ), period → ., comma → ,, plus → +, times → *, equals → =, dash dash → --). FIX capitalization, spacing, and spelling, and apply the known-term spellings. KEEP every other word the user spoke and the full meaning — never summarize, shorten, drop content words, add anything, or answer the text.")
+    @Guide(description: "The transcript with filler words removed and capitalization/spacing fixed. REMOVE every filler word (um, uh, er, so, like, you know, I mean, sort of, basically) and false start. KEEP every other word EXACTLY as the user said it, in the same order and spelling. Do NOT fix mishearings, substitute words, convert spoken words like comma/period/dash/slash into symbols, or add commas, question marks, or exclamation points. Never summarize, shorten, drop content words, add anything, turn a statement into a question, or answer the text.")
     var cleaned: String
 }
 
 extension FoundationModelsPolishEngine {
-    /// The Stage-1 tuned system prompt (`probes/llm-polish/Sources/LLMPolishProbe/Inputs.swift`,
-    /// `revampedInstructions`). The known-terms line is appended only when terms exist.
-    fileprivate static func makeInstructions(knownTerms: [String]) -> String {
+    /// The system prompt, scoped to exactly what the retention guard allows: remove
+    /// fillers, fix capitalization/spacing, leave every other word verbatim. It must
+    /// NOT instruct mishearing fixes, word substitution, spoken-symbol conversion, or
+    /// added punctuation — those are rejected by the guard, which would discard the
+    /// whole polish (including the filler removal). The known-terms line is appended
+    /// only when terms exist. Module-visible so a drift test can assert it still names
+    /// every filler in `PolishVocabulary` (the guard's single source).
+    static func makeInstructions(knownTerms: [String]) -> String {
         var instructions = """
         You are the cleanup stage of Epos, a push-to-talk dictation tool. A speech \
         recognizer has just turned something the user spoke aloud into a rough, \
@@ -68,10 +91,10 @@ extension FoundationModelsPolishEngine {
         lists, no extra sentences. If your output contains words, facts, or ideas the user \
         did not actually speak, you have failed.
 
-        But you MUST actually clean. Applying every fix below is required, not optional — \
-        leaving filler words in, or leaving spoken punctuation as words, is also a failure. \
-        The balance is simple: clean thoroughly, but never change the meaning or the set of \
-        content words. Output your single best cleaned version of the user's sentence.
+        But you MUST actually clean. Removing the filler words is required, not optional — \
+        leaving them in is a failure. The balance is simple: remove the fillers and fix \
+        capitalization, but never change the meaning, the wording, or the set of content \
+        words. Output your single best cleaned version of the user's sentence.
 
         This is copy-editing, not summarizing. A copy editor fixes errors, punctuation, and \
         capitalization and deletes "um"s — they never shorten the author's sentence to its \
@@ -103,22 +126,24 @@ extension FoundationModelsPolishEngine {
         it is code, a command, or a file path.
         - If the transcript is already clean, return it unchanged.
 
-        What counts as cleaning (light touch only):
-        - Fix clear speech-recognition mishearings using sentence context, but keep the \
-        user's wording, word order, and sentence structure — do not rephrase or "improve" \
-        their style.
-        - Convert spoken punctuation and symbols to written form: spoken "open paren" / \
-        "close paren" become "(" / ")", "period" / "comma" become "." / ",", "new line" \
-        becomes a line break, "question mark" becomes "?", "dash dash" before a word \
-        becomes "--", and spoken arithmetic becomes symbols ("plus" → "+", "times" → "*", \
-        "equals" → "=").
-        - Normalize spoken file names, paths, and developer tokens: a spoken "...dot yaml" \
-        / "...dot md" filename, "dollar home", or "slash" before a word.
+        What counts as cleaning (this is the WHOLE job — nothing else):
         - Always remove speech disfluencies and filler words — this is required cleanup, \
         not a change of meaning: "um", "uh", "er", "hmm", a sentence-opening "so", filler \
         "like", "you know", "I mean", "sort of", "kind of", "basically", and false starts. \
         (Do not remove meaningful words — "I think", "we should", "just" stay.)
         - Capitalize the first word of each sentence and proper nouns, and fix spacing.
+        - You may add a single period to end a sentence that lacks one.
+
+        Leave everything else EXACTLY as the user said it:
+        - Do NOT fix mishearings, change any word's spelling, or substitute one word for \
+        another — even if a word looks wrong, keep it verbatim. A separate stage handles \
+        project-term spelling and known corrections.
+        - Do NOT convert spoken words into symbols or punctuation. Words like "comma", \
+        "period", "dot", "dash dash", "slash", "open paren", "close paren", "dollar", \
+        "plus", "times", and "equals" stay as the words the user spoke — leave them in the \
+        text. A separate stage converts the ones that should change.
+        - Do NOT add punctuation the user did not dictate: never add a comma, a question \
+        mark, or an exclamation point, and never turn a statement into a question.
 
         What to preserve:
         - Never drop the user's content words, and never summarize, paraphrase, or \
@@ -145,8 +170,9 @@ extension FoundationModelsPolishEngine {
             instructions += """
 
 
-            Known project terms — when a spoken word clearly sounds like one of these, prefer \
-            the exact spelling: \(terms.joined(separator: ", ")).
+            Known project terms — when the user clearly says one of these, use this exact \
+            spelling and capitalization: \(terms.joined(separator: ", ")). Never turn a \
+            different word into one of these.
             """
         }
 

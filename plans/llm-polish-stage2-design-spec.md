@@ -269,3 +269,48 @@ Seams under test are public API + pure functions; the live wiring and `Foundatio
 ### Non-slice implementation tasks (shipped truth, no red test)
 - Update `specs/baseline.md`: move LLM polish from Non-Goal (lines 5, 24) to a "Shipped Since Baseline" opt-in entry; correct backlog line 208 "MLX" → FoundationModels guided generation. Done within S9.
 - Port the Stage-1 tuned prompt + `@Generable CleanedTranscript` from `probes/llm-polish/` into `FoundationModelsPolishEngine` (S9).
+
+---
+
+## Hardening pass (post-review) — scope, residuals, default-flip checklist
+
+A code review + independent verifier + adversarial review workflow hardened the
+polish stage so it can eventually ship on by default. The guard's contract is now:
+**keep the polished text only when the same content-token sequence survives after
+filler removal (plus the hyphen-merge of an already-spoken compound), with no
+added `,`/`?`/`!` and no collapsed sentence boundary; reject every other change.**
+A false reject is harmless (raw words kept); a false accept types altered meaning
+into the user's app, so every ambiguous case rejects.
+
+### Deliberate scope reduction (do NOT "re-add" these as missing features)
+- Polish does **filler removal + capitalization/spacing + an optional trailing
+  period only.** The prompt is scoped to match the guard; instructing more would
+  make the guard discard the whole polish (including the filler removal).
+- **Mishearing / known-term correction and spoken-symbol conversion are the
+  canonicalizer's job** (`TranscriptCanonicalizer`), applied to both the raw and
+  polished text so its deterministic results match on both sides. The guard does
+  NOT do fuzzy word substitution (no string distance separates `epic`→`Epos` from
+  `ethos`→`Epos`), and spoken `comma`/`period`/`dash`/`slash`/etc. are left as the
+  words the user said — convert them by adding a canonicalizer rule, not in polish.
+
+### Accepted harmless false-rejects (raw kept; documented, not bugs)
+- `main dot py`→`main.py` and similar arbitrary spoken filenames the canonicalizer
+  does not rule (the canonicalizer covers the common ones; users can add rules).
+- A dictation consisting solely of a spoken-symbol word (`question mark` alone).
+- A polish that keeps a period but lowercases the following word (`stop. Go`→
+  `Stop. go`) — the abbreviation/version-dot heuristic can't tell it from `fig. 3`.
+
+### Installed-app checks that gate flipping `polishEnabled` default → true
+These are NOT unit-testable (need the signed app / on-device model):
+1. **Insertion guard (#1, always-on):** clear a native text field mid-dictation →
+   confirm NO blind backspace into adjacent content; dictate into cmux → confirm
+   self-correction still works. If cmux advertises `kAXValueAttribute`, its
+   self-correction degrades to append-only (safe, not corrupting) — verify which.
+2. **Canonicalize-both-sides:** real `see mux…` / `dash dash verbose…` dictations
+   accept and insert correctly, with no double-application.
+3. **Timeout (finding 5):** does a timed-out polish return at ~2.5s, or does
+   `withTaskGroup` block on a non-cancellable decode? If it blocks, reconsider
+   returning at the timeout (a fresh per-call session makes an orphaned decode
+   harmless).
+4. **Polish quality:** filler removal + casing reads correctly across real
+   dictations before flipping the default.

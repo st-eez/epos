@@ -33,7 +33,7 @@ struct RecordingIndicatorSurface: View {
 
     init(
         state: CoordinatorState,
-        finalizationPhase: FinalizationPhase = .none,
+        finalizationPhase: FinalizationPhase = .finalizingSpeech,
         amplitude: Float
     ) {
         self.state = state
@@ -121,7 +121,7 @@ struct RecordingIndicatorSurface: View {
             return "Listening"
         case .finalizing:
             return switch finalizationPhase {
-            case .none, .finalizingSpeech:
+            case .finalizingSpeech:
                 "Finishing"
             case .polishing:
                 "Polishing"

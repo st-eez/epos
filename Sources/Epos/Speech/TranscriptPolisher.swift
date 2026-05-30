@@ -8,10 +8,15 @@ public protocol PolishEngine: Sendable {
     var isAvailable: Bool { get }
     /// Hint the model to load so the first real polish is faster.
     func prewarm(knownTerms: [String])
-    /// Clean up the raw transcript. May throw; the policy treats any throw as a
-    /// fallback to the raw text.
+    /// Clean up the raw transcript. May throw; the policy treats a throw as a
+    /// fallback to the raw text (or `.tooLong` for `PolishInputTooLargeError`).
     func polish(_ raw: String, knownTerms: [String]) async throws -> String
 }
+
+/// Thrown by the engine when the transcript is too large for the model's context
+/// window. Surfaced as the distinct `.tooLong` outcome so an over-long dictation
+/// is observably skipped rather than silently indistinguishable from a no-op.
+public struct PolishInputTooLargeError: Error, Sendable {}
 
 /// The text to insert plus which decision path produced it, so the caller can
 /// log the outcome without re-deriving the policy's gate.
@@ -26,6 +31,7 @@ public enum PolishOutcome: Sendable, Equatable {
     case disabled
     case unavailable
     case timedOut
+    case tooLong
     case unchanged
     case applied
 }
@@ -33,32 +39,41 @@ public enum PolishOutcome: Sendable, Equatable {
 private enum EnginePolishAttempt: Sendable, Equatable {
     case success(String)
     case failed
+    case tooLong
     case timedOut
 }
 
 /// Decides whether a polished transcript may replace the raw one, and applies
-/// the gate/guard/fallback policy around the engine. The guard is the defense
-/// against the model over-compressing a multi-clause command into a fragment:
-/// it keeps the polished text only when the same content-token sequence survives
-/// after allowed filler removal and spoken-symbol conversion. The policy never
-/// throws and always falls back to the user's own words on any failure.
+/// the gate/guard/fallback policy around the engine. The guard
+/// (`polishRetainsContent`, in `TranscriptPolisherGuard.swift`) is the defense
+/// against the model altering meaning: it keeps the polished text only when the
+/// same content-token sequence survives after allowed filler removal (and the
+/// hyphen-merge of an already-spoken compound), with no added `,`/`?`/`!` and no
+/// collapsed sentence boundary — every other change is rejected. The policy never
+/// throws and always falls back to the user's own words on any failure. Both the
+/// raw and polished strings are canonicalized before comparison so the retention
+/// guarantee holds between exactly the two strings that meet on screen, and so the
+/// canonicalizer's deterministic symbol/known-term conversions match on both sides.
 public struct TranscriptPolisher: Sendable {
     public static let defaultTimeoutNanoseconds: UInt64 = 2_500_000_000
 
     private let enabled: Bool
     private let engine: any PolishEngine
     private let knownTerms: [String]
+    private let canonicalize: @Sendable (String) -> String
     private let timeoutNanoseconds: UInt64?
 
     public init(
         enabled: Bool,
         engine: any PolishEngine,
         knownTerms: [String] = [],
+        canonicalize: @escaping @Sendable (String) -> String = { $0 },
         timeoutNanoseconds: UInt64? = Self.defaultTimeoutNanoseconds
     ) {
         self.enabled = enabled
         self.engine = engine
         self.knownTerms = knownTerms
+        self.canonicalize = canonicalize
         self.timeoutNanoseconds = timeoutNanoseconds
     }
 
@@ -67,26 +82,39 @@ public struct TranscriptPolisher: Sendable {
     }
 
     /// Returns the text to insert plus the path taken: `.applied` with the
-    /// polished text on the happy path, or the raw text with
-    /// `.disabled`/`.unavailable`/`.timedOut`/`.unchanged` (no-op, throw, or
-    /// guard-fail) on every other path. Never throws.
+    /// canonicalized polished text on the happy path, or the canonicalized raw
+    /// text with `.disabled`/`.unavailable`/`.timedOut`/`.tooLong`/`.unchanged`
+    /// (no-op, throw, or guard-fail) on every other path. Never throws.
     public func polish(_ raw: String) async -> PolishResult {
         guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return PolishResult(text: raw, outcome: .unchanged)
         }
-        guard enabled else { return PolishResult(text: raw, outcome: .disabled) }
-        guard engine.isAvailable else { return PolishResult(text: raw, outcome: .unavailable) }
+        let canonicalRaw = canonicalize(raw)
+        guard enabled else { return PolishResult(text: canonicalRaw, outcome: .disabled) }
+        guard engine.isAvailable else { return PolishResult(text: canonicalRaw, outcome: .unavailable) }
         switch await enginePolishAttempt(raw) {
         case .success(let polished):
-            guard polished != raw, Self.polishRetainsContent(raw: raw, polished: polished) else {
-                return PolishResult(text: raw, outcome: .unchanged)
+            let candidate = canonicalize(polished)
+            guard candidate != canonicalRaw,
+                  Self.polishRetainsContent(raw: canonicalRaw, polished: candidate) else {
+                return PolishResult(text: canonicalRaw, outcome: .unchanged)
             }
-            return PolishResult(text: polished, outcome: .applied)
+            return PolishResult(text: candidate, outcome: .applied)
         case .failed:
-            return PolishResult(text: raw, outcome: .unchanged)
+            return PolishResult(text: canonicalRaw, outcome: .unchanged)
+        case .tooLong:
+            return PolishResult(text: canonicalRaw, outcome: .tooLong)
         case .timedOut:
-            return PolishResult(text: raw, outcome: .timedOut)
+            return PolishResult(text: canonicalRaw, outcome: .timedOut)
         }
+    }
+
+    /// Downgrade a `.applied` outcome to `.unchanged` when the insertion layer
+    /// reports that no keystrokes actually landed (the append-only latch
+    /// suppressed the retype), so observability never claims a polish the user
+    /// didn't receive.
+    public static func effectivePolishOutcome(_ result: PolishResult, applied: Bool) -> PolishOutcome {
+        (result.outcome == .applied && !applied) ? .unchanged : result.outcome
     }
 
     /// Hint the engine to load the model so the first real polish is faster. A
@@ -97,304 +125,31 @@ public struct TranscriptPolisher: Sendable {
     }
 
     private func enginePolishAttempt(_ raw: String) async -> EnginePolishAttempt {
-        guard let timeoutNanoseconds else {
-            do {
-                return .success(try await engine.polish(raw, knownTerms: knownTerms))
-            } catch {
-                return .failed
-            }
-        }
-
         let engine = self.engine
         let knownTerms = self.knownTerms
-        let stream = AsyncStream<EnginePolishAttempt> { continuation in
-            let polishTask = Task {
-                do {
-                    let polished = try await engine.polish(raw, knownTerms: knownTerms)
-                    continuation.yield(.success(polished))
-                } catch {
-                    continuation.yield(.failed)
-                }
-                continuation.finish()
+        guard let timeoutNanoseconds else {
+            do { return .success(try await engine.polish(raw, knownTerms: knownTerms)) }
+            catch is PolishInputTooLargeError { return .tooLong }
+            catch { return .failed }
+        }
+
+        // Race the polish against a sleep; whichever finishes first wins and the
+        // other is cancelled. A task group makes both cancellations structural —
+        // no continuation/onTermination bookkeeping to get wrong — and guarantees
+        // the engine child has finished before this returns.
+        return await withTaskGroup(of: EnginePolishAttempt.self) { group in
+            group.addTask {
+                do { return .success(try await engine.polish(raw, knownTerms: knownTerms)) }
+                catch is PolishInputTooLargeError { return .tooLong }
+                catch { return .failed }
             }
-            let timeoutTask = Task {
-                do {
-                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
-                } catch {
-                    return
-                }
-                polishTask.cancel()
-                continuation.yield(.timedOut)
-                continuation.finish()
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+                return .timedOut
             }
-            continuation.onTermination = { _ in
-                polishTask.cancel()
-                timeoutTask.cancel()
-            }
-        }
-        var iterator = stream.makeAsyncIterator()
-        return await iterator.next() ?? .timedOut
-    }
-
-    // MARK: - Content-retention guard
-
-    static let singleFillers: Set<String> = ["um", "uh", "er", "hmm", "like", "basically"]
-    static let fillerPhrases: [[String]] = [
-        ["you", "know"],
-        ["i", "mean"],
-        ["sort", "of"],
-        ["kind", "of"],
-    ]
-    static let rawSpokenSymbolPhrases: [[String]] = [
-        ["dash", "dash"],
-        ["open", "paren"],
-        ["close", "paren"],
-        ["open", "parenthesis"],
-        ["close", "parenthesis"],
-        ["new", "line"],
-        ["question", "mark"],
-    ]
-    static let rawSpokenSymbolWords: Set<String> = [
-        "comma", "period", "slash", "dollar", "plus", "times", "equals", "dot"
-    ]
-    static let semanticLikePrevious: Set<String> = [
-        "i", "we", "you", "they", "he", "she", "it",
-        "seem", "seems", "seemed",
-        "look", "looks", "looked",
-        "sound", "sounds", "sounded",
-        "feel", "feels", "felt",
-    ]
-    static let semanticLikeNext: Set<String> = [
-        "to", "it", "this", "that", "these", "those",
-        "me", "us", "you", "him", "her", "them",
-    ]
-
-    /// True when the polished text preserves the raw content-token sequence and
-    /// existing sentence boundaries, allowing only filler phrases and spoken-
-    /// symbol words to disappear.
-    public static func polishRetainsContent(raw: String, polished: String) -> Bool {
-        guard !polished.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-
-        let rawTokens = tokenSpans(from: raw)
-        let polishedTokens = tokenSpans(from: polished)
-        guard let matches = matchedContentTokens(
-            rawTokens: rawTokens.map(\.text),
-            polishedTokens: polishedTokens.map(\.text)
-        ) else {
-            return false
-        }
-        return preservesRawSentenceBoundaries(
-            raw: raw,
-            polished: polished,
-            rawTokens: rawTokens,
-            polishedTokens: polishedTokens,
-            matches: matches
-        )
-    }
-
-    private struct TokenSpan {
-        let text: String
-        let range: Range<String.Index>
-    }
-
-    private struct TokenMatch {
-        let rawIndex: Int
-        let polishedIndex: Int
-    }
-
-    private static func tokenSpans(from text: String) -> [TokenSpan] {
-        var spans: [TokenSpan] = []
-        var tokenStart: String.Index?
-        var index = text.startIndex
-
-        while index < text.endIndex {
-            if isTokenCharacter(text[index]) {
-                tokenStart = tokenStart ?? index
-            } else if let start = tokenStart {
-                spans.append(TokenSpan(text: String(text[start..<index]).lowercased(), range: start..<index))
-                tokenStart = nil
-            }
-            index = text.index(after: index)
-        }
-
-        if let start = tokenStart {
-            spans.append(TokenSpan(text: String(text[start..<text.endIndex]).lowercased(), range: start..<text.endIndex))
-        }
-        return spans
-    }
-
-    private static func isTokenCharacter(_ character: Character) -> Bool {
-        character.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) }
-    }
-
-    private static func matchedContentTokens(rawTokens: [String], polishedTokens: [String]) -> [TokenMatch]? {
-        var rawIndex = 0
-        var polishedIndex = 0
-        var matchedContent = false
-        var matches: [TokenMatch] = []
-
-        while rawIndex < rawTokens.count {
-            if let droppedCount = preferredDroppableRawTokenCount(
-                in: rawTokens,
-                at: rawIndex,
-                matchedContent: matchedContent
-            ) {
-                rawIndex += droppedCount
-                continue
-            }
-
-            if polishedIndex < polishedTokens.count, rawTokens[rawIndex] == polishedTokens[polishedIndex] {
-                matches.append(TokenMatch(rawIndex: rawIndex, polishedIndex: polishedIndex))
-                rawIndex += 1
-                polishedIndex += 1
-                matchedContent = true
-                continue
-            }
-
-            if let droppedCount = droppableRawTokenCount(
-                in: rawTokens,
-                at: rawIndex,
-                matchedContent: matchedContent
-            ) {
-                rawIndex += droppedCount
-                continue
-            }
-
-            return nil
-        }
-
-        return polishedIndex == polishedTokens.count ? matches : nil
-    }
-
-    private static func preservesRawSentenceBoundaries(
-        raw: String,
-        polished: String,
-        rawTokens: [TokenSpan],
-        polishedTokens: [TokenSpan],
-        matches: [TokenMatch]
-    ) -> Bool {
-        guard matches.count > 1 else { return true }
-
-        for index in 0..<(matches.count - 1) {
-            let left = matches[index]
-            let right = matches[index + 1]
-            let rawSeparator = raw[
-                rawTokens[left.rawIndex].range.upperBound..<rawTokens[right.rawIndex].range.lowerBound
-            ]
-
-            guard containsSentenceBoundary(rawSeparator) else { continue }
-
-            let polishedSeparator = polished[
-                polishedTokens[left.polishedIndex].range.upperBound..<polishedTokens[right.polishedIndex].range.lowerBound
-            ]
-            guard containsSentenceBoundary(polishedSeparator) else { return false }
-        }
-
-        return true
-    }
-
-    private static func containsSentenceBoundary(_ separator: Substring) -> Bool {
-        var sawSentenceEnd = false
-        for character in separator {
-            if character == "." || character == "?" || character == "!" {
-                sawSentenceEnd = true
-            } else if sawSentenceEnd && character.isWhitespace {
-                return true
-            }
-        }
-        return false
-    }
-
-    private static func preferredDroppableRawTokenCount(
-        in tokens: [String],
-        at index: Int,
-        matchedContent: Bool
-    ) -> Int? {
-        if tokens[index] == "so", !matchedContent {
-            return 1
-        }
-        if tokens[index] == "like", isPreferablyDroppableLike(in: tokens, at: index, matchedContent: matchedContent) {
-            return 1
-        }
-        if tokens[index] != "like", singleFillers.contains(tokens[index]) {
-            return 1
-        }
-        if let filler = firstMatchingPhrase(in: tokens, at: index, phrases: fillerPhrases) {
-            return filler.count
-        }
-        return nil
-    }
-
-    private static func droppableRawTokenCount(
-        in tokens: [String],
-        at index: Int,
-        matchedContent: Bool
-    ) -> Int? {
-        if tokens[index] == "so", !matchedContent {
-            return 1
-        }
-        if tokens[index] == "like" {
-            return isDroppableLike(in: tokens, at: index, matchedContent: matchedContent) ? 1 : nil
-        }
-        if singleFillers.contains(tokens[index]) {
-            return 1
-        }
-        if let filler = firstMatchingPhrase(in: tokens, at: index, phrases: fillerPhrases) {
-            return filler.count
-        }
-        if rawSpokenSymbolWords.contains(tokens[index]) {
-            return 1
-        }
-        if let symbol = firstMatchingPhrase(in: tokens, at: index, phrases: rawSpokenSymbolPhrases) {
-            return symbol.count
-        }
-        return nil
-    }
-
-    private static func isDroppableLike(in tokens: [String], at index: Int, matchedContent: Bool) -> Bool {
-        guard matchedContent else { return true }
-
-        let previous = index > tokens.startIndex ? tokens[index - 1] : nil
-        let next = index + 1 < tokens.endIndex ? tokens[index + 1] : nil
-
-        if let next, singleFillers.contains(next) || next == "so" {
-            return true
-        }
-        if let previous, semanticLikePrevious.contains(previous) {
-            return false
-        }
-        if let next, semanticLikeNext.contains(next) {
-            return false
-        }
-        return true
-    }
-
-    private static func isPreferablyDroppableLike(
-        in tokens: [String],
-        at index: Int,
-        matchedContent: Bool
-    ) -> Bool {
-        guard matchedContent else { return true }
-
-        let previous = index > tokens.startIndex ? tokens[index - 1] : nil
-        let next = index + 1 < tokens.endIndex ? tokens[index + 1] : nil
-        if let previous, semanticLikePrevious.contains(previous) {
-            return false
-        }
-        if let next, semanticLikeNext.contains(next) {
-            return false
-        }
-        return next.map { singleFillers.contains($0) || $0 == "so" } ?? false
-    }
-
-    private static func firstMatchingPhrase(
-        in tokens: [String],
-        at index: Int,
-        phrases: [[String]]
-    ) -> [String]? {
-        phrases.first { phrase in
-            guard index + phrase.count <= tokens.count else { return false }
-            return Array(tokens[index..<(index + phrase.count)]) == phrase
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
         }
     }
 }

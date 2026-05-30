@@ -205,7 +205,7 @@ final class SmokeTests: XCTestCase {
 
     func testRecordingIndicatorLabelsFinalizationStages() {
         XCTAssertEqual(
-            RecordingIndicatorSurface.statusText(state: .recording, finalizationPhase: .none),
+            RecordingIndicatorSurface.statusText(state: .recording, finalizationPhase: .finalizingSpeech),
             "Listening"
         )
         XCTAssertEqual(

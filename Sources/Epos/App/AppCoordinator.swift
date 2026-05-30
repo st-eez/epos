@@ -10,7 +10,9 @@ public enum CoordinatorState: Equatable {
 }
 
 public enum FinalizationPhase: Equatable {
-    case none
+    /// Resting value and the first finalize stage (waiting for the final
+    /// transcript). Idle reads of this are never shown; the UI only consults it
+    /// while `state == .finalizing`.
     case finalizingSpeech
     case polishing
     case inserting
@@ -19,7 +21,7 @@ public enum FinalizationPhase: Equatable {
 @MainActor
 public final class AppCoordinator: ObservableObject {
     @Published public private(set) var state: CoordinatorState = .idle
-    @Published public private(set) var finalizationPhase: FinalizationPhase = .none
+    @Published public private(set) var finalizationPhase: FinalizationPhase = .finalizingSpeech
     @Published public private(set) var finalText: String = ""
     @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
@@ -102,10 +104,16 @@ public final class AppCoordinator: ObservableObject {
     /// Built once per recording so a mid-session settings change cannot alter the
     /// finalization behavior of an already-running dictation.
     private func makePolisher() -> TranscriptPolisher {
-        TranscriptPolisher(
+        // Snapshot the value-type canonicalizer so the guard validates — and the
+        // polisher returns — `canonicalize(polished)`, the exact string that meets
+        // the on-screen `canonicalize(rawStream)`. The snapshot also freezes the
+        // rules for this recording, matching the build-once-per-recording intent.
+        let canonicalizer = corrections.canonicalizer
+        return TranscriptPolisher(
             enabled: settings.polishEnabled,
             engine: polishEngine,
-            knownTerms: polishKnownTerms()
+            knownTerms: polishKnownTerms(),
+            canonicalize: { canonicalizer.canonicalize($0) }
         )
     }
 
@@ -164,7 +172,7 @@ public final class AppCoordinator: ObservableObject {
             return
         }
         state = .recording
-        finalizationPhase = .none
+        finalizationPhase = .finalizingSpeech
         finalText = ""
         partial = ""
         amplitude = 0
@@ -257,13 +265,17 @@ public final class AppCoordinator: ObservableObject {
             finalizationPhase = polisher.willAttemptPolish ? .polishing : .inserting
             let polishStartedAt = Date()
             let result = await polisher.polish(finalText)
+            finalizationPhase = .inserting
+            // Insert reports whether keystrokes actually landed; if the append-only
+            // latch suppressed the polish retype, downgrade `.applied` so the log
+            // can't claim a polish the user never received.
+            let applied = insertFinalTranscript(result.text)
+            let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
             logPolishOutcome(
-                result,
+                PolishResult(text: result.text, outcome: effectiveOutcome),
                 rawCount: finalText.count,
                 elapsedMs: millisecondsElapsed(since: polishStartedAt)
             )
-            finalizationPhase = .inserting
-            insertFinalTranscript(result.text)
             finishTextInsertionSession()
         } else {
             cancelTextInsertionSession()
@@ -284,11 +296,14 @@ public final class AppCoordinator: ObservableObject {
         textInsertionSession?.acceptFinalTranscript(finalText)
     }
 
-    func insertFinalTranscript(_ text: String) {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    /// Insert the final (already-canonicalized, already-guard-validated) text and
+    /// report whether keystrokes landed. Routes through the polished-final path so
+    /// the validated string is typed verbatim (no second canonicalize pass).
+    @discardableResult
+    func insertFinalTranscript(_ text: String) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         if let textInsertionSession {
-            textInsertionSession.acceptFinalTranscript(text)
-            return
+            return textInsertionSession.acceptFinalPolishedTranscript(text)
         }
 
         let oneShotSession = ProgressiveTranscriptInsertionSession(
@@ -296,8 +311,9 @@ public final class AppCoordinator: ObservableObject {
             canonicalize: { [corrections] text in corrections.canonicalize(text) },
             target: AXInsertionTargetObserver()
         )
-        oneShotSession.acceptFinalTranscript(text)
+        let applied = oneShotSession.acceptFinalPolishedTranscript(text)
         oneShotSession.finish()
+        return applied
     }
 
     func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {
@@ -320,6 +336,8 @@ public final class AppCoordinator: ObservableObject {
             log.info("polish skipped: model unavailable (elapsedMs=\(elapsedMs))")
         case .timedOut:
             log.info("polish timed out (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+        case .tooLong:
+            log.info("polish skipped: input too long (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .unchanged:
             log.info("polish no-op or fallback (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .applied:
@@ -356,7 +374,7 @@ public final class AppCoordinator: ObservableObject {
         transcriptionTask = nil
         activePolisher = nil
         transcriptTiming.finish()
-        finalizationPhase = .none
+        finalizationPhase = .finalizingSpeech
         state = .idle
     }
 }
