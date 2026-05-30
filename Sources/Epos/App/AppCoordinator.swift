@@ -232,9 +232,9 @@ public final class AppCoordinator: ObservableObject {
             // indicator is still up (state == .finalizing). It never throws and
             // falls back to the raw text, so the reconcile below is unchanged
             // when polish is off, unavailable, or rejected by the guard.
-            let polished = await polisher.polish(finalText)
-            logPolishOutcome(raw: finalText, polished: polished)
-            insertFinalTranscript(polished)
+            let result = await polisher.polish(finalText)
+            logPolishOutcome(result, rawCount: finalText.count)
+            insertFinalTranscript(result.text)
             finishTextInsertionSession()
         } else {
             cancelTextInsertionSession()
@@ -281,21 +281,18 @@ public final class AppCoordinator: ObservableObject {
     }
 
     /// Privacy-safe observability for the polish stage: character counts only,
-    /// never transcript text. Lets the diagnostic log show whether polish ran,
-    /// was skipped (off / model unavailable), or fell back to the raw text.
-    private func logPolishOutcome(raw: String, polished: String) {
-        guard settings.polishEnabled else {
+    /// never transcript text. Reads the policy's own `PolishOutcome` so the log
+    /// can't drift from the decision the polisher actually made.
+    private func logPolishOutcome(_ result: PolishResult, rawCount: Int) {
+        switch result.outcome {
+        case .disabled:
             log.info("polish off")
-            return
-        }
-        guard polishEngine.isAvailable else {
+        case .unavailable:
             log.info("polish skipped: model unavailable")
-            return
-        }
-        if polished == raw {
-            log.info("polish no-op or fallback (rawChars=\(raw.count))")
-        } else {
-            log.info("polish applied (rawChars=\(raw.count) polishedChars=\(polished.count))")
+        case .unchanged:
+            log.info("polish no-op or fallback (rawChars=\(rawCount))")
+        case .applied:
+            log.info("polish applied (rawChars=\(rawCount) polishedChars=\(result.text.count))")
         }
     }
 

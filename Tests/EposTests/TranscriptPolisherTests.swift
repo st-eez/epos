@@ -13,7 +13,8 @@ final class TranscriptPolisherTests: XCTestCase {
 
         let result = await polisher.polish("raw transcript")
 
-        XCTAssertEqual(result, "raw transcript")
+        XCTAssertEqual(result.text, "raw transcript")
+        XCTAssertEqual(result.outcome, .disabled)
         XCTAssertEqual(engine.polishCallCount, 0)
     }
 
@@ -23,7 +24,8 @@ final class TranscriptPolisherTests: XCTestCase {
 
         let result = await polisher.polish("raw transcript")
 
-        XCTAssertEqual(result, "raw transcript")
+        XCTAssertEqual(result.text, "raw transcript")
+        XCTAssertEqual(result.outcome, .unavailable)
         XCTAssertEqual(engine.polishCallCount, 0)
     }
 
@@ -33,7 +35,8 @@ final class TranscriptPolisherTests: XCTestCase {
 
         let result = await polisher.polish("raw transcript")
 
-        XCTAssertEqual(result, "raw transcript")
+        XCTAssertEqual(result.text, "raw transcript")
+        XCTAssertEqual(result.outcome, .unchanged)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -46,7 +49,8 @@ final class TranscriptPolisherTests: XCTestCase {
 
         let result = await polisher.polish(raw)
 
-        XCTAssertEqual(result, raw)
+        XCTAssertEqual(result.text, raw)
+        XCTAssertEqual(result.outcome, .unchanged)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -59,7 +63,8 @@ final class TranscriptPolisherTests: XCTestCase {
 
         let result = await polisher.polish(raw)
 
-        XCTAssertEqual(result, "I think we should ship the feature.")
+        XCTAssertEqual(result.text, "I think we should ship the feature.")
+        XCTAssertEqual(result.outcome, .applied)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -69,7 +74,8 @@ final class TranscriptPolisherTests: XCTestCase {
 
         let result = await polisher.polish("   ")
 
-        XCTAssertEqual(result, "   ")
+        XCTAssertEqual(result.text, "   ")
+        XCTAssertEqual(result.outcome, .unchanged)
         XCTAssertEqual(engine.polishCallCount, 0)
     }
 

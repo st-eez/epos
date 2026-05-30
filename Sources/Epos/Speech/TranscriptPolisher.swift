@@ -13,6 +13,22 @@ public protocol PolishEngine: Sendable {
     func polish(_ raw: String) async throws -> String
 }
 
+/// The text to insert plus which decision path produced it, so the caller can
+/// log the outcome without re-deriving the policy's gate.
+public struct PolishResult: Sendable, Equatable {
+    public let text: String
+    public let outcome: PolishOutcome
+}
+
+/// Which path `TranscriptPolisher.polish` took. `unchanged` covers a model no-op,
+/// a guard rejection, and an engine throw — all keep the user's raw words.
+public enum PolishOutcome: Sendable, Equatable {
+    case disabled
+    case unavailable
+    case unchanged
+    case applied
+}
+
 /// Decides whether a polished transcript may replace the raw one, and applies
 /// the gate/guard/fallback policy around the engine. The guard is the defense
 /// against the model over-compressing a multi-clause command into a fragment:
@@ -28,16 +44,24 @@ public struct TranscriptPolisher: Sendable {
         self.engine = engine
     }
 
-    /// Returns polished text on the happy path, or the raw text on any
-    /// disabled/unavailable/throw/guard-fail path. Never throws.
-    public func polish(_ raw: String) async -> String {
-        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return raw }
-        guard enabled, engine.isAvailable else { return raw }
+    /// Returns the text to insert plus the path taken: `.applied` with the
+    /// polished text on the happy path, or the raw text with
+    /// `.disabled`/`.unavailable`/`.unchanged` (no-op, throw, or guard-fail) on
+    /// every other path. Never throws.
+    public func polish(_ raw: String) async -> PolishResult {
+        guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return PolishResult(text: raw, outcome: .unchanged)
+        }
+        guard enabled else { return PolishResult(text: raw, outcome: .disabled) }
+        guard engine.isAvailable else { return PolishResult(text: raw, outcome: .unavailable) }
         do {
             let polished = try await engine.polish(raw)
-            return Self.polishRetainsContent(raw: raw, polished: polished) ? polished : raw
+            guard polished != raw, Self.polishRetainsContent(raw: raw, polished: polished) else {
+                return PolishResult(text: raw, outcome: .unchanged)
+            }
+            return PolishResult(text: polished, outcome: .applied)
         } catch {
-            return raw
+            return PolishResult(text: raw, outcome: .unchanged)
         }
     }
 
