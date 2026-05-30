@@ -22,6 +22,23 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                 "we should ship it",
                 true
             ),
+            // Ambiguous filler words are only droppable when needed for
+            // alignment. The final "like" is semantic and must be allowed to
+            // survive while the filler "like"s are removed.
+            (
+                "Uh, like, I'm trying to see the, uh, filler words would, like, uh, " +
+                    "get removed, but it doesn't seem like it.",
+                "I'm trying to see the filler words would get removed, but it " +
+                    "doesn't seem like it.",
+                true
+            ),
+            (
+                "Uh, like, I'm trying to see the, uh, filler words would, like, uh, " +
+                    "get removed, but it doesn't seem like it.",
+                "I'm trying to see the filler words would get removed, but it " +
+                    "doesn't seem it.",
+                false
+            ),
             // "I think" is meaningful per the prompt. Dropping it is content loss.
             (
                 "um so like i think we should uh ship it you know",

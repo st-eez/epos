@@ -95,58 +95,105 @@ public struct TranscriptPolisher: Sendable {
     static let rawSpokenSymbolWords: Set<String> = [
         "comma", "period", "slash", "dollar", "plus", "times", "equals", "dot"
     ]
+    static let semanticLikePrevious: Set<String> = [
+        "i", "we", "you", "they", "he", "she", "it",
+        "seem", "seems", "seemed",
+        "look", "looks", "looked",
+        "sound", "sounds", "sounded",
+        "feel", "feels", "felt",
+    ]
+    static let semanticLikeNext: Set<String> = [
+        "to", "it", "this", "that", "these", "those",
+        "me", "us", "you", "him", "her", "them",
+    ]
 
-    /// True when the polished text preserves the raw content-token sequence after
-    /// dropping only allowed filler phrases and raw spoken-symbol words.
+    /// True when the polished text preserves the raw content-token sequence,
+    /// allowing only filler phrases and spoken-symbol words to disappear.
     public static func polishRetainsContent(raw: String, polished: String) -> Bool {
         guard !polished.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
-        return contentTokens(from: raw, droppingFillers: true, droppingRawSpokenSymbols: true) ==
-            contentTokens(from: polished, droppingFillers: false, droppingRawSpokenSymbols: false)
+        return polishedTokensRetainRawContent(
+            rawTokens: tokens(from: raw),
+            polishedTokens: tokens(from: polished)
+        )
     }
 
-    private static func contentTokens(
-        from text: String,
-        droppingFillers: Bool,
-        droppingRawSpokenSymbols: Bool
-    ) -> [String] {
-        let tokens = text.lowercased()
+    private static func tokens(from text: String) -> [String] {
+        text.lowercased()
             .components(separatedBy: CharacterSet.alphanumerics.inverted)
             .filter { !$0.isEmpty }
-        var output: [String] = []
-        var index = 0
+    }
 
-        while index < tokens.count {
-            if droppingFillers {
-                if tokens[index] == "so", output.isEmpty {
-                    index += 1
-                    continue
-                }
-                if singleFillers.contains(tokens[index]) {
-                    index += 1
-                    continue
-                }
-                if let filler = firstMatchingPhrase(in: tokens, at: index, phrases: fillerPhrases) {
-                    index += filler.count
-                    continue
-                }
-            }
-            if droppingRawSpokenSymbols {
-                if rawSpokenSymbolWords.contains(tokens[index]) {
-                    index += 1
-                    continue
-                }
-                if let symbol = firstMatchingPhrase(in: tokens, at: index, phrases: rawSpokenSymbolPhrases) {
-                    index += symbol.count
-                    continue
-                }
+    private static func polishedTokensRetainRawContent(rawTokens: [String], polishedTokens: [String]) -> Bool {
+        var rawIndex = 0
+        var polishedIndex = 0
+        var matchedContent = false
+
+        while rawIndex < rawTokens.count {
+            if polishedIndex < polishedTokens.count, rawTokens[rawIndex] == polishedTokens[polishedIndex] {
+                rawIndex += 1
+                polishedIndex += 1
+                matchedContent = true
+                continue
             }
 
-            output.append(tokens[index])
-            index += 1
+            if let droppedCount = droppableRawTokenCount(
+                in: rawTokens,
+                at: rawIndex,
+                matchedContent: matchedContent
+            ) {
+                rawIndex += droppedCount
+                continue
+            }
+
+            return false
         }
 
-        return output
+        return polishedIndex == polishedTokens.count
+    }
+
+    private static func droppableRawTokenCount(
+        in tokens: [String],
+        at index: Int,
+        matchedContent: Bool
+    ) -> Int? {
+        if tokens[index] == "so", !matchedContent {
+            return 1
+        }
+        if tokens[index] == "like" {
+            return isDroppableLike(in: tokens, at: index, matchedContent: matchedContent) ? 1 : nil
+        }
+        if singleFillers.contains(tokens[index]) {
+            return 1
+        }
+        if let filler = firstMatchingPhrase(in: tokens, at: index, phrases: fillerPhrases) {
+            return filler.count
+        }
+        if rawSpokenSymbolWords.contains(tokens[index]) {
+            return 1
+        }
+        if let symbol = firstMatchingPhrase(in: tokens, at: index, phrases: rawSpokenSymbolPhrases) {
+            return symbol.count
+        }
+        return nil
+    }
+
+    private static func isDroppableLike(in tokens: [String], at index: Int, matchedContent: Bool) -> Bool {
+        guard matchedContent else { return true }
+
+        let previous = index > tokens.startIndex ? tokens[index - 1] : nil
+        let next = index + 1 < tokens.endIndex ? tokens[index + 1] : nil
+
+        if let next, singleFillers.contains(next) || next == "so" {
+            return true
+        }
+        if let previous, semanticLikePrevious.contains(previous) {
+            return false
+        }
+        if let next, semanticLikeNext.contains(next) {
+            return false
+        }
+        return true
     }
 
     private static func firstMatchingPhrase(
