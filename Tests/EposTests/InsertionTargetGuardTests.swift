@@ -131,6 +131,37 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
+    func testSessionProceedsWhenValueReadsEmptyRatherThanLatchingAppendOnly() {
+        // Apps that expose no editable text via Accessibility (web/Electron
+        // terminals like cmux) report an empty value regardless of content. That
+        // is uninformative — not proof the field diverged — so the session must
+        // still backspace-and-retype a revised word, the same as when the value
+        // is unreadable (nil). Latching append-only here would silently break
+        // self-correction (and the polish retype) in every such app.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("open the")
+        session.acceptPartialTranscript("open the door")
+        // Empty read just before a delete: uninformative, must not force append-only.
+        observer.value = ""
+        session.acceptPartialTranscript("open a door")
+        session.acceptFinalTranscript("open a door")
+        session.finish()
+
+        XCTAssertEqual(
+            backend.operations,
+            [.insert("open the"), .insert(" door"), .delete(8), .insert("a door")]
+        )
+        XCTAssertEqual(backend.fieldText, "open a door")
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
     func testSessionProceedsNormallyWhenTargetStaysConsistent() {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
