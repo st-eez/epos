@@ -27,6 +27,14 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
+    func testReadFactoryTreatsNilAndEmptyAsNotRead() {
+        // A failed read (nil) and an app that exposes no AX text ("", e.g. cmux)
+        // are both uninformative — only a non-empty read becomes a usable value.
+        XCTAssertEqual(InsertionTargetObservation.read(nil), .notRead)
+        XCTAssertEqual(InsertionTargetObservation.read(""), .notRead)
+        XCTAssertEqual(InsertionTargetObservation.read("hello"), .value("hello"))
+    }
+
     func testValueEndingWithExpectedProceeds() {
         // Field holds exactly our text.
         XCTAssertEqual(
@@ -53,8 +61,10 @@ final class InsertionTargetGuardTests: XCTestCase {
             InsertionTargetGuard.decide(expected: "foo(", observed: .value("foo()")),
             .stopAppendOnly
         )
-        // Unreadable value surfaces as empty string; with text expected, that is
-        // divergence → append-only (never delete blind).
+        // A genuinely-empty on-screen value can't end with the expected text, so
+        // the pure policy treats it as divergence. The live path never hits this
+        // for an empty AX read — `InsertionTargetObservation.read` maps "" to
+        // `.notRead` at the boundary — but `decide` stays total either way.
         XCTAssertEqual(
             InsertionTargetGuard.decide(expected: "hello", observed: .value("")),
             .stopAppendOnly

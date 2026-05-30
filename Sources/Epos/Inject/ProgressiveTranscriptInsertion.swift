@@ -105,17 +105,12 @@ public final class ProgressiveTranscriptInsertionSession {
         // already latched append-only). If the on-screen text no longer ends with
         // what we believe we typed, stop deleting.
         if deleteCount > 0, !appendOnly {
-            // Map the observed value to an observation. nil → the read failed (no
-            // AX baseline, or the element doesn't expose its text); "" → the app
-            // reports no editable text via Accessibility (web/Electron terminals
-            // such as cmux return empty regardless of content). Both are
-            // uninformative — we can neither confirm nor deny our text is on
-            // screen — so `.notRead` → proceed, leaving the cheap focus check as
-            // the only guard this cycle. Only a NON-EMPTY value we actually read
-            // can prove divergence and force append-only.
-            let observedValue = target.observedValue()
-            let observation: InsertionTargetObservation =
-                if let observedValue, !observedValue.isEmpty { .value(observedValue) } else { .notRead }
+            // `.read` maps a failed (nil) or empty ("") Accessibility read to
+            // `.notRead`: both are uninformative — web/Electron terminals such as
+            // cmux expose no AX text and return "" regardless of content — so the
+            // cheap focus check above is the only guard this cycle. Only a
+            // non-empty value can prove divergence and force append-only.
+            let observation = InsertionTargetObservation.read(target.observedValue())
             switch InsertionTargetGuard.decide(expected: committedText, observed: observation) {
             case .abort:
                 log.info("insertion guard: target unreadable on pre-delete check; aborting")

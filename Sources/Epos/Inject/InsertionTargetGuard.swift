@@ -28,6 +28,21 @@ public enum InsertionTargetObservation: Equatable {
     case notRead
 }
 
+extension InsertionTargetObservation {
+    /// Build the observation from a raw Accessibility value read. `nil` means the
+    /// read failed (no AX baseline, or the element exposes no text); `""` means
+    /// the app reports no editable text via Accessibility at all (web/Electron
+    /// terminals such as cmux return empty regardless of content). Both are
+    /// uninformative — they neither confirm nor deny our text is on screen — so
+    /// both become `.notRead`. Only a non-empty read becomes a `.value` the guard
+    /// can use to prove divergence. Keeping this at the read boundary means a
+    /// `.value("")` never reaches `decide` from the live path.
+    public static func read(_ value: String?) -> InsertionTargetObservation {
+        guard let value, !value.isEmpty else { return .notRead }
+        return .value(value)
+    }
+}
+
 public enum InsertionTargetGuard {
     /// Pure decision: given what we believe we typed (`expected`) and what we
     /// observed about the target, decide what the session may do.
