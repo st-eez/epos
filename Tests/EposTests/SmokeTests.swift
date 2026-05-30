@@ -203,6 +203,25 @@ final class SmokeTests: XCTestCase {
         XCTAssertGreaterThan(loudHeights.max() ?? 0, quietHeights.max() ?? 0)
     }
 
+    func testRecordingIndicatorLabelsFinalizationStages() {
+        XCTAssertEqual(
+            RecordingIndicatorSurface.statusText(state: .recording, finalizationPhase: .none),
+            "Listening"
+        )
+        XCTAssertEqual(
+            RecordingIndicatorSurface.statusText(state: .finalizing, finalizationPhase: .finalizingSpeech),
+            "Finishing"
+        )
+        XCTAssertEqual(
+            RecordingIndicatorSurface.statusText(state: .finalizing, finalizationPhase: .polishing),
+            "Polishing"
+        )
+        XCTAssertEqual(
+            RecordingIndicatorSurface.statusText(state: .finalizing, finalizationPhase: .inserting),
+            "Updating"
+        )
+    }
+
     func testInlineIndicatorFallsBackWhenCaretRectIsUnavailable() {
         let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
         let pillSize = CGSize(width: 144, height: 36)

@@ -9,9 +9,17 @@ public enum CoordinatorState: Equatable {
     case finalizing
 }
 
+public enum FinalizationPhase: Equatable {
+    case none
+    case finalizingSpeech
+    case polishing
+    case inserting
+}
+
 @MainActor
 public final class AppCoordinator: ObservableObject {
     @Published public private(set) var state: CoordinatorState = .idle
+    @Published public private(set) var finalizationPhase: FinalizationPhase = .none
     @Published public private(set) var finalText: String = ""
     @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
@@ -156,6 +164,7 @@ public final class AppCoordinator: ObservableObject {
             return
         }
         state = .recording
+        finalizationPhase = .none
         finalText = ""
         partial = ""
         amplitude = 0
@@ -179,6 +188,7 @@ public final class AppCoordinator: ObservableObject {
     public func finishRecording() {
         guard state == .recording else { return }
         state = .finalizing
+        finalizationPhase = .finalizingSpeech
         log.info("recording finalize")
         audio.stop()
         let transcriber = transcriber
@@ -243,8 +253,16 @@ public final class AppCoordinator: ObservableObject {
             // indicator is still up (state == .finalizing). It never throws and
             // falls back to the raw text, so the reconcile below is unchanged
             // when polish is off, unavailable, or rejected by the guard.
-            let result = await (activePolisher ?? makePolisher()).polish(finalText)
-            logPolishOutcome(result, rawCount: finalText.count)
+            let polisher = activePolisher ?? makePolisher()
+            finalizationPhase = polisher.willAttemptPolish ? .polishing : .inserting
+            let polishStartedAt = Date()
+            let result = await polisher.polish(finalText)
+            logPolishOutcome(
+                result,
+                rawCount: finalText.count,
+                elapsedMs: millisecondsElapsed(since: polishStartedAt)
+            )
+            finalizationPhase = .inserting
             insertFinalTranscript(result.text)
             finishTextInsertionSession()
         } else {
@@ -294,17 +312,23 @@ public final class AppCoordinator: ObservableObject {
     /// Privacy-safe observability for the polish stage: character counts only,
     /// never transcript text. Reads the policy's own `PolishOutcome` so the log
     /// can't drift from the decision the polisher actually made.
-    private func logPolishOutcome(_ result: PolishResult, rawCount: Int) {
+    private func logPolishOutcome(_ result: PolishResult, rawCount: Int, elapsedMs: Int) {
         switch result.outcome {
         case .disabled:
-            log.info("polish off")
+            log.info("polish off (elapsedMs=\(elapsedMs))")
         case .unavailable:
-            log.info("polish skipped: model unavailable")
+            log.info("polish skipped: model unavailable (elapsedMs=\(elapsedMs))")
+        case .timedOut:
+            log.info("polish timed out (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .unchanged:
-            log.info("polish no-op or fallback (rawChars=\(rawCount))")
+            log.info("polish no-op or fallback (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .applied:
-            log.info("polish applied (rawChars=\(rawCount) polishedChars=\(result.text.count))")
+            log.info("polish applied (rawChars=\(rawCount) polishedChars=\(result.text.count) elapsedMs=\(elapsedMs))")
         }
+    }
+
+    private func millisecondsElapsed(since start: Date) -> Int {
+        max(0, Int(Date().timeIntervalSince(start) * 1000))
     }
 
     private func finishTextInsertionSession() {
@@ -332,6 +356,7 @@ public final class AppCoordinator: ObservableObject {
         transcriptionTask = nil
         activePolisher = nil
         transcriptTiming.finish()
+        finalizationPhase = .none
         state = .idle
     }
 }

@@ -240,7 +240,33 @@ public struct MenuBarView: View {
         case .recording:
             Readiness(icon: "waveform", title: "Recording", subtitle: "Release fn to finish", color: red)
         case .finalizing:
-            Readiness(icon: "arrow.down.doc", title: "Finishing dictation", subtitle: "Pasting into the frontmost app", color: teal)
+            finalizationReadiness
+        }
+    }
+
+    private var finalizationReadiness: Readiness {
+        switch coordinator.finalizationPhase {
+        case .none, .finalizingSpeech:
+            Readiness(
+                icon: "waveform.badge.magnifyingglass",
+                title: "Finishing speech",
+                subtitle: "Waiting for the final transcript",
+                color: amber
+            )
+        case .polishing:
+            Readiness(
+                icon: "sparkles",
+                title: "Polishing dictation",
+                subtitle: "Cleaning filler words",
+                color: amber
+            )
+        case .inserting:
+            Readiness(
+                icon: "arrow.down.doc",
+                title: "Updating text",
+                subtitle: "Reconciling final output",
+                color: teal
+            )
         }
     }
 }

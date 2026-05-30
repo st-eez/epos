@@ -25,8 +25,15 @@ public struct PolishResult: Sendable, Equatable {
 public enum PolishOutcome: Sendable, Equatable {
     case disabled
     case unavailable
+    case timedOut
     case unchanged
     case applied
+}
+
+private enum EnginePolishAttempt: Sendable, Equatable {
+    case success(String)
+    case failed
+    case timedOut
 }
 
 /// Decides whether a polished transcript may replace the raw one, and applies
@@ -36,34 +43,49 @@ public enum PolishOutcome: Sendable, Equatable {
 /// after allowed filler removal and spoken-symbol conversion. The policy never
 /// throws and always falls back to the user's own words on any failure.
 public struct TranscriptPolisher: Sendable {
+    public static let defaultTimeoutNanoseconds: UInt64 = 2_500_000_000
+
     private let enabled: Bool
     private let engine: any PolishEngine
     private let knownTerms: [String]
+    private let timeoutNanoseconds: UInt64?
 
-    public init(enabled: Bool, engine: any PolishEngine, knownTerms: [String] = []) {
+    public init(
+        enabled: Bool,
+        engine: any PolishEngine,
+        knownTerms: [String] = [],
+        timeoutNanoseconds: UInt64? = Self.defaultTimeoutNanoseconds
+    ) {
         self.enabled = enabled
         self.engine = engine
         self.knownTerms = knownTerms
+        self.timeoutNanoseconds = timeoutNanoseconds
+    }
+
+    public var willAttemptPolish: Bool {
+        enabled && engine.isAvailable
     }
 
     /// Returns the text to insert plus the path taken: `.applied` with the
     /// polished text on the happy path, or the raw text with
-    /// `.disabled`/`.unavailable`/`.unchanged` (no-op, throw, or guard-fail) on
-    /// every other path. Never throws.
+    /// `.disabled`/`.unavailable`/`.timedOut`/`.unchanged` (no-op, throw, or
+    /// guard-fail) on every other path. Never throws.
     public func polish(_ raw: String) async -> PolishResult {
         guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return PolishResult(text: raw, outcome: .unchanged)
         }
         guard enabled else { return PolishResult(text: raw, outcome: .disabled) }
         guard engine.isAvailable else { return PolishResult(text: raw, outcome: .unavailable) }
-        do {
-            let polished = try await engine.polish(raw, knownTerms: knownTerms)
+        switch await enginePolishAttempt(raw) {
+        case .success(let polished):
             guard polished != raw, Self.polishRetainsContent(raw: raw, polished: polished) else {
                 return PolishResult(text: raw, outcome: .unchanged)
             }
             return PolishResult(text: polished, outcome: .applied)
-        } catch {
+        case .failed:
             return PolishResult(text: raw, outcome: .unchanged)
+        case .timedOut:
+            return PolishResult(text: raw, outcome: .timedOut)
         }
     }
 
@@ -72,6 +94,46 @@ public struct TranscriptPolisher: Sendable {
     public func prewarm() {
         guard enabled, engine.isAvailable else { return }
         engine.prewarm(knownTerms: knownTerms)
+    }
+
+    private func enginePolishAttempt(_ raw: String) async -> EnginePolishAttempt {
+        guard let timeoutNanoseconds else {
+            do {
+                return .success(try await engine.polish(raw, knownTerms: knownTerms))
+            } catch {
+                return .failed
+            }
+        }
+
+        let engine = self.engine
+        let knownTerms = self.knownTerms
+        let stream = AsyncStream<EnginePolishAttempt> { continuation in
+            let polishTask = Task {
+                do {
+                    let polished = try await engine.polish(raw, knownTerms: knownTerms)
+                    continuation.yield(.success(polished))
+                } catch {
+                    continuation.yield(.failed)
+                }
+                continuation.finish()
+            }
+            let timeoutTask = Task {
+                do {
+                    try await Task.sleep(nanoseconds: timeoutNanoseconds)
+                } catch {
+                    return
+                }
+                polishTask.cancel()
+                continuation.yield(.timedOut)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in
+                polishTask.cancel()
+                timeoutTask.cancel()
+            }
+        }
+        var iterator = stream.makeAsyncIterator()
+        return await iterator.next() ?? .timedOut
     }
 
     // MARK: - Content-retention guard

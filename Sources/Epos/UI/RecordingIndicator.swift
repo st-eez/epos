@@ -11,6 +11,7 @@ public struct RecordingIndicator: View {
     public var body: some View {
         RecordingIndicatorSurface(
             state: coordinator.state,
+            finalizationPhase: coordinator.finalizationPhase,
             amplitude: coordinator.amplitude
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -23,6 +24,7 @@ public struct RecordingIndicator: View {
 /// never echoes it — it only signals that Epos is listening and how loud.
 struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
+    let finalizationPhase: FinalizationPhase
     let amplitude: Float
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
@@ -31,19 +33,30 @@ struct RecordingIndicatorSurface: View {
 
     init(
         state: CoordinatorState,
+        finalizationPhase: FinalizationPhase = .none,
         amplitude: Float
     ) {
         self.state = state
+        self.finalizationPhase = finalizationPhase
         self.amplitude = amplitude
     }
 
     var body: some View {
-        HStack(spacing: 7) {
+        HStack(spacing: 8) {
             statusDot
-            amplitudeMeter
+            if state == .recording {
+                amplitudeMeter
+            } else {
+                activitySpinner
+            }
+            Text(Self.statusText(state: state, finalizationPhase: finalizationPhase))
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(.white.opacity(0.88))
+                .lineLimit(1)
+                .frame(width: 58, alignment: .leading)
         }
+        .frame(width: 126, height: 36)
         .padding(.horizontal, 12)
-        .padding(.vertical, 9)
         .background(.ultraThinMaterial, in: Capsule(style: .continuous))
         .background(Capsule(style: .continuous).fill(panelColor.opacity(0.9)))
         .overlay(surfaceStroke)
@@ -69,6 +82,14 @@ struct RecordingIndicatorSurface: View {
         .frame(width: 24, height: 20)
     }
 
+    private var activitySpinner: some View {
+        ProgressView()
+            .controlSize(.small)
+            .tint(statusColor)
+            .scaleEffect(0.58)
+            .frame(width: 24, height: 20)
+    }
+
     private var surfaceStroke: some View {
         Capsule(style: .continuous)
             .strokeBorder(
@@ -86,6 +107,27 @@ struct RecordingIndicatorSurface: View {
         case .recording: teal
         case .finalizing: amber
         case .idle: .white.opacity(0.34)
+        }
+    }
+
+    nonisolated static func statusText(
+        state: CoordinatorState,
+        finalizationPhase: FinalizationPhase
+    ) -> String {
+        switch state {
+        case .idle:
+            return "Ready"
+        case .recording:
+            return "Listening"
+        case .finalizing:
+            return switch finalizationPhase {
+            case .none, .finalizingSpeech:
+                "Finishing"
+            case .polishing:
+                "Polishing"
+            case .inserting:
+                "Updating"
+            }
         }
     }
 

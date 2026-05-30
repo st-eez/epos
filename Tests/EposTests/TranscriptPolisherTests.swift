@@ -2,8 +2,8 @@ import XCTest
 @testable import Epos
 
 /// Policy tests for `TranscriptPolisher.polish`, driven by a fake engine so the
-/// six decision paths (disabled / unavailable / throws / guard-fail / success /
-/// empty) are exercised hermetically — no FoundationModels, no network. The real
+/// seven decision paths (disabled / unavailable / throws / timeout / guard-fail
+/// / success / empty) are exercised hermetically — no FoundationModels, no network. The real
 /// model call and the live insertion it feeds are not unit-testable (they need
 /// the installed signed app), so only the policy around the engine is covered.
 final class TranscriptPolisherTests: XCTestCase {
@@ -37,6 +37,21 @@ final class TranscriptPolisherTests: XCTestCase {
 
         XCTAssertEqual(result.text, "raw transcript")
         XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(engine.polishCallCount, 1)
+    }
+
+    func testPolishReturnsRawWhenEngineTimesOut() async {
+        let engine = FakePolishEngine(result: "polished output", delayNanoseconds: 1_000_000_000)
+        let polisher = TranscriptPolisher(
+            enabled: true,
+            engine: engine,
+            timeoutNanoseconds: 50_000_000
+        )
+
+        let result = await polisher.polish("raw transcript")
+
+        XCTAssertEqual(result.text, "raw transcript")
+        XCTAssertEqual(result.outcome, .timedOut)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -112,15 +127,22 @@ final class FakePolishEngine: PolishEngine, @unchecked Sendable {
     var isAvailable: Bool
     var result: String
     var throwError: Error?
+    var delayNanoseconds: UInt64?
     private(set) var polishCallCount = 0
     private(set) var prewarmCallCount = 0
     private(set) var polishKnownTerms: [[String]] = []
     private(set) var prewarmKnownTerms: [[String]] = []
 
-    init(isAvailable: Bool = true, result: String = "", throwError: Error? = nil) {
+    init(
+        isAvailable: Bool = true,
+        result: String = "",
+        throwError: Error? = nil,
+        delayNanoseconds: UInt64? = nil
+    ) {
         self.isAvailable = isAvailable
         self.result = result
         self.throwError = throwError
+        self.delayNanoseconds = delayNanoseconds
     }
 
     func prewarm(knownTerms: [String]) {
@@ -131,6 +153,9 @@ final class FakePolishEngine: PolishEngine, @unchecked Sendable {
     func polish(_ raw: String, knownTerms: [String]) async throws -> String {
         polishCallCount += 1
         polishKnownTerms.append(knownTerms)
+        if let delayNanoseconds {
+            try await Task.sleep(nanoseconds: delayNanoseconds)
+        }
         if let throwError { throw throwError }
         return result
     }
