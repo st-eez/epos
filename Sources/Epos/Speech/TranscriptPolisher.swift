@@ -169,27 +169,69 @@ public struct TranscriptPolisher: Sendable {
         "me", "us", "you", "him", "her", "them",
     ]
 
-    /// True when the polished text preserves the raw content-token sequence,
-    /// allowing only filler phrases and spoken-symbol words to disappear.
+    /// True when the polished text preserves the raw content-token sequence and
+    /// existing sentence boundaries, allowing only filler phrases and spoken-
+    /// symbol words to disappear.
     public static func polishRetainsContent(raw: String, polished: String) -> Bool {
         guard !polished.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
 
-        return polishedTokensRetainRawContent(
-            rawTokens: tokens(from: raw),
-            polishedTokens: tokens(from: polished)
+        let rawTokens = tokenSpans(from: raw)
+        let polishedTokens = tokenSpans(from: polished)
+        guard let matches = matchedContentTokens(
+            rawTokens: rawTokens.map(\.text),
+            polishedTokens: polishedTokens.map(\.text)
+        ) else {
+            return false
+        }
+        return preservesRawSentenceBoundaries(
+            raw: raw,
+            polished: polished,
+            rawTokens: rawTokens,
+            polishedTokens: polishedTokens,
+            matches: matches
         )
     }
 
-    private static func tokens(from text: String) -> [String] {
-        text.lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
+    private struct TokenSpan {
+        let text: String
+        let range: Range<String.Index>
     }
 
-    private static func polishedTokensRetainRawContent(rawTokens: [String], polishedTokens: [String]) -> Bool {
+    private struct TokenMatch {
+        let rawIndex: Int
+        let polishedIndex: Int
+    }
+
+    private static func tokenSpans(from text: String) -> [TokenSpan] {
+        var spans: [TokenSpan] = []
+        var tokenStart: String.Index?
+        var index = text.startIndex
+
+        while index < text.endIndex {
+            if isTokenCharacter(text[index]) {
+                tokenStart = tokenStart ?? index
+            } else if let start = tokenStart {
+                spans.append(TokenSpan(text: String(text[start..<index]).lowercased(), range: start..<index))
+                tokenStart = nil
+            }
+            index = text.index(after: index)
+        }
+
+        if let start = tokenStart {
+            spans.append(TokenSpan(text: String(text[start..<text.endIndex]).lowercased(), range: start..<text.endIndex))
+        }
+        return spans
+    }
+
+    private static func isTokenCharacter(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) }
+    }
+
+    private static func matchedContentTokens(rawTokens: [String], polishedTokens: [String]) -> [TokenMatch]? {
         var rawIndex = 0
         var polishedIndex = 0
         var matchedContent = false
+        var matches: [TokenMatch] = []
 
         while rawIndex < rawTokens.count {
             if let droppedCount = preferredDroppableRawTokenCount(
@@ -202,6 +244,7 @@ public struct TranscriptPolisher: Sendable {
             }
 
             if polishedIndex < polishedTokens.count, rawTokens[rawIndex] == polishedTokens[polishedIndex] {
+                matches.append(TokenMatch(rawIndex: rawIndex, polishedIndex: polishedIndex))
                 rawIndex += 1
                 polishedIndex += 1
                 matchedContent = true
@@ -217,10 +260,49 @@ public struct TranscriptPolisher: Sendable {
                 continue
             }
 
-            return false
+            return nil
         }
 
-        return polishedIndex == polishedTokens.count
+        return polishedIndex == polishedTokens.count ? matches : nil
+    }
+
+    private static func preservesRawSentenceBoundaries(
+        raw: String,
+        polished: String,
+        rawTokens: [TokenSpan],
+        polishedTokens: [TokenSpan],
+        matches: [TokenMatch]
+    ) -> Bool {
+        guard matches.count > 1 else { return true }
+
+        for index in 0..<(matches.count - 1) {
+            let left = matches[index]
+            let right = matches[index + 1]
+            let rawSeparator = raw[
+                rawTokens[left.rawIndex].range.upperBound..<rawTokens[right.rawIndex].range.lowerBound
+            ]
+
+            guard containsSentenceBoundary(rawSeparator) else { continue }
+
+            let polishedSeparator = polished[
+                polishedTokens[left.polishedIndex].range.upperBound..<polishedTokens[right.polishedIndex].range.lowerBound
+            ]
+            guard containsSentenceBoundary(polishedSeparator) else { return false }
+        }
+
+        return true
+    }
+
+    private static func containsSentenceBoundary(_ separator: Substring) -> Bool {
+        var sawSentenceEnd = false
+        for character in separator {
+            if character == "." || character == "?" || character == "!" {
+                sawSentenceEnd = true
+            } else if sawSentenceEnd && character.isWhitespace {
+                return true
+            }
+        }
+        return false
     }
 
     private static func preferredDroppableRawTokenCount(

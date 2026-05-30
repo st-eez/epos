@@ -77,6 +77,30 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                 "The quick brown fox jumps over the lazy dog.",
                 true
             ),
+            // Existing sentence boundaries from the recognizer are content
+            // structure. The model may add punctuation, but it must not collapse
+            // a raw period between retained words.
+            (
+                "I'm not sure. There must be a better way to determine what's " +
+                    "the best way to do this. You have any suggestions in mind?",
+                "I'm not sure There must be a better way to determine what's " +
+                    "the best way to do this. You have any suggestions in mind?",
+                false
+            ),
+            (
+                "I'm not sure. There must be a better way to determine what's " +
+                    "the best way to do this. You have any suggestions in mind?",
+                "I'm not sure. There must be a better way to determine what's " +
+                    "the best way to do this. You have any suggestions in mind?",
+                true
+            ),
+            (
+                "I'm not sure. There must be a better way to determine what's " +
+                    "the best way to do this. You have any suggestions in mind?",
+                "I'm not sure. There must be a better way to determine what's " +
+                    "the best way to do this.You have any suggestions in mind?",
+                false
+            ),
             // Additions and reordering are not cleanup.
             (
                 "ship the feature",
