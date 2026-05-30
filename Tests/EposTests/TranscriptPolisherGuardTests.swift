@@ -3,10 +3,10 @@ import XCTest
 
 /// The content-retention guard is a pure string→bool decision (no I/O), so it is
 /// exercised directly with a table of cases. It must keep legitimate
-/// filler-removal while rejecting clause-drop over-compression — the main
-/// today's-model risk the design defends against.
+/// filler-removal and spoken-symbol conversion while rejecting clause drops,
+/// additions, and reordering.
 final class TranscriptPolisherGuardTests: XCTestCase {
-    func testGuardRejectsClauseDropAndKeepsFillerRemoval() {
+    func testGuardPreservesExactContentSequenceAfterAllowedCleanup() {
         let cases: [(raw: String, polished: String, expected: Bool)] = [
             // Clause-drop: the polished output lost the command's verb and most
             // of its content, retaining only the trailing fragment. Reject.
@@ -15,11 +15,24 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                 "dollar home slash bin",
                 false
             ),
-            // Filler-removal: um/uh/so/like/you-know stripped, the substantive
-            // words ("should", "ship") survive above threshold. Keep.
+            // Filler-removal: um/uh/so/like/you-know stripped, the content words
+            // remain exactly in order. Keep.
+            (
+                "um so like we should uh ship it you know",
+                "we should ship it",
+                true
+            ),
+            // "I think" is meaningful per the prompt. Dropping it is content loss.
             (
                 "um so like i think we should uh ship it you know",
                 "we should ship it",
+                false
+            ),
+            // Spoken punctuation/symbol words can disappear when converted to
+            // punctuation, as long as the surrounding content remains.
+            (
+                "run dash dash verbose from dollar home slash bin",
+                "run --verbose from $HOME/bin",
                 true
             ),
             // Near-identical cleanup (just casing/punctuation) retains everything.
@@ -27,6 +40,22 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                 "the quick brown fox jumps over the lazy dog",
                 "The quick brown fox jumps over the lazy dog.",
                 true
+            ),
+            // Additions and reordering are not cleanup.
+            (
+                "ship the feature",
+                "ship the feature tomorrow",
+                false
+            ),
+            (
+                "ship the feature",
+                "basically ship the feature",
+                false
+            ),
+            (
+                "ship the feature today",
+                "today ship the feature",
+                false
             ),
             // Empty polished can never retain content.
             ("hello there world", "", false),

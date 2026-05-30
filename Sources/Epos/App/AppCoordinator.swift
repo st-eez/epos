@@ -40,6 +40,7 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
     private var textInsertionSession: ProgressiveTranscriptInsertionSession?
+    private var activePolisher: TranscriptPolisher?
     private var didBootstrap = false
     private lazy var indicator: RecordingIndicatorController = {
         let controller = RecordingIndicatorController()
@@ -90,10 +91,18 @@ public final class AppCoordinator: ObservableObject {
         log.info("dictation polish \(enabled ? "enabled" : "disabled")")
     }
 
-    /// Built fresh from current settings so a mid-session toggle takes effect on
-    /// the next recording. The engine is shared (model assets are global).
-    private var polisher: TranscriptPolisher {
-        TranscriptPolisher(enabled: settings.polishEnabled, engine: polishEngine)
+    /// Built once per recording so a mid-session settings change cannot alter the
+    /// finalization behavior of an already-running dictation.
+    private func makePolisher() -> TranscriptPolisher {
+        TranscriptPolisher(
+            enabled: settings.polishEnabled,
+            engine: polishEngine,
+            knownTerms: polishKnownTerms()
+        )
+    }
+
+    private func polishKnownTerms() -> [String] {
+        ["Epos"] + corrections.canonicalizer.speechContextualStrings
     }
 
     /// Live launch-at-login state from the system — the source of truth, which the user
@@ -157,7 +166,9 @@ public final class AppCoordinator: ObservableObject {
         )
         transcriptTiming.start()
         indicator.show()
-        polisher.prewarm()
+        let sessionPolisher = makePolisher()
+        activePolisher = sessionPolisher
+        sessionPolisher.prewarm()
         log.info("recording start")
 
         transcriptionTask = Task { [weak self] in
@@ -232,7 +243,7 @@ public final class AppCoordinator: ObservableObject {
             // indicator is still up (state == .finalizing). It never throws and
             // falls back to the raw text, so the reconcile below is unchanged
             // when polish is off, unavailable, or rejected by the guard.
-            let result = await polisher.polish(finalText)
+            let result = await (activePolisher ?? makePolisher()).polish(finalText)
             logPolishOutcome(result, rawCount: finalText.count)
             insertFinalTranscript(result.text)
             finishTextInsertionSession()
@@ -319,6 +330,7 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         partial = ""
         transcriptionTask = nil
+        activePolisher = nil
         transcriptTiming.finish()
         state = .idle
     }

@@ -81,8 +81,9 @@ final class TranscriptPolisherTests: XCTestCase {
 
     func testPrewarmDelegatesToEngineOnlyWhenEnabledAndAvailable() {
         let enabledAvailable = FakePolishEngine(isAvailable: true)
-        TranscriptPolisher(enabled: true, engine: enabledAvailable).prewarm()
+        TranscriptPolisher(enabled: true, engine: enabledAvailable, knownTerms: ["CMUX"]).prewarm()
         XCTAssertEqual(enabledAvailable.prewarmCallCount, 1)
+        XCTAssertEqual(enabledAvailable.prewarmKnownTerms, [["CMUX"]])
 
         let disabled = FakePolishEngine(isAvailable: true)
         TranscriptPolisher(enabled: false, engine: disabled).prewarm()
@@ -91,6 +92,16 @@ final class TranscriptPolisherTests: XCTestCase {
         let unavailable = FakePolishEngine(isAvailable: false)
         TranscriptPolisher(enabled: true, engine: unavailable).prewarm()
         XCTAssertEqual(unavailable.prewarmCallCount, 0)
+    }
+
+    func testKnownTermsArePassedToEngine() async {
+        let engine = FakePolishEngine(result: "Open CMUX.")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine, knownTerms: ["Epos", "CMUX"])
+
+        let result = await polisher.polish("open CMUX")
+
+        XCTAssertEqual(result.text, "Open CMUX.")
+        XCTAssertEqual(engine.polishKnownTerms, [["Epos", "CMUX"]])
     }
 }
 
@@ -103,6 +114,8 @@ final class FakePolishEngine: PolishEngine, @unchecked Sendable {
     var throwError: Error?
     private(set) var polishCallCount = 0
     private(set) var prewarmCallCount = 0
+    private(set) var polishKnownTerms: [[String]] = []
+    private(set) var prewarmKnownTerms: [[String]] = []
 
     init(isAvailable: Bool = true, result: String = "", throwError: Error? = nil) {
         self.isAvailable = isAvailable
@@ -110,10 +123,14 @@ final class FakePolishEngine: PolishEngine, @unchecked Sendable {
         self.throwError = throwError
     }
 
-    func prewarm() { prewarmCallCount += 1 }
+    func prewarm(knownTerms: [String]) {
+        prewarmCallCount += 1
+        prewarmKnownTerms.append(knownTerms)
+    }
 
-    func polish(_ raw: String) async throws -> String {
+    func polish(_ raw: String, knownTerms: [String]) async throws -> String {
         polishCallCount += 1
+        polishKnownTerms.append(knownTerms)
         if let throwError { throw throwError }
         return result
     }

@@ -17,7 +17,7 @@ Architecture in one line: fn key → AudioCapture → Transcriber (Apple SpeechT
 
 These are explicitly out of scope for the baseline. Do not add them without an updated spec:
 
-- LLM polish, filler-word detector
+- Filler-word detector
 - Persistent history, multiple model choices, multi-locale switching UI
 - Toggle/hands-free mode (push-to-talk only in baseline)
 - Cloud transcription fallback

@@ -9,35 +9,27 @@ import FoundationModels
 /// the gate/guard/fallback policy lives in `TranscriptPolisher` and is tested
 /// with a fake. Ported from `probes/llm-polish/`.
 public struct FoundationModelsPolishEngine: PolishEngine {
-    private let instructions: String
-
-    /// `knownTerms` is the canonicalizer's project vocabulary, interpolated into
-    /// the prompt so the model prefers the exact spellings. It is optional: the
-    /// deterministic `TranscriptCanonicalizer` still runs downstream as the
-    /// authoritative jargon fix, so an empty list only forgoes a soft hint.
-    public init(knownTerms: [String] = []) {
-        self.instructions = Self.makeInstructions(knownTerms: knownTerms)
-    }
+    public init() {}
 
     public var isAvailable: Bool {
         SystemLanguageModel.default.availability == .available
     }
 
-    public func prewarm() {
+    public func prewarm(knownTerms: [String]) {
         guard isAvailable else { return }
-        makeSession().prewarm()
+        makeSession(knownTerms: knownTerms).prewarm()
     }
 
-    public func polish(_ raw: String) async throws -> String {
-        try await makeSession()
+    public func polish(_ raw: String, knownTerms: [String]) async throws -> String {
+        try await makeSession(knownTerms: knownTerms)
             .respond(to: raw, generating: CleanedTranscript.self, options: Self.options)
             .content
             .cleaned
     }
 
-    private func makeSession() -> LanguageModelSession {
+    private func makeSession(knownTerms: [String]) -> LanguageModelSession {
         let model = SystemLanguageModel(useCase: .general, guardrails: .permissiveContentTransformations)
-        return LanguageModelSession(model: model, instructions: instructions)
+        return LanguageModelSession(model: model, instructions: Self.makeInstructions(knownTerms: knownTerms))
     }
 
     /// Greedy + temperature 0: deterministic decoding. `maximumResponseTokens`
@@ -148,15 +140,35 @@ extension FoundationModelsPolishEngine {
         - Do not complete fragments or expand abbreviations.
         """
 
-        if !knownTerms.isEmpty {
+        let terms = normalizedKnownTerms(knownTerms)
+        if !terms.isEmpty {
             instructions += """
 
 
             Known project terms — when a spoken word clearly sounds like one of these, prefer \
-            the exact spelling: \(knownTerms.joined(separator: ", ")).
+            the exact spelling: \(terms.joined(separator: ", ")).
             """
         }
 
         return instructions
+    }
+
+    private static func normalizedKnownTerms(_ knownTerms: [String]) -> [String] {
+        var seen: Set<String> = []
+        var terms: [String] = []
+
+        for term in knownTerms {
+            let cleaned = term
+                .components(separatedBy: .newlines)
+                .joined(separator: " ")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !cleaned.isEmpty else { continue }
+            let key = cleaned.lowercased()
+            guard seen.insert(key).inserted else { continue }
+            terms.append(String(cleaned.prefix(80)))
+            if terms.count == TranscriptCanonicalizer.maxSpeechContextualStringCount { break }
+        }
+
+        return terms
     }
 }

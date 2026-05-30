@@ -47,14 +47,14 @@ R1. A persisted, default-off Settings flag `polishEnabled`.
 R2. A `TranscriptPolisher` that, given the final raw transcript, returns either a polished string or the raw string, deciding via: flag on AND engine available AND polish succeeds AND output passes the content-retention guard — else raw.
 R3. The model call is behind a `PolishEngine` seam (protocol) so policy logic is unit-testable with a fake; the real engine wraps FoundationModels guided generation with the Stage-1 tuned prompt + `@Generable CleanedTranscript`.
 R4. `AppCoordinator` prewarms the engine at `startRecording` (when enabled+available) and, at end-of-session, replaces the raw final via `acceptFinalTranscript(polished)` (reuses canonicalize + reconcile). Live insertion during recording is unchanged.
-R5. Content-retention guard: reject (keep raw) when polished is empty, or retains too few of the raw's *significant* (non-filler) words. Pure, unit-testable.
+R5. Content-retention guard: reject (keep raw) when polished is empty, or when the polished content-token sequence differs from the raw sequence after allowed filler removal and raw spoken-symbol conversion. Pure, unit-testable.
 R6. A MenuBar toggle wired like the existing `launchAtLogin`/`saveAudioSamples` toggles.
 R7. `baseline.md` updated to reflect the shipped opt-in feature.
 
 ## Proposed design
 
 ### Data flow (polish ON + available)
-1. `startRecording`: existing setup, plus `polisher.prewarm()`.
+1. `startRecording`: existing setup, plus snapshot the current `settings.polishEnabled` and correction vocabulary into a per-recording `TranscriptPolisher`, then `polisher.prewarm()`.
 2. During recording: unchanged — live raw partials/finals stream via `acceptPartialTranscript`/`acceptFinalTranscript`, each canonicalized + reconciled.
 3. End of session (`runSession` after the event loop), where today it does `if hasTranscribedText { insertFinalTranscript(finalText) }`:
    - `let result = await polisher.polish(finalText)` → returns polished-or-raw.
@@ -63,21 +63,21 @@ R7. `baseline.md` updated to reflect the shipped opt-in feature.
 4. Polish OFF or unavailable: identical to today (`acceptFinalTranscript(finalText)`).
 
 ### Modules / seams
-- `PolishEngine` (protocol): `var isAvailable: Bool { get }`, `func prewarm()`, `func polish(_ raw: String) async throws -> String`.
+- `PolishEngine` (protocol): `var isAvailable: Bool { get }`, `func prewarm(knownTerms: [String])`, `func polish(_ raw: String, knownTerms: [String]) async throws -> String`.
 - `FoundationModelsPolishEngine: PolishEngine` — wraps `SystemLanguageModel(useCase:.general, guardrails:.permissiveContentTransformations)`, a fresh `LanguageModelSession` per polish (stateless), the Stage-1 tuned system prompt, `@Generable CleanedTranscript { @Guide … var cleaned: String }`, `respond(to:generating:options:)` with greedy/temp-0/maxTokens 512. `isAvailable` reflects `SystemLanguageModel.default.availability == .available`. Ported from `probes/llm-polish/Sources/LLMPolishProbe/{Polish,Inputs}.swift`.
-- `TranscriptPolisher` — holds `enabled` + a `PolishEngine`; `polish(_ raw:)` applies the gate/guard/fallback policy; owns the content-retention guard. Unit-tested with a fake engine.
-- `AppCoordinator` wiring: construct a `TranscriptPolisher` (from `settings.polishEnabled` + `FoundationModelsPolishEngine`), `setPolishEnabled(_:)`, prewarm at start, polish at end.
+- `TranscriptPolisher` — holds `enabled`, the per-recording known terms, and a `PolishEngine`; `polish(_ raw:)` applies the gate/guard/fallback policy; owns the content-retention guard. Unit-tested with a fake engine.
+- `AppCoordinator` wiring: construct a per-recording `TranscriptPolisher` (from current `settings.polishEnabled`, current correction vocabulary, and `FoundationModelsPolishEngine`), `setPolishEnabled(_:)`, prewarm at start, polish at end with the same snapshot.
 
 ### Content-retention guard (R5)
-`func polishRetainsContent(raw:polished:) -> Bool`: tokenize both to lowercased word sets minus a small filler set (`um, uh, er, hmm, so, like, you know, i mean, sort of`) and minus very short tokens; return false if polished is empty or retains < `minRetention` of raw's significant tokens. Errs toward keeping raw (safe, since fallback is the raw text). **Decision: `minRetention = 0.6`** (balanced — keeps legit filler-removal, rejects clause-drop).
+`func polishRetainsContent(raw:polished:) -> Bool`: tokenize both to lowercased word sequences, drop only recognized fillers (`um`, `uh`, `er`, `hmm`, sentence-opening `so`, filler `like`, `you know`, `I mean`, `sort of`, `kind of`, `basically`) and raw spoken-symbol tokens (`dash dash`, `open paren`, `question mark`, `slash`, `dollar`, etc.) from the raw side, then require the polished token sequence to match exactly. This rejects drops, additions, duplicate loss, and reordering. Errs toward keeping raw (safe, since fallback is the raw text).
 
 ### Polishing indicator (OQ2 resolved: show it)
 The recording indicator stays visible through the polish window. Mechanism: the polish `await` happens in `runSession` while `state == .finalizing`, *before* `resetToIdle()` hides the indicator — so keeping the existing sequencing (polish → `acceptFinalTranscript` → `finish` → `resetToIdle`) means the indicator is naturally shown during polish. No new coordinator state required; a distinct "polishing" visual is optional future polish.
 
 ## Interface contracts
 
-- `protocol PolishEngine: Sendable { var isAvailable: Bool { get }; func prewarm(); func polish(_ raw: String) async throws -> String }`
-- `TranscriptPolisher.polish(_ raw: String) async -> String` — never throws; returns raw on any disabled/unavailable/throw/guard-fail path; returns engine output otherwise. Empty/whitespace raw returns raw unchanged without calling the engine.
+- `protocol PolishEngine: Sendable { var isAvailable: Bool { get }; func prewarm(knownTerms: [String]); func polish(_ raw: String, knownTerms: [String]) async throws -> String }`
+- `TranscriptPolisher.polish(_ raw: String) async -> PolishResult` — never throws; returns raw on any disabled/unavailable/throw/guard-fail path; returns engine output otherwise. Empty/whitespace raw returns raw unchanged without calling the engine.
 - `Settings.polishEnabled: Bool` (default false), persisted under `settings.polishEnabled`.
 - `AppCoordinator.setPolishEnabled(_:)` mirrors `setSaveAudioSamples` (guard-equal, persist, log).
 
@@ -114,7 +114,7 @@ The recording indicator stays visible through the polish window. Mechanism: the 
 
 ## Resolved decisions
 
-- OQ1 → content-word retention guard at `minRetention = 0.6` (balanced).
+- OQ1 → strict content-token preservation guard (conservative).
 - OQ2 → show the polishing indicator (keep recording indicator through the polish window via existing `.finalizing` sequencing).
 - OQ3 → MenuBar toggle label "Polish dictation (on-device AI)" (default; tweakable during the UI slice).
 
@@ -140,7 +140,7 @@ Seams under test are public API + pure functions; the live wiring and `Foundatio
 
 ### S2 — Content-retention guard
 - Goal: distinguish legit filler-removal (apply) from clause-drop (keep raw).
-- Behavior under test: empty polished → false; clause-drop (probe strings) → false; filler-removal → true; near-identical cleanup → true; at `minRetention 0.6`.
+- Behavior under test: empty polished → false; clause-drop (probe strings) → false; filler-removal → true; spoken-symbol conversion → true; near-identical cleanup → true; additions/reordering → false.
 - Seam: pure `TranscriptPolisher.polishRetainsContent(raw:polished:)` (static/pure).
 - Boundary: pure string→bool; no I/O.
 - Files: `Sources/Epos/Speech/TranscriptPolisher.swift`, `Tests/EposTests/TranscriptPolisherGuardTests.swift`.
@@ -149,7 +149,7 @@ Seams under test are public API + pure functions; the live wiring and `Foundatio
 - Isolation rule: pure function.
 - Determinism rule: pure.
 - Assertion contract: each case equals its expected bool.
-- Green condition: tokenize, drop fillers + short tokens, compute retention ratio vs 0.6.
+- Green condition: tokenize, drop only allowed fillers and raw spoken-symbol tokens, require exact sequence equality.
 - Refactor target: extract the filler set + threshold constants.
 - Smoke budget: none.
 - Verification command: `swift test --filter TranscriptPolisherGuardTests`.

@@ -6,6 +6,9 @@ build/
 dist/
 .swiftpm/
 
+# Local throwaway validation probes and their generated reports.
+probes/
+
 # XcodeGen output; generated locally, not tracked.
 Epos.xcodeproj/
 Epos.xcworkspace/
