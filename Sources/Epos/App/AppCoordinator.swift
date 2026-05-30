@@ -233,6 +233,7 @@ public final class AppCoordinator: ObservableObject {
             // falls back to the raw text, so the reconcile below is unchanged
             // when polish is off, unavailable, or rejected by the guard.
             let polished = await polisher.polish(finalText)
+            logPolishOutcome(raw: finalText, polished: polished)
             insertFinalTranscript(polished)
             finishTextInsertionSession()
         } else {
@@ -277,6 +278,25 @@ public final class AppCoordinator: ObservableObject {
             finalText: finalText,
             partialText: partial
         ))
+    }
+
+    /// Privacy-safe observability for the polish stage: character counts only,
+    /// never transcript text. Lets the diagnostic log show whether polish ran,
+    /// was skipped (off / model unavailable), or fell back to the raw text.
+    private func logPolishOutcome(raw: String, polished: String) {
+        guard settings.polishEnabled else {
+            log.info("polish off")
+            return
+        }
+        guard polishEngine.isAvailable else {
+            log.info("polish skipped: model unavailable")
+            return
+        }
+        if polished == raw {
+            log.info("polish no-op or fallback (rawChars=\(raw.count))")
+        } else {
+            log.info("polish applied (rawChars=\(raw.count) polishedChars=\(polished.count))")
+        }
     }
 
     private func finishTextInsertionSession() {
