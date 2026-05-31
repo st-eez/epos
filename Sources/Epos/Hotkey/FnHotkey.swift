@@ -11,6 +11,13 @@ public final class FnHotkey {
     private var monitor: Any?
     private var isDown = false
 
+    /// The live hardware fn-key state, read straight from the current modifier flags
+    /// (not the cached edge state) so a caller can re-check whether fn is still held
+    /// after an async gap — e.g. to recover a press that arrived while busy.
+    public var isFunctionKeyDown: Bool {
+        NSEvent.modifierFlags.contains(.function)
+    }
+
     public init() {}
 
     public func start() {

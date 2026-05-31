@@ -50,7 +50,11 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
     private var textInsertionSession: ProgressiveTranscriptInsertionSession?
-    private var activePolisher: TranscriptPolisher?
+    /// Set when a press arrives during the finalize/polish window (state != .idle),
+    /// where `startRecording` would otherwise silently drop it. Replayed at the
+    /// `.finalizing → .idle` transition if fn is still physically held, so a
+    /// back-to-back utterance isn't lost to the polish-widened window.
+    private var pendingStartWhileFinalizing = false
     private var didBootstrap = false
     private lazy var indicator: RecordingIndicatorController = {
         let controller = RecordingIndicatorController()
@@ -166,7 +170,18 @@ public final class AppCoordinator: ObservableObject {
     }
 
     public func startRecording() {
-        guard state == .idle else { return }
+        guard state == .idle else {
+            // A press during the finalize/polish window — the `await polisher.polish`
+            // widens `.finalizing` by up to the generation time. Latch it so the held
+            // key isn't silently dropped; it's replayed at `.finalizing → .idle` if fn
+            // is still down (the edge-triggered hotkey emits no new press for a key
+            // that's already held).
+            if state == .finalizing {
+                pendingStartWhileFinalizing = true
+                log.info("start requested during finalize; will retry at idle if fn held")
+            }
+            return
+        }
         guard let format = captureFormat else {
             log.error("cannot start: capture format unavailable (bootstrap incomplete?)")
             return
@@ -184,12 +199,11 @@ public final class AppCoordinator: ObservableObject {
         transcriptTiming.start()
         indicator.show()
         let sessionPolisher = makePolisher()
-        activePolisher = sessionPolisher
         sessionPolisher.prewarm()
         log.info("recording start")
 
         transcriptionTask = Task { [weak self] in
-            await self?.runSession(format: format)
+            await self?.runSession(format: format, polisher: sessionPolisher)
         }
     }
 
@@ -203,7 +217,7 @@ public final class AppCoordinator: ObservableObject {
         Task { await transcriber.finish() }
     }
 
-    private func runSession(format: AVAudioFormat) async {
+    private func runSession(format: AVAudioFormat, polisher: TranscriptPolisher) async {
         let transcriber = self.transcriber
         let audio = self.audio
         let dogfood = self.dogfood
@@ -258,10 +272,10 @@ public final class AppCoordinator: ObservableObject {
 
         if hasTranscribedText {
             // Opt-in LLM polish runs once on the final transcript while the
-            // indicator is still up (state == .finalizing). It never throws and
-            // falls back to the raw text, so the reconcile below is unchanged
-            // when polish is off, unavailable, or rejected by the guard.
-            let polisher = activePolisher ?? makePolisher()
+            // indicator is still up (state == .finalizing) on the per-recording
+            // polisher prewarmed at start. It never throws and falls back to the raw
+            // text, so the reconcile below is unchanged when polish is off,
+            // unavailable, or rejected by the guard.
             finalizationPhase = polisher.willAttemptPolish ? .polishing : .inserting
             let polishStartedAt = Date()
             let result = await polisher.polish(finalText)
@@ -271,9 +285,13 @@ public final class AppCoordinator: ObservableObject {
             // can't claim a polish the user never received.
             let applied = insertFinalTranscript(result.text)
             let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
+            // Count raw and polished on the SAME normalization: `result.text` for
+            // `.applied` is canonicalize(polished), so the raw baseline must also be
+            // canonicalized — otherwise "rawChars − polishedChars" conflates the
+            // canonicalizer's rewrite with polish's filler removal.
             logPolishOutcome(
                 PolishResult(text: result.text, outcome: effectiveOutcome),
-                rawCount: finalText.count,
+                rawCount: corrections.canonicalize(finalText).count,
                 elapsedMs: millisecondsElapsed(since: polishStartedAt)
             )
             finishTextInsertionSession()
@@ -281,8 +299,9 @@ public final class AppCoordinator: ObservableObject {
             cancelTextInsertionSession()
         }
 
+        let finalChars = finalText.count
         await resetToIdle()
-        log.info("recording done (finalChars=\(self.finalText.count))")
+        log.info("recording done (finalChars=\(finalChars))")
     }
 
     func handlePartialTranscript(_ text: String) {
@@ -372,9 +391,25 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         partial = ""
         transcriptionTask = nil
-        activePolisher = nil
         transcriptTiming.finish()
         finalizationPhase = .finalizingSpeech
         state = .idle
+        replayPendingStartIfNeeded()
+    }
+
+    /// Retry, at the `.finalizing → .idle` transition, a start that arrived during the
+    /// finalize/polish window. The edge-triggered hotkey produces no new `onPress` for
+    /// an already-held key, so a press latched there would otherwise be lost; replay it
+    /// only while fn is still physically held — a key released during the window is
+    /// dropped (the user no longer wants to record).
+    private func replayPendingStartIfNeeded() {
+        guard pendingStartWhileFinalizing else { return }
+        pendingStartWhileFinalizing = false
+        guard hotkey.isFunctionKeyDown else {
+            log.info("pending start dropped: fn released during finalize")
+            return
+        }
+        log.info("replaying start: fn still held after finalize")
+        startRecording()
     }
 }
