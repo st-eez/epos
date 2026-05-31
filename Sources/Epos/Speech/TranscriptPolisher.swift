@@ -234,24 +234,41 @@ private final class PolishResolver: @unchecked Sendable {
 
 /// A one-shot abandon trigger armed for the duration of one `polish()` call. `trigger()`
 /// (from the main actor, when a new recording starts) runs the armed callback, which
-/// resolves the in-flight polish to its raw fallback. A no-op when not armed.
-/// `@unchecked Sendable`: the callback is read/written only under `lock`.
+/// resolves the in-flight polish to its raw fallback. If `trigger()` arrives BEFORE the
+/// polish arms — the press can land while the recognizer is still draining, before
+/// `enginePolishAttempt` runs — the request sticks and the next `arm()` fires it
+/// immediately, so an early press still collapses the window. One handle per
+/// per-recording polisher, so a stuck request can't leak across recordings.
+/// `@unchecked Sendable`: all state is read/written only under `lock`.
 final class PolishAbandonHandle: @unchecked Sendable {
     private let lock = NSLock()
     private var onAbandon: (() -> Void)?
+    private var triggeredBeforeArm = false
 
     func arm(_ onAbandon: @escaping () -> Void) {
-        lock.withLock { self.onAbandon = onAbandon }
+        let fireImmediately: Bool = lock.withLock {
+            if triggeredBeforeArm { return true }
+            self.onAbandon = onAbandon
+            return false
+        }
+        if fireImmediately { onAbandon() }
     }
 
     func disarm() {
-        lock.withLock { self.onAbandon = nil }
+        lock.withLock {
+            self.onAbandon = nil
+            self.triggeredBeforeArm = false
+        }
     }
 
     func trigger() {
         let callback = lock.withLock { () -> (() -> Void)? in
-            defer { self.onAbandon = nil }
-            return self.onAbandon
+            if let callback = self.onAbandon {
+                self.onAbandon = nil
+                return callback
+            }
+            self.triggeredBeforeArm = true
+            return nil
         }
         callback?()
     }

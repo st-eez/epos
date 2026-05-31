@@ -79,11 +79,29 @@ final class TranscriptPolisherTests: XCTestCase {
     }
 
     func testAbandonWithNoPolishRunningIsANoOp() {
-        // Triggering an abandon when nothing is in flight must not crash or arm a stale
-        // signal that would fire on the next polish.
+        // Triggering an abandon when nothing is in flight must not crash.
         let engine = FakePolishEngine(result: "polished output")
         let polisher = TranscriptPolisher(enabled: true, engine: engine)
         polisher.abandonInFlightPolish()
+    }
+
+    func testAbandonRequestedBeforePolishStartsStillReturnsRawPromptly() async {
+        // The re-press can land while the recognizer is still draining, before the polish
+        // arms its abandon handle. The request must stick so the polish that starts a
+        // moment later gives up immediately rather than blocking on the decode.
+        let engine = FakePolishEngine(result: "polished output", delayNanoseconds: 2_000_000_000)
+        let polisher = TranscriptPolisher(
+            enabled: true,
+            engine: engine,
+            timeoutNanoseconds: 10_000_000_000
+        )
+        polisher.abandonInFlightPolish() // before polish() is even called
+        let startedAt = Date()
+        let result = await polisher.polish("raw transcript")
+
+        XCTAssertEqual(result.text, "raw transcript")
+        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1.5)
     }
 
     func testPolishReturnsRawWhenOutputFailsRetentionGuard() async {

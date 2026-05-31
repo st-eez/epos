@@ -51,10 +51,15 @@ public final class AppCoordinator: ObservableObject {
     private var captureFormat: AVAudioFormat?
     private var textInsertionSession: ProgressiveTranscriptInsertionSession?
     /// Set when a press arrives during the finalize/polish window (state != .idle),
-    /// where `startRecording` would otherwise silently drop it. Replayed at the
-    /// `.finalizing → .idle` transition if fn is still physically held, so a
-    /// back-to-back utterance isn't lost to the polish-widened window.
+    /// where `startRecording` would otherwise silently drop it. The press also abandons
+    /// the in-flight polish (via `activePolisher`) to collapse the window, then is
+    /// replayed at the `.finalizing → .idle` transition if fn is still physically held —
+    /// so a back-to-back utterance isn't lost to the polish-widened window.
     private var pendingStartWhileFinalizing = false
+    /// The current recording's polisher, held so a re-press during finalize can abandon
+    /// its in-flight polish. Set at `startRecording`, cleared in `resetToIdle`. (Distinct
+    /// from threading it into `runSession`, which is what actually runs the polish.)
+    private var activePolisher: TranscriptPolisher?
     private var didBootstrap = false
     private lazy var indicator: RecordingIndicatorController = {
         let controller = RecordingIndicatorController()
@@ -172,13 +177,15 @@ public final class AppCoordinator: ObservableObject {
     public func startRecording() {
         guard state == .idle else {
             // A press during the finalize/polish window — the `await polisher.polish`
-            // widens `.finalizing` by up to the generation time. Latch it so the held
-            // key isn't silently dropped; it's replayed at `.finalizing → .idle` if fn
-            // is still down (the edge-triggered hotkey emits no new press for a key
-            // that's already held).
+            // widens `.finalizing` by up to the generation time, and the user is starting
+            // their next utterance. Abandon the in-flight polish so the window collapses
+            // (utterance 1 keeps its already-typed raw text), and latch the press so it's
+            // replayed at `.finalizing → .idle` if fn is still down (the edge-triggered
+            // hotkey emits no new press for a key that's already held).
             if state == .finalizing {
                 pendingStartWhileFinalizing = true
-                log.info("start requested during finalize; will retry at idle if fn held")
+                activePolisher?.abandonInFlightPolish()
+                log.info("start requested during finalize; abandoning polish, will retry at idle if fn held")
             }
             return
         }
@@ -199,6 +206,7 @@ public final class AppCoordinator: ObservableObject {
         transcriptTiming.start()
         indicator.show()
         let sessionPolisher = makePolisher()
+        activePolisher = sessionPolisher
         sessionPolisher.prewarm()
         log.info("recording start")
 
@@ -391,6 +399,7 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         partial = ""
         transcriptionTask = nil
+        activePolisher = nil
         transcriptTiming.finish()
         finalizationPhase = .finalizingSpeech
         state = .idle
