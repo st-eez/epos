@@ -55,6 +55,37 @@ final class TranscriptPolisherTests: XCTestCase {
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
+    func testAbandonInFlightPolishReturnsRawPromptlyWithoutWaitingForTheDecode() async {
+        // A slow decode under a long timeout: without abandon, polish() would block on
+        // the ~2s decode. An abandon (a re-press during the finalize window) makes it
+        // give up immediately with the raw text — the decode is orphaned, not awaited.
+        let engine = FakePolishEngine(result: "polished output", delayNanoseconds: 2_000_000_000)
+        let polisher = TranscriptPolisher(
+            enabled: true,
+            engine: engine,
+            timeoutNanoseconds: 10_000_000_000
+        )
+        let startedAt = Date()
+        async let pending = polisher.polish("raw transcript")
+        try? await Task.sleep(nanoseconds: 200_000_000) // let the decode get in-flight
+        polisher.abandonInFlightPolish()
+        let result = await pending
+
+        XCTAssertEqual(result.text, "raw transcript")
+        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(engine.polishCallCount, 1)
+        // Returned on abandon, far short of the 2s decode (and the 10s timeout).
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1.5)
+    }
+
+    func testAbandonWithNoPolishRunningIsANoOp() {
+        // Triggering an abandon when nothing is in flight must not crash or arm a stale
+        // signal that would fire on the next polish.
+        let engine = FakePolishEngine(result: "polished output")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+        polisher.abandonInFlightPolish()
+    }
+
     func testPolishReturnsRawWhenOutputFailsRetentionGuard() async {
         // The engine over-compressed a multi-clause command to a trailing
         // fragment; the retention guard must reject it and keep the raw words.
@@ -215,10 +246,12 @@ final class TranscriptPolisherTests: XCTestCase {
     }
 }
 
-/// Configurable test double for `PolishEngine` + `PolishSession`. `@unchecked Sendable`
-/// is safe here: each test awaits `polish` to completion before reading the counters, so
-/// there is no concurrent access. `sessionCount`/`sessionKnownTerms` track `makeSession`
-/// (the prewarm/per-recording-session delegation point); `polishCallCount`/
+/// Configurable test double for `PolishEngine` + `PolishSession`. `@unchecked Sendable`:
+/// the polish counters are lock-guarded because, since the policy now runs the decode in
+/// an UNSTRUCTURED task, a timed-out or abandoned `polish()` returns while the fake's
+/// `polish` is still in-flight on a background task — so a test reading the counters can
+/// race that orphaned call. `sessionCount`/`sessionKnownTerms` track `makeSession` (called
+/// synchronously before the decode task spawns, so they need no lock); `polishCallCount`/
 /// `polishKnownTerms` track the polish calls made on the sessions it produced.
 final class FakePolishEngine: PolishEngine, @unchecked Sendable {
     var isAvailable: Bool
@@ -227,8 +260,12 @@ final class FakePolishEngine: PolishEngine, @unchecked Sendable {
     var delayNanoseconds: UInt64?
     private(set) var sessionCount = 0
     private(set) var sessionKnownTerms: [[String]] = []
-    private(set) var polishCallCount = 0
-    private(set) var polishKnownTerms: [[String]] = []
+
+    private let lock = NSLock()
+    private var _polishCallCount = 0
+    private var _polishKnownTerms: [[String]] = []
+    var polishCallCount: Int { lock.withLock { _polishCallCount } }
+    var polishKnownTerms: [[String]] { lock.withLock { _polishKnownTerms } }
 
     init(
         isAvailable: Bool = true,
@@ -249,8 +286,10 @@ final class FakePolishEngine: PolishEngine, @unchecked Sendable {
     }
 
     fileprivate func recordPolish(knownTerms: [String]) {
-        polishCallCount += 1
-        polishKnownTerms.append(knownTerms)
+        lock.withLock {
+            _polishCallCount += 1
+            _polishKnownTerms.append(knownTerms)
+        }
     }
 }
 

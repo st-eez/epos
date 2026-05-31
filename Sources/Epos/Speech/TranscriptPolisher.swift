@@ -77,6 +77,10 @@ public struct TranscriptPolisher: Sendable {
     /// Holds the session `prewarm()` warms at recording start so `polish()` at finish can
     /// reuse it across the value-type copy between those two call sites (see the box doc).
     private let preparedSession = PreparedPolishSession()
+    /// Lets the coordinator make an in-flight `polish()` give up immediately (return raw)
+    /// when a new recording starts during the finalize window. A reference box so the
+    /// trigger reaches the running call across the value-type copy, like `preparedSession`.
+    private let inFlightAbandon = PolishAbandonHandle()
 
     public init(
         enabled: Bool,
@@ -139,6 +143,14 @@ public struct TranscriptPolisher: Sendable {
         preparedSession.session = engine.makeSession(knownTerms: knownTerms)
     }
 
+    /// Make an in-flight `polish()` give up immediately and return the raw text. A
+    /// no-op when no polish is running. The coordinator calls this when a new recording
+    /// starts during the finalize window, so the next utterance isn't blocked by the
+    /// prior polish (which may still be decoding for up to the timeout).
+    public func abandonInFlightPolish() {
+        inFlightAbandon.trigger()
+    }
+
     private func enginePolishAttempt(_ raw: String) async -> EnginePolishAttempt {
         // Reuse the session prewarmed at recording start; fall back to a fresh one if
         // polish runs without a prior prewarm (a polisher built at finish). Only reached
@@ -150,36 +162,98 @@ public struct TranscriptPolisher: Sendable {
             catch { return .failed }
         }
 
-        // Race the polish against a sleep; whichever finishes first wins and the
-        // other is cancelled. A task group makes both cancellations structural —
-        // no continuation/onTermination bookkeeping to get wrong — and guarantees
-        // the engine child has finished before this returns (so a timed-out decode
-        // can't leak into the next recording).
-        //
-        // Caveat (rank 7, unresolved): `cancelAll()` only sets the cooperative flag,
-        // and the group awaits the remaining child at scope exit. So when `.timedOut`
-        // wins, the wall-clock return is bounded at `timeoutNanoseconds` only if the
-        // engine's `respond()` actually observes cancellation; if it doesn't, this
-        // returns at full-decode time (the fallback TEXT is still correct — raw — so
-        // this is latency, not wrong output). The unit test uses a cancellation-aware
-        // `Task.sleep` fake, so it can't catch this. Needs a one-time wall-clock
-        // measurement of `polish()` on the installed signed app for an utterance that
-        // exceeds the timeout; if it returns at full-decode time, run the decode in a
-        // detached Task and resolve the deadline via a continuation instead.
-        return await withTaskGroup(of: EnginePolishAttempt.self) { group in
-            group.addTask {
-                do { return .success(try await session.polish(raw)) }
-                catch is PolishInputTooLargeError { return .tooLong }
-                catch { return .failed }
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: timeoutNanoseconds)
-                return .timedOut
-            }
-            let first = await group.next() ?? .timedOut
-            group.cancelAll()
-            return first
+        // Race three sources — the decode finishing, the deadline, an abandon — and
+        // return whichever fires first. The decode runs in an UNSTRUCTURED `Task`
+        // (not a task-group child), so this function returns at the deadline (or on
+        // abandon) WITHOUT awaiting it: the orphaned decode finishes in the
+        // background, and because each recording gets its own session it can't leak
+        // into the next recording's transcript. This is required because the
+        // on-device `respond()` may not observe cooperative cancellation — a task
+        // group would block at scope exit until the decode finished, so the timeout
+        // (and the abandon) could not bound the wall-clock return. The `PolishResolver`
+        // delivers exactly one of the three outcomes through a one-shot continuation.
+        let resolver = PolishResolver()
+        let decode = Task {
+            let outcome: EnginePolishAttempt
+            do { outcome = .success(try await session.polish(raw)) }
+            catch is PolishInputTooLargeError { outcome = .tooLong }
+            catch { outcome = .failed }
+            resolver.resolve(outcome)
         }
+        let deadline = Task {
+            try? await Task.sleep(nanoseconds: timeoutNanoseconds)
+            resolver.resolve(.timedOut)
+        }
+        // An abandon (a re-press during finalize) gives up promptly with the raw text;
+        // `.failed` surfaces as the `.unchanged` (kept-raw) outcome.
+        inFlightAbandon.arm { resolver.resolve(.failed) }
+
+        let result = await resolver.value()
+
+        inFlightAbandon.disarm()
+        deadline.cancel()
+        decode.cancel() // best-effort stop of the orphan; harmless if respond() ignores it
+        return result
+    }
+}
+
+/// Resolves an `EnginePolishAttempt` exactly once, from whichever racing source —
+/// decode success, deadline, or abandon — fires first; later resolves are dropped.
+/// Routing the result through a one-shot continuation (rather than a task group that
+/// would await the orphaned decode at scope exit) is what lets `enginePolishAttempt`
+/// return at the deadline or on abandon without waiting for a `respond()` that may
+/// ignore cancellation. `@unchecked Sendable`: all state is guarded by `lock`.
+private final class PolishResolver: @unchecked Sendable {
+    private let lock = NSLock()
+    private var settled = false
+    private var settledValue: EnginePolishAttempt?
+    private var continuation: CheckedContinuation<EnginePolishAttempt, Never>?
+
+    func value() async -> EnginePolishAttempt {
+        await withCheckedContinuation { continuation in
+            let alreadySettled: EnginePolishAttempt? = lock.withLock {
+                if let settledValue { return settledValue }
+                self.continuation = continuation
+                return nil
+            }
+            if let alreadySettled { continuation.resume(returning: alreadySettled) }
+        }
+    }
+
+    func resolve(_ outcome: EnginePolishAttempt) {
+        let waiting: CheckedContinuation<EnginePolishAttempt, Never>? = lock.withLock {
+            guard !settled else { return nil }
+            settled = true
+            settledValue = outcome
+            defer { continuation = nil }
+            return continuation
+        }
+        waiting?.resume(returning: outcome)
+    }
+}
+
+/// A one-shot abandon trigger armed for the duration of one `polish()` call. `trigger()`
+/// (from the main actor, when a new recording starts) runs the armed callback, which
+/// resolves the in-flight polish to its raw fallback. A no-op when not armed.
+/// `@unchecked Sendable`: the callback is read/written only under `lock`.
+final class PolishAbandonHandle: @unchecked Sendable {
+    private let lock = NSLock()
+    private var onAbandon: (() -> Void)?
+
+    func arm(_ onAbandon: @escaping () -> Void) {
+        lock.withLock { self.onAbandon = onAbandon }
+    }
+
+    func disarm() {
+        lock.withLock { self.onAbandon = nil }
+    }
+
+    func trigger() {
+        let callback = lock.withLock { () -> (() -> Void)? in
+            defer { self.onAbandon = nil }
+            return self.onAbandon
+        }
+        callback?()
     }
 }
 
