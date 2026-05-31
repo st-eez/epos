@@ -3,9 +3,10 @@ import Foundation
 /// The content-retention guard: the pure string→bool decision behind
 /// `TranscriptPolisher`. It keeps the model's polished text only when the same
 /// content-token sequence survives — allowing only filler removal and the
-/// hyphen-merge of an already-spoken compound — with no added meaning-bearing
-/// punctuation (`, ? ! : ; — –`), no dropped or added content symbol (`/ -- $ …`),
-/// and neither a collapsed nor an invented sentence boundary. Everything else
+/// hyphen-merge of an already-spoken compound — preserving every dictated symbol
+/// and sentence-punctuation glyph (`? ! : ; — – / -- $ …`) exactly, allowing only a
+/// stranded comma to drop with its filler, and neither collapsing nor inventing a
+/// sentence boundary. Everything else
 /// (mishearing "fixes", word substitution, spoken-symbol conversion) is rejected:
 /// the guard cannot tell a legitimate one from a corruption, so it keeps the
 /// user's raw words. Symbol conversion and known-term correction are owned by
@@ -38,13 +39,14 @@ extension TranscriptPolisher {
             return false
         }
         guard !matches.isEmpty else { return false }
-        // The model must not INTRODUCE meaning-bearing punctuation the user didn't
-        // dictate — a statement turned into a question ("ship it" -> "ship it?"),
-        // a vocative comma ("lets eat grandma" -> "lets eat, grandma"), or a colon
-        // that reframes a phrase as a label ("the error is timeout" -> "the error
-        // is: timeout") — nor may it drop or add a content symbol the user did
-        // dictate ("run -- verbose" -> "run verbose"). A restored trailing period
-        // does not change meaning, so `.` is unbudgeted (boundary-checked below).
+        // The model must not change the symbols the user dictated — neither ADD
+        // meaning-bearing punctuation ("ship it" -> "ship it?", "the error is
+        // timeout" -> "the error is: timeout"), DROP or SWAP a dictated `?`/`!`
+        // (inverting a question/command into a statement: "is it broken?" -> "is it
+        // broken."), nor drop/add a content symbol ("run -- verbose" -> "run
+        // verbose"). Only a comma stranded by filler removal may drop. A restored
+        // trailing period does not change meaning, so `.` is unbudgeted
+        // (boundary-checked below).
         guard symbolUsageIsJustified(raw: raw, polished: polished) else { return false }
         return preservesRawSentenceBoundaries(
             raw: raw,
@@ -251,30 +253,27 @@ extension TranscriptPolisher {
 
     // MARK: Added/dropped symbols and punctuation
 
-    /// Glyphs that carry meaning when INSERTED between kept words — a statement
-    /// turned into a question, a vocative comma, a label colon, a clause dash. The
-    /// model may not add them, but filler removal can legitimately strand one
-    /// ("um, uh," → ""), so a DROP is allowed. `.` is excluded: the recognizer
-    /// routinely omits a trailing period and restoring it does not change meaning,
-    /// and a mid-text `.` is policed by `preservesRawSentenceBoundaries`.
-    private static let addableMeaningPunctuation: Set<Character> = [",", "?", "!", ":", ";", "—", "–"]
-
-    /// Reject any meaning-changing punctuation the model added, and any content
-    /// symbol it dropped or added. Two rules over the significant symbols of each
-    /// side:
-    ///   • addable-meaning punctuation (`, ? ! : ; — –`): never ADDED (a drop is
-    ///     fine — removing a filler can take its comma with it).
-    ///   • every other significant symbol (`/`, `--`, `$`, `(`, …): a CONTENT glyph
-    ///     the canonicalizer produced on both sides — its count must not change at
-    ///     all, so a silently dropped `--`/`/` and an invented one both reject.
-    /// `.` is exempt (trailing-period restore; boundaries handled separately).
+    /// Reject any change to the significant symbols the user dictated. The comma is
+    /// the one exception: the recognizer delimits disfluencies with commas
+    /// ("um, like, you know,"), so removing a filler legitimately strands one — a
+    /// comma may DROP (but never be added). Every other significant glyph is
+    /// preserved EXACTLY (count must not change):
+    ///   • sentence punctuation (`? ! : ; — –`): adding one reframes the text
+    ///     ("the error is timeout" → "the error is: timeout"); dropping or swapping
+    ///     a dictated `?`/`!` for the exempt `.` inverts a question or command into a
+    ///     statement ("is it broken?" → "is it broken.").
+    ///   • content symbols (`/`, `--`, `$`, `(`, …): canonicalizer output present on
+    ///     both sides — a silently dropped `--`/`/` and an invented one both reject.
+    /// `.` is exempt: the recognizer routinely omits a trailing period and restoring
+    /// it does not change meaning, and a mid-text `.` is policed by
+    /// `preservesRawSentenceBoundaries`.
     private static func symbolUsageIsJustified(raw: String, polished: String) -> Bool {
         let rawCounts = significantSymbolCounts(raw)
         let polishedCounts = significantSymbolCounts(polished)
         for glyph in Set(rawCounts.keys).union(polishedCounts.keys) where glyph != "." {
             let rawCount = rawCounts[glyph, default: 0]
             let polishedCount = polishedCounts[glyph, default: 0]
-            if addableMeaningPunctuation.contains(glyph) {
+            if glyph == "," {
                 if polishedCount > rawCount { return false }
             } else if polishedCount != rawCount {
                 return false

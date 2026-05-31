@@ -179,6 +179,15 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("done now go home", "done; now go home", false),
             ("we win lose it", "we win — lose it", false),
 
+            // MARK: - a dictated `?`/`!` may not be dropped or swapped for the exempt
+            // `.` — that inverts a question/command into a statement (every word kept).
+            ("is it broken?", "is it broken.", false),
+            ("stop it!", "stop it.", false),
+            ("do it? stop it", "do it. Stop it", false),
+            ("is it broken? really", "is it broken really", false),
+            // Control: the `?` is preserved, only casing changes. Keep.
+            ("is it broken?", "Is it broken?", true),
+
             // MARK: - rank 4: an invented period+capital splits one dictated sentence
             // into two. Reject (a restored trailing period is still fine, above).
             ("ship it now", "ship it. Now", false),
