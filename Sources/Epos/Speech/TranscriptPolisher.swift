@@ -153,7 +153,19 @@ public struct TranscriptPolisher: Sendable {
         // Race the polish against a sleep; whichever finishes first wins and the
         // other is cancelled. A task group makes both cancellations structural —
         // no continuation/onTermination bookkeeping to get wrong — and guarantees
-        // the engine child has finished before this returns.
+        // the engine child has finished before this returns (so a timed-out decode
+        // can't leak into the next recording).
+        //
+        // Caveat (rank 7, unresolved): `cancelAll()` only sets the cooperative flag,
+        // and the group awaits the remaining child at scope exit. So when `.timedOut`
+        // wins, the wall-clock return is bounded at `timeoutNanoseconds` only if the
+        // engine's `respond()` actually observes cancellation; if it doesn't, this
+        // returns at full-decode time (the fallback TEXT is still correct — raw — so
+        // this is latency, not wrong output). The unit test uses a cancellation-aware
+        // `Task.sleep` fake, so it can't catch this. Needs a one-time wall-clock
+        // measurement of `polish()` on the installed signed app for an utterance that
+        // exceeds the timeout; if it returns at full-decode time, run the decode in a
+        // detached Task and resolve the deadline via a continuation instead.
         return await withTaskGroup(of: EnginePolishAttempt.self) { group in
             group.addTask {
                 do { return .success(try await session.polish(raw)) }
