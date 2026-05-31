@@ -247,20 +247,19 @@ private extension TranscriptCanonicalizer {
     /// can't express (it prepends `--` to a captured word), so it stays a pre-pass.
     /// Bare `dash dash`, `slash goal`, and `dollar home` are plain default rules.
     static func attachingFlagPrefix(in text: String) -> String {
-        replacing(
-            pattern: #"(?<![A-Za-z0-9])dash\s+dash\s+([A-Za-z][A-Za-z0-9_-]*)"#,
-            in: text,
-            withTemplate: #"--$1"#
-        )
+        guard let regex = flagPrefixRegex else { return text }
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: #"--$1"#)
     }
 
-    static func replacing(pattern: String, in text: String, withTemplate template: String) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else {
-            return text
-        }
-        let range = NSRange(location: 0, length: (text as NSString).length)
-        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: template)
-    }
+    /// Compiled once at type load, not per call: the flag-prefix pattern is a fixed literal
+    /// (it does not depend on `rules`), and `canonicalize` runs per streamed partial, so
+    /// recompiling it each call was pure waste. Optional to mirror the alias-regex path
+    /// (`regex(forAlias:)`); the literal always compiles, so the `nil` branch never trips.
+    static let flagPrefixRegex = try? NSRegularExpression(
+        pattern: #"(?<![A-Za-z0-9])dash\s+dash\s+([A-Za-z][A-Za-z0-9_-]*)"#,
+        options: [.caseInsensitive]
+    )
 
     static func normalizedPhrase(_ phrase: String) -> String {
         phrase
