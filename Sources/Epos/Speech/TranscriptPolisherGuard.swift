@@ -6,13 +6,12 @@ import Foundation
 /// hyphen-merge of an already-spoken compound — preserving every dictated symbol
 /// and sentence-punctuation glyph (`? ! : ; — – / -- $ …`) exactly, allowing only a
 /// stranded comma to drop with its filler, and neither collapsing nor inventing a
-/// sentence boundary. Everything else
-/// (mishearing "fixes", word substitution, spoken-symbol conversion) is rejected:
-/// the guard cannot tell a legitimate one from a corruption, so it keeps the
-/// user's raw words. Symbol conversion and known-term correction are owned by
-/// `TranscriptCanonicalizer`, which runs on both the raw and polished text, so its
-/// deterministic results match on both sides and never reach this guard as a
-/// difference.
+/// sentence boundary. Everything else (mishearing "fixes", word substitution,
+/// spoken-symbol conversion) is rejected: the guard cannot tell a legitimate one
+/// from a corruption, so it keeps the user's raw words. Symbol conversion and
+/// known-term correction are owned by `TranscriptCanonicalizer`, which runs on
+/// both the raw and polished text, so its deterministic results match on both
+/// sides and never reach this guard as a difference.
 ///
 /// The standard is asymmetric: a false reject is harmless (the raw words are
 /// kept), a false accept types altered meaning into the user's app, so every
