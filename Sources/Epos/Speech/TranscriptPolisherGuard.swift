@@ -3,13 +3,15 @@ import Foundation
 /// The content-retention guard: the pure string→bool decision behind
 /// `TranscriptPolisher`. It keeps the model's polished text only when the same
 /// content-token sequence survives — allowing only filler removal and the
-/// hyphen-merge of an already-spoken compound — with no added `,`/`?`/`!` and no
-/// collapsed sentence boundary. Everything else (mishearing "fixes", word
-/// substitution, spoken-symbol conversion) is rejected: the guard cannot tell a
-/// legitimate one from a corruption, so it keeps the user's raw words. Symbol
-/// conversion and known-term correction are owned by `TranscriptCanonicalizer`,
-/// which runs on both the raw and polished text, so its deterministic results
-/// match on both sides and never reach this guard as a difference.
+/// hyphen-merge of an already-spoken compound — with no added meaning-bearing
+/// punctuation (`, ? ! : ; — –`), no dropped or added content symbol (`/ -- $ …`),
+/// and neither a collapsed nor an invented sentence boundary. Everything else
+/// (mishearing "fixes", word substitution, spoken-symbol conversion) is rejected:
+/// the guard cannot tell a legitimate one from a corruption, so it keeps the
+/// user's raw words. Symbol conversion and known-term correction are owned by
+/// `TranscriptCanonicalizer`, which runs on both the raw and polished text, so its
+/// deterministic results match on both sides and never reach this guard as a
+/// difference.
 ///
 /// The standard is asymmetric: a false reject is harmless (the raw words are
 /// kept), a false accept types altered meaning into the user's app, so every
@@ -32,16 +34,18 @@ extension TranscriptPolisher {
             return nonWhitespaceScalars(polished).isSubset(of: nonWhitespaceScalars(raw))
         }
 
-        guard let matches = matchedContentTokens(rawSpans: rawSpans, polishedSpans: polishedSpans) else {
+        guard let matches = matchedContentTokens(raw: raw, rawSpans: rawSpans, polishedSpans: polishedSpans) else {
             return false
         }
         guard !matches.isEmpty else { return false }
         // The model must not INTRODUCE meaning-bearing punctuation the user didn't
-        // dictate — a statement turned into a question ("ship it" -> "ship it?")
-        // or a vocative comma ("lets eat grandma" -> "lets eat, grandma") changes
-        // meaning even though every word survives. A restored trailing period does
-        // not change meaning, so `.` is unbudgeted.
-        guard punctuationAdditionsAreJustified(raw: raw, polished: polished) else { return false }
+        // dictate — a statement turned into a question ("ship it" -> "ship it?"),
+        // a vocative comma ("lets eat grandma" -> "lets eat, grandma"), or a colon
+        // that reframes a phrase as a label ("the error is timeout" -> "the error
+        // is: timeout") — nor may it drop or add a content symbol the user did
+        // dictate ("run -- verbose" -> "run verbose"). A restored trailing period
+        // does not change meaning, so `.` is unbudgeted (boundary-checked below).
+        guard symbolUsageIsJustified(raw: raw, polished: polished) else { return false }
         return preservesRawSentenceBoundaries(
             raw: raw,
             polished: polished,
@@ -124,7 +128,11 @@ extension TranscriptPolisher {
     /// Walk the raw tokens against the polished tokens, allowing only filler drops
     /// and an already-spoken hyphen-merge. Any other unmatched raw token, or any
     /// leftover polished token (an addition), rejects the whole polish.
-    private static func matchedContentTokens(rawSpans: [TokenSpan], polishedSpans: [TokenSpan]) -> [TokenMatch]? {
+    private static func matchedContentTokens(
+        raw rawText: String,
+        rawSpans: [TokenSpan],
+        polishedSpans: [TokenSpan]
+    ) -> [TokenMatch]? {
         let rawTokens = rawSpans.map(\.text)
         var rawIndex = 0
         var polishedIndex = 0
@@ -135,9 +143,15 @@ extension TranscriptPolisher {
             let raw = rawTokens[rawIndex]
             let polished: String? = polishedIndex < polishedSpans.count ? polishedSpans[polishedIndex].text : nil
 
-            // 1. Force-drop a filler "like" before matching, so a filler the model
-            //    happened to keep surfaces later as an unconsumed polished token
-            //    (an addition → reject) rather than being silently matched.
+            // 1. Force-drop a droppable filler "like" before matching. After
+            //    `isDroppableLike` was tightened, this fires only sentence-initially
+            //    (or with no semantic anchor around it), where "like" is a discourse
+            //    marker — so a filler the model happened to keep there surfaces later
+            //    as an unconsumed polished token (an addition → reject) rather than
+            //    being silently matched. A post-content "like" is never force-dropped:
+            //    the guard can't tell a comparator ("tastes like") from a verbal tic,
+            //    so it keeps it (matched as content, or — if the model dropped it —
+            //    rejected by the "like" arm of drop-on-mismatch below).
             if raw == "like", isDroppableLike(in: rawTokens, at: rawIndex, matchedContent: matchedContent) {
                 rawIndex += 1
                 continue
@@ -151,7 +165,7 @@ extension TranscriptPolisher {
                     rawIndex += 1; polishedIndex += 1; matchedContent = true
                     continue
                 }
-                if let parts = hyphenMergeParts(polished, rawTokens: rawTokens, at: rawIndex) {
+                if let parts = hyphenMergeParts(polished, raw: rawText, rawSpans: rawSpans, at: rawIndex) {
                     for offset in 0..<parts.count {
                         matches.append(TokenMatch(rawIndex: rawIndex + offset, polishedIndex: polishedIndex))
                     }
@@ -180,22 +194,47 @@ extension TranscriptPolisher {
     }
 
     /// A polished hyphenated token (e.g. "well-known") that exactly spans the next
-    /// several raw tokens ("well", "known"). Returns the split parts on a match.
-    private static func hyphenMergeParts(_ polished: String, rawTokens: [String], at index: Int) -> [String]? {
+    /// several raw tokens ("well", "known"). Returns the split parts on a match —
+    /// but only when the raw source gaps between those tokens are pure whitespace.
+    private static func hyphenMergeParts(
+        _ polished: String,
+        raw: String,
+        rawSpans: [TokenSpan],
+        at index: Int
+    ) -> [String]? {
         guard polished.contains("-") else { return nil }
         let parts = polished.split(separator: "-", omittingEmptySubsequences: true).map(String.init)
-        guard parts.count >= 2, index + parts.count <= rawTokens.count else { return nil }
-        return Array(rawTokens[index..<(index + parts.count)]) == parts ? parts : nil
+        guard parts.count >= 2, index + parts.count <= rawSpans.count else { return nil }
+        guard rawSpans[index..<(index + parts.count)].map(\.text) == parts else { return nil }
+        // The merge fuses the spanned raw tokens into one polished token, erasing
+        // the source gaps between them. Allow it only when every such gap is pure
+        // whitespace — a dictated sentence boundary ("done. Ship") or other
+        // punctuation between the words must not be silently collapsed into a
+        // compound ("done-ship"). Spoken compounds ("well known" → "well-known")
+        // are space-separated, so they pass.
+        for offset in 0..<(parts.count - 1) {
+            let gap = raw[rawSpans[index + offset].range.upperBound..<rawSpans[index + offset + 1].range.lowerBound]
+            guard gap.allSatisfy(\.isWhitespace) else { return nil }
+        }
+        return parts
     }
 
+    /// "like" is droppable only when nothing marks it as content: no semantic
+    /// anchor on either side (a comparator verb or pronoun), and only sentence-
+    /// initially (`!matchedContent`), where it is a discourse marker ("Like, we
+    /// should ship it"). A filler merely sitting next to "like" does NOT make it
+    /// droppable — "it tastes like um chicken" must keep its comparator "like" even
+    /// though the filler "um" follows. Once a content word precedes "like" it is
+    /// almost always a comparator ("tastes like", "works like") or quotative ("I was
+    /// like") the guard cannot distinguish from a verbal tic, so it is kept: matched
+    /// as content if the model kept it, or rejected by the "like" arm of
+    /// drop-on-mismatch if the model dropped it.
     private static func isDroppableLike(in tokens: [String], at index: Int, matchedContent: Bool) -> Bool {
         let previous = index > 0 ? tokens[index - 1] : nil
         let next = index + 1 < tokens.count ? tokens[index + 1] : nil
 
         if let previous, PolishVocabulary.semanticLikePrevious.contains(previous) { return false }
         if let next, PolishVocabulary.semanticLikeNext.contains(next) { return false }
-        if let next, PolishVocabulary.singleFillers.contains(next) || next == "so" { return true }
-        if let previous, PolishVocabulary.singleFillers.contains(previous) || previous == "so" { return true }
         return !matchedContent
     }
 
@@ -210,25 +249,66 @@ extension TranscriptPolisher {
         }
     }
 
-    // MARK: Added punctuation
+    // MARK: Added/dropped symbols and punctuation
 
-    /// Reject polished output containing more `,` `?` or `!` than the raw — the
-    /// user did not dictate them, and they can change meaning with every word kept
-    /// (statement→question, a vocative comma). `.` is unbudgeted: the recognizer
-    /// routinely omits a trailing one and restoring it does not change meaning.
-    private static func punctuationAdditionsAreJustified(raw: String, polished: String) -> Bool {
-        for glyph in [",", "?", "!"] as [Character] {
-            if occurrences(of: glyph, in: polished) > occurrences(of: glyph, in: raw) { return false }
+    /// Glyphs that carry meaning when INSERTED between kept words — a statement
+    /// turned into a question, a vocative comma, a label colon, a clause dash. The
+    /// model may not add them, but filler removal can legitimately strand one
+    /// ("um, uh," → ""), so a DROP is allowed. `.` is excluded: the recognizer
+    /// routinely omits a trailing period and restoring it does not change meaning,
+    /// and a mid-text `.` is policed by `preservesRawSentenceBoundaries`.
+    private static let addableMeaningPunctuation: Set<Character> = [",", "?", "!", ":", ";", "—", "–"]
+
+    /// Reject any meaning-changing punctuation the model added, and any content
+    /// symbol it dropped or added. Two rules over the significant symbols of each
+    /// side:
+    ///   • addable-meaning punctuation (`, ? ! : ; — –`): never ADDED (a drop is
+    ///     fine — removing a filler can take its comma with it).
+    ///   • every other significant symbol (`/`, `--`, `$`, `(`, …): a CONTENT glyph
+    ///     the canonicalizer produced on both sides — its count must not change at
+    ///     all, so a silently dropped `--`/`/` and an invented one both reject.
+    /// `.` is exempt (trailing-period restore; boundaries handled separately).
+    private static func symbolUsageIsJustified(raw: String, polished: String) -> Bool {
+        let rawCounts = significantSymbolCounts(raw)
+        let polishedCounts = significantSymbolCounts(polished)
+        for glyph in Set(rawCounts.keys).union(polishedCounts.keys) where glyph != "." {
+            let rawCount = rawCounts[glyph, default: 0]
+            let polishedCount = polishedCounts[glyph, default: 0]
+            if addableMeaningPunctuation.contains(glyph) {
+                if polishedCount > rawCount { return false }
+            } else if polishedCount != rawCount {
+                return false
+            }
         }
         return true
     }
 
-    private static func occurrences(of character: Character, in text: String) -> Int {
-        text.reduce(0) { $1 == character ? $0 + 1 : $0 }
+    /// Counts of each significant symbol — a non-alphanumeric, non-whitespace glyph
+    /// that is NOT a connector flanked by alphanumerics (those stay inside their
+    /// token: "well-known", "don't", "v1.2"). A standalone `--`/`/`/`$` between
+    /// spaces is significant and counted; an intra-token `-`/`'`/`.` is not. The
+    /// flanked-on-BOTH-sides test is deliberately conservative: classifying a
+    /// borderline glyph as significant can only over-reject (harmless), never
+    /// over-accept.
+    private static func significantSymbolCounts(_ text: String) -> [Character: Int] {
+        var counts: [Character: Int] = [:]
+        let characters = Array(text)
+        for (offset, character) in characters.enumerated() {
+            if isAlphanumeric(character) || character.isWhitespace { continue }
+            let flankedByAlphanumerics = offset > 0 && isAlphanumeric(characters[offset - 1])
+                && offset + 1 < characters.count && isAlphanumeric(characters[offset + 1])
+            if isConnector(character), flankedByAlphanumerics { continue }
+            counts[character, default: 0] += 1
+        }
+        return counts
     }
 
     // MARK: Sentence boundaries
 
+    /// The model must neither COLLAPSE a dictated sentence boundary between two kept
+    /// words nor INVENT one. For each adjacent matched pair the raw and polished gaps
+    /// must agree on whether a boundary is present; a restored trailing end-of-text
+    /// period sits after the last token, so it is never inspected here.
     private static func preservesRawSentenceBoundaries(
         raw: String,
         polished: String,
@@ -241,19 +321,30 @@ extension TranscriptPolisher {
         for index in 0..<(matches.count - 1) {
             let left = matches[index]
             let right = matches[index + 1]
-            // A hyphen-merge maps several raw tokens to the same polished token;
-            // there is no polished gap between them to inspect.
+            // A hyphen-merge maps several raw tokens to the same polished token; there
+            // is no polished gap between them to inspect (and the merge already
+            // verified those raw gaps were whitespace-only).
             guard left.polishedIndex != right.polishedIndex else { continue }
 
             let rawGap = raw[rawSpans[left.rawIndex].range.upperBound..<rawSpans[right.rawIndex].range.lowerBound]
             let rawNextFirst = raw[rawSpans[right.rawIndex].range.lowerBound]
-            guard containsSentenceBoundary(rawGap, nextTokenFirstChar: rawNextFirst) else { continue }
-
             let polishedGap = polished[
                 polishedSpans[left.polishedIndex].range.upperBound..<polishedSpans[right.polishedIndex].range.lowerBound
             ]
             let polishedNextFirst = polished[polishedSpans[right.polishedIndex].range.lowerBound]
-            guard containsSentenceBoundary(polishedGap, nextTokenFirstChar: polishedNextFirst) else { return false }
+
+            let rawHasBoundary = containsSentenceBoundary(rawGap, nextTokenFirstChar: rawNextFirst)
+            let polishedHasBoundary = containsSentenceBoundary(polishedGap, nextTokenFirstChar: polishedNextFirst)
+
+            if rawHasBoundary {
+                // A dictated boundary must survive ("...do this. You..." must not
+                // become "...do this.You...").
+                guard polishedHasBoundary else { return false }
+            } else {
+                // ...and the model must not invent one where the user dictated none
+                // ("ship it now" → "ship it. Now"), splitting one sentence into two.
+                guard !polishedHasBoundary else { return false }
+            }
         }
 
         return true

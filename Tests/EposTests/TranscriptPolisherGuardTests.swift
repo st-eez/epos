@@ -7,8 +7,9 @@ import XCTest
 /// before the guard), so these cases use the post-canonicalize strings directly.
 /// It must keep filler removal and the hyphen-merge of an already-spoken compound
 /// while rejecting content-word drops, additions, reordering, word substitution,
-/// spoken-symbol conversion, contraction collapse, added `,`/`?`/`!`, and
-/// collapsed sentence boundaries.
+/// spoken-symbol conversion, contraction collapse, dropped or added content
+/// symbols, added meaning-bearing punctuation, and collapsed or invented sentence
+/// boundaries.
 final class TranscriptPolisherGuardTests: XCTestCase {
     func testGuardPreservesExactContentSequenceAfterAllowedCleanup() {
         let cases: [(raw: String, polished: String, expected: Bool)] = [
@@ -22,15 +23,25 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             // Filler-removal: um/uh/so/like/you-know stripped, the content words
             // remain exactly in order. Keep.
             ("um so like we should uh ship it you know", "we should ship it", true),
-            // Ambiguous filler words are only droppable when needed for alignment.
-            // The final "like" is semantic and must survive while the fillers go.
+            // A "like" between content words is treated as a comparator the guard
+            // cannot distinguish from a verbal tic, so the model may not DROP it —
+            // not even when a filler sits beside it (a filler neighbor does not make
+            // "like" itself filler). It MAY keep it: keeping a possible filler never
+            // changes meaning. Sentence-initial and semantically-anchored "like"s
+            // behave as before. The four cases below share two raw inputs and differ
+            // only in what the model did to the mid-sentence "like".
+            //
+            // Model dropped the mid "like" (between "would" and the filler "uh"): a
+            // content-word neighbor means the guard can't safely drop it → reject.
             (
                 "Uh, like, I'm trying to see the, uh, filler words would, like, uh, " +
                     "get removed, but it doesn't seem like it.",
                 "I'm trying to see the filler words would get removed, but it " +
                     "doesn't seem like it.",
-                true
+                false
             ),
+            // Same input, model also dropped the trailing semantic "like" ("seem like
+            // it" → "seem it"): a clear meaning change → reject.
             (
                 "Uh, like, I'm trying to see the, uh, filler words would, like, uh, " +
                     "get removed, but it doesn't seem like it.",
@@ -38,19 +49,25 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                     "doesn't seem it.",
                 false
             ),
+            // Model dropped the mid "like" ("words like uh get" → "words get"):
+            // reject for the same reason (the guard keeps the raw words instead).
             (
                 "Uh, like, I'm trying to see the filler words like uh get removed " +
                     "but it doesn't seem like it.",
                 "I'm trying to see the filler words get removed but it doesn't " +
                     "seem like it.",
-                true
+                false
             ),
+            // Same input, but the model KEPT the mid "like" and removed only the
+            // adjacent "uh" ("words like uh get" → "words like get"): every content
+            // word survives and a possible filler is merely retained → accept. (The
+            // old reject here was an artifact of the force-drop, not a safety bar.)
             (
                 "Uh, like, I'm trying to see the filler words like uh get removed " +
                     "but it doesn't seem like it.",
                 "I'm trying to see the filler words like get removed but it " +
                     "doesn't seem like it.",
-                false
+                true
             ),
             ("I like uh tacos.", "I like tacos.", true),
             // "I think" is meaningful per the prompt. Dropping it is content loss.
@@ -140,6 +157,38 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("let's go now", "let go now", false),
             ("it's broken", "it broken", false),
             ("that's fine with me", "that fine with me", false),
+
+            // MARK: - rank 1: a dropped standalone symbol token (invisible to the
+            // content-token sequence) is still caught by the symbol-count check.
+            ("run -- verbose now", "run verbose now", false),
+            ("use / as root", "use as root", false),
+            ("cd / etc / hosts", "cd etc hosts", false),
+            // Control: the `--` survives on both sides while a filler is removed. Keep.
+            ("run -- verbose um now", "run -- verbose now", true),
+
+            // MARK: - rank 2: a comparator "like" beside a filler is not itself
+            // filler; dropping it inverts meaning. Reject. (A semantic anchor still
+            // protects it even when the model also strips an adjacent filler.)
+            ("it tastes like um chicken", "it tastes chicken", false),
+            ("it works like uh magic", "it works magic", false),
+            ("looks like um rain", "looks rain", false),
+
+            // MARK: - rank 3: meaning-bearing punctuation beyond `, ? !` — a colon,
+            // semicolon, or dash the user did not dictate — also changes meaning.
+            ("the error is timeout", "the error is: timeout", false),
+            ("done now go home", "done; now go home", false),
+            ("we win lose it", "we win — lose it", false),
+
+            // MARK: - rank 4: an invented period+capital splits one dictated sentence
+            // into two. Reject (a restored trailing period is still fine, above).
+            ("ship it now", "ship it. Now", false),
+            ("i ran it again", "i ran it. Again", false),
+
+            // MARK: - rank 5: a hyphen-merge must not fuse across a dictated sentence
+            // boundary into a nonsense compound.
+            ("we are done. Ship now", "we are done-ship now", false),
+            // Control: the same words without the boundary merge legitimately. Keep.
+            ("we are done ship now", "we are done-ship now", true),
         ]
 
         for testCase in cases {
