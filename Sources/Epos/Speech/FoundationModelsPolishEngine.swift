@@ -3,11 +3,12 @@ import FoundationModels
 
 /// The real on-device polish engine: FoundationModels guided generation with the
 /// Stage-1 tuned prompt. Greedy / temperature-0 decoding makes decoding
-/// deterministic so the leash lives in the instructions, not in sampling luck; a
-/// fresh, stateless `LanguageModelSession` per call keeps transcripts from
-/// contaminating each other. Not unit-testable (it needs the on-device model) —
-/// the gate/guard/fallback policy lives in `TranscriptPolisher` and is tested
-/// with a fake. Ported from `probes/llm-polish/`.
+/// deterministic so the leash lives in the instructions, not in sampling luck. Each
+/// recording gets one session via `makeSession`, prewarmed at recording start and held
+/// (by the policy) until the finish-time polish, so the session is warm by fn-release; a
+/// new session per recording keeps transcripts from contaminating each other. Not
+/// unit-testable (it needs the on-device model) — the gate/guard/fallback policy lives in
+/// `TranscriptPolisher` and is tested with a fake. Ported from `probes/llm-polish/`.
 public struct FoundationModelsPolishEngine: PolishEngine {
     private let model: SystemLanguageModel
 
@@ -22,30 +23,44 @@ public struct FoundationModelsPolishEngine: PolishEngine {
         model.availability == .available
     }
 
-    public func prewarm(knownTerms: [String]) {
-        guard isAvailable else { return }
-        session(knownTerms: knownTerms).prewarm()
+    /// Build and prewarm one session for this recording. The coordinator calls this at
+    /// recording start and the policy holds the returned session until fn-release, so the
+    /// model session is warm by the time the user stops speaking — measured to roughly
+    /// halve first-polish latency vs building a fresh session at finish (a prewarmed-then-
+    /// discarded session, as the prior design used, carried no measurable benefit).
+    public func makeSession(knownTerms: [String]) -> any PolishSession {
+        let session = LanguageModelSession(model: model, instructions: Self.makeInstructions(knownTerms: knownTerms))
+        session.prewarm()
+        return Session(session)
     }
 
-    public func polish(_ raw: String, knownTerms: [String]) async throws -> String {
-        // A fresh, stateless session per call keeps transcripts from contaminating
-        // each other; that per-call isolation — not cooperative cancellation — is
-        // the correctness guarantee if a timed-out polish is still decoding when
-        // the next one starts. A context-window overflow maps to a distinct error
-        // so the policy reports `.tooLong` rather than a silent raw fallback.
-        do {
-            return try await session(knownTerms: knownTerms)
-                .respond(to: raw, generating: CleanedTranscript.self, options: Self.options)
-                .content
-                .cleaned
-        } catch let error as LanguageModelSession.GenerationError {
-            if case .exceededContextWindowSize = error { throw PolishInputTooLargeError() }
-            throw error
+    /// One recording's prewarmed session. A new instance per recording keeps transcripts
+    /// from contaminating each other; that per-recording lifetime — not cooperative
+    /// cancellation — is the correctness guarantee if a timed-out polish is still decoding
+    /// when the next recording starts. A context-window overflow maps to a distinct error
+    /// so the policy reports `.tooLong` rather than a silent raw fallback.
+    ///
+    /// `@unchecked Sendable`: the session is created at recording start and used by exactly
+    /// one `polish` call; there is no concurrent access (one recording at a time, and the
+    /// box hands the session to a single task).
+    private final class Session: PolishSession, @unchecked Sendable {
+        private let session: LanguageModelSession
+
+        init(_ session: LanguageModelSession) {
+            self.session = session
         }
-    }
 
-    private func session(knownTerms: [String]) -> LanguageModelSession {
-        LanguageModelSession(model: model, instructions: Self.makeInstructions(knownTerms: knownTerms))
+        func polish(_ raw: String) async throws -> String {
+            do {
+                return try await session
+                    .respond(to: raw, generating: CleanedTranscript.self, options: FoundationModelsPolishEngine.options)
+                    .content
+                    .cleaned
+            } catch let error as LanguageModelSession.GenerationError {
+                if case .exceededContextWindowSize = error { throw PolishInputTooLargeError() }
+                throw error
+            }
+        }
     }
 
     /// Greedy + temperature 0: deterministic decoding. No `maximumResponseTokens`

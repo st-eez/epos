@@ -6,11 +6,23 @@ import Foundation
 public protocol PolishEngine: Sendable {
     /// Whether the on-device model is usable right now.
     var isAvailable: Bool { get }
-    /// Hint the model to load so the first real polish is faster.
-    func prewarm(knownTerms: [String])
-    /// Clean up the raw transcript. May throw; the policy treats a throw as a
-    /// fallback to the raw text (or `.tooLong` for `PolishInputTooLargeError`).
-    func polish(_ raw: String, knownTerms: [String]) async throws -> String
+    /// Build this recording's polish session, warmed for `knownTerms`. Called once at
+    /// recording start; the policy holds the returned session across the dictation window
+    /// and reuses it for the finish-time polish. Holding a prewarmed session — rather than
+    /// prewarming one and building a fresh one at finish — roughly halves first-polish
+    /// latency (measured): the model *session*, not just the shared model weights, is warm
+    /// by fn-release. A new session per recording keeps transcripts from contaminating
+    /// each other.
+    func makeSession(knownTerms: [String]) -> any PolishSession
+}
+
+/// One recording's warmed polish call. Split out of `PolishEngine` so the engine can
+/// prewarm a session at recording start and hand back something the policy holds until
+/// finish, without leaking the underlying model-session type through the seam.
+public protocol PolishSession: Sendable {
+    /// Clean up the raw transcript on the prewarmed session. May throw; the policy treats
+    /// a throw as a fallback to the raw text (or `.tooLong` for `PolishInputTooLargeError`).
+    func polish(_ raw: String) async throws -> String
 }
 
 /// Thrown by the engine when the transcript is too large for the model's context
@@ -62,6 +74,9 @@ public struct TranscriptPolisher: Sendable {
     private let knownTerms: [String]
     private let canonicalize: @Sendable (String) -> String
     private let timeoutNanoseconds: UInt64?
+    /// Holds the session `prewarm()` warms at recording start so `polish()` at finish can
+    /// reuse it across the value-type copy between those two call sites (see the box doc).
+    private let preparedSession = PreparedPolishSession()
 
     public init(
         enabled: Bool,
@@ -121,14 +136,16 @@ public struct TranscriptPolisher: Sendable {
     /// no-op unless polish is enabled and the engine is available.
     public func prewarm() {
         guard enabled, engine.isAvailable else { return }
-        engine.prewarm(knownTerms: knownTerms)
+        preparedSession.session = engine.makeSession(knownTerms: knownTerms)
     }
 
     private func enginePolishAttempt(_ raw: String) async -> EnginePolishAttempt {
-        let engine = self.engine
-        let knownTerms = self.knownTerms
+        // Reuse the session prewarmed at recording start; fall back to a fresh one if
+        // polish runs without a prior prewarm (a polisher built at finish). Only reached
+        // after polish()'s enabled + isAvailable gates, so `makeSession` is safe to call.
+        let session = preparedSession.session ?? engine.makeSession(knownTerms: knownTerms)
         guard let timeoutNanoseconds else {
-            do { return .success(try await engine.polish(raw, knownTerms: knownTerms)) }
+            do { return .success(try await session.polish(raw)) }
             catch is PolishInputTooLargeError { return .tooLong }
             catch { return .failed }
         }
@@ -139,7 +156,7 @@ public struct TranscriptPolisher: Sendable {
         // the engine child has finished before this returns.
         return await withTaskGroup(of: EnginePolishAttempt.self) { group in
             group.addTask {
-                do { return .success(try await engine.polish(raw, knownTerms: knownTerms)) }
+                do { return .success(try await session.polish(raw)) }
                 catch is PolishInputTooLargeError { return .tooLong }
                 catch { return .failed }
             }
@@ -152,4 +169,16 @@ public struct TranscriptPolisher: Sendable {
             return first
         }
     }
+}
+
+/// Reference box so the session `prewarm()` warms at recording start is visible to
+/// `polish()` at finish: `TranscriptPolisher` is a value type, copied between those call
+/// sites, so a plain struct field would not carry the session across the copy. One box per
+/// polisher means one session per recording — nothing is shared across recordings, so a
+/// timed-out polish still decoding cannot leak into the next recording's transcript.
+/// `@unchecked Sendable`: the session is written once on the main actor before the
+/// transcription task that later reads it is spawned (a happens-before edge), and is never
+/// mutated concurrently.
+final class PreparedPolishSession: @unchecked Sendable {
+    var session: (any PolishSession)?
 }

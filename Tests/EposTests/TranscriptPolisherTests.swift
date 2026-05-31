@@ -97,16 +97,31 @@ final class TranscriptPolisherTests: XCTestCase {
     func testPrewarmDelegatesToEngineOnlyWhenEnabledAndAvailable() {
         let enabledAvailable = FakePolishEngine(isAvailable: true)
         TranscriptPolisher(enabled: true, engine: enabledAvailable, knownTerms: ["CMUX"]).prewarm()
-        XCTAssertEqual(enabledAvailable.prewarmCallCount, 1)
-        XCTAssertEqual(enabledAvailable.prewarmKnownTerms, [["CMUX"]])
+        XCTAssertEqual(enabledAvailable.sessionCount, 1)
+        XCTAssertEqual(enabledAvailable.sessionKnownTerms, [["CMUX"]])
 
         let disabled = FakePolishEngine(isAvailable: true)
         TranscriptPolisher(enabled: false, engine: disabled).prewarm()
-        XCTAssertEqual(disabled.prewarmCallCount, 0)
+        XCTAssertEqual(disabled.sessionCount, 0)
 
         let unavailable = FakePolishEngine(isAvailable: false)
         TranscriptPolisher(enabled: true, engine: unavailable).prewarm()
-        XCTAssertEqual(unavailable.prewarmCallCount, 0)
+        XCTAssertEqual(unavailable.sessionCount, 0)
+    }
+
+    func testPrewarmedSessionIsReusedForPolish() async {
+        // The latency fix: prewarm() builds the session at recording start and polish()
+        // reuses THAT session — one session per recording, not a prewarmed one discarded
+        // plus a fresh one built at finish (the prior design, measured to cost ~750ms).
+        let engine = FakePolishEngine(result: "Polished.")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine, knownTerms: ["Epos"])
+
+        polisher.prewarm()
+        let result = await polisher.polish("polished")
+
+        XCTAssertEqual(engine.sessionCount, 1)
+        XCTAssertEqual(engine.polishCallCount, 1)
+        XCTAssertEqual(result.text, "Polished.")
     }
 
     func testKnownTermsArePassedToEngine() async {
@@ -200,18 +215,20 @@ final class TranscriptPolisherTests: XCTestCase {
     }
 }
 
-/// Configurable test double for `PolishEngine`. `@unchecked Sendable` is safe
-/// here: each test awaits `polish` to completion before reading the counters, so
-/// there is no concurrent access.
+/// Configurable test double for `PolishEngine` + `PolishSession`. `@unchecked Sendable`
+/// is safe here: each test awaits `polish` to completion before reading the counters, so
+/// there is no concurrent access. `sessionCount`/`sessionKnownTerms` track `makeSession`
+/// (the prewarm/per-recording-session delegation point); `polishCallCount`/
+/// `polishKnownTerms` track the polish calls made on the sessions it produced.
 final class FakePolishEngine: PolishEngine, @unchecked Sendable {
     var isAvailable: Bool
     var result: String
     var throwError: Error?
     var delayNanoseconds: UInt64?
+    private(set) var sessionCount = 0
+    private(set) var sessionKnownTerms: [[String]] = []
     private(set) var polishCallCount = 0
-    private(set) var prewarmCallCount = 0
     private(set) var polishKnownTerms: [[String]] = []
-    private(set) var prewarmKnownTerms: [[String]] = []
 
     init(
         isAvailable: Bool = true,
@@ -225,19 +242,37 @@ final class FakePolishEngine: PolishEngine, @unchecked Sendable {
         self.delayNanoseconds = delayNanoseconds
     }
 
-    func prewarm(knownTerms: [String]) {
-        prewarmCallCount += 1
-        prewarmKnownTerms.append(knownTerms)
+    func makeSession(knownTerms: [String]) -> any PolishSession {
+        sessionCount += 1
+        sessionKnownTerms.append(knownTerms)
+        return FakePolishSession(engine: self, knownTerms: knownTerms)
     }
 
-    func polish(_ raw: String, knownTerms: [String]) async throws -> String {
+    fileprivate func recordPolish(knownTerms: [String]) {
         polishCallCount += 1
         polishKnownTerms.append(knownTerms)
-        if let delayNanoseconds {
+    }
+}
+
+/// A session produced by `FakePolishEngine`, carrying the `knownTerms` it was built with
+/// and reading its result/error/delay from the engine so the existing test configuration
+/// keeps working through the new seam.
+final class FakePolishSession: PolishSession, @unchecked Sendable {
+    private let engine: FakePolishEngine
+    private let knownTerms: [String]
+
+    init(engine: FakePolishEngine, knownTerms: [String]) {
+        self.engine = engine
+        self.knownTerms = knownTerms
+    }
+
+    func polish(_ raw: String) async throws -> String {
+        engine.recordPolish(knownTerms: knownTerms)
+        if let delayNanoseconds = engine.delayNanoseconds {
             try await Task.sleep(nanoseconds: delayNanoseconds)
         }
-        if let throwError { throw throwError }
-        return result
+        if let throwError = engine.throwError { throw throwError }
+        return engine.result
     }
 }
 
