@@ -16,9 +16,11 @@ import XCTest
 /// Prints a per-row raw→outcome→output table plus a summary, and writes
 /// `.build/evals/polish-eval.jsonl`. Tune against two numbers: `retainedFiller`
 /// should trend to 0 (polish is doing its job) and there must be ZERO meaning
-/// changes on inspection (the safety bar). To refresh the real-clip transcripts
-/// after recording new audio, run `cd probes/llm-polish && swift run LLMPolishProbe
-/// --transcribe-only` and paste the raw lines into `realClipTranscripts`.
+/// changes on inspection (the safety bar). Refreshing the real-clip transcripts
+/// after recording new audio uses the `LLMPolishProbe` harness — a local-only,
+/// gitignored probe project NOT present in a fresh checkout: where it exists, run
+/// `swift run LLMPolishProbe --transcribe-only` and paste the raw lines into
+/// `realClipTranscripts`.
 final class PolishEvalTests: XCTestCase {
     /// Transcripts of the saved clips in ~/Library/Caches/Epos/recordings, as
     /// re-transcribed by the production preset (see the probe). Clean, filler-free

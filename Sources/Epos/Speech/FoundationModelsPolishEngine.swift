@@ -8,7 +8,8 @@ import FoundationModels
 /// (by the policy) until the finish-time polish, so the session is warm by fn-release; a
 /// new session per recording keeps transcripts from contaminating each other. Not
 /// unit-testable (it needs the on-device model) — the gate/guard/fallback policy lives in
-/// `TranscriptPolisher` and is tested with a fake. Ported from `probes/llm-polish/`.
+/// `TranscriptPolisher` and is tested with a fake. Ported from a local-only,
+/// gitignored probe (not in the committed repo).
 public struct FoundationModelsPolishEngine: PolishEngine {
     private let model: SystemLanguageModel
 
