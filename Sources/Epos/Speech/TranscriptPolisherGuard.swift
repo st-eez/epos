@@ -305,9 +305,11 @@ extension TranscriptPolisher {
     // MARK: Sentence boundaries
 
     /// The model must neither COLLAPSE a dictated sentence boundary between two kept
-    /// words nor INVENT one. For each adjacent matched pair the raw and polished gaps
-    /// must agree on whether a boundary is present; a restored trailing end-of-text
-    /// period sits after the last token, so it is never inspected here.
+    /// words nor INVENT one, and must keep a dictated `?`/`!` boundary's TYPE (a
+    /// question must not become a command, or vice versa). For each adjacent matched
+    /// pair the raw and polished gaps must agree on whether a boundary is present and
+    /// on its mood mark; a restored trailing end-of-text period sits after the last
+    /// token, so it is never inspected here.
     private static func preservesRawSentenceBoundaries(
         raw: String,
         polished: String,
@@ -332,40 +334,51 @@ extension TranscriptPolisher {
             ]
             let polishedNextFirst = polished[polishedSpans[right.polishedIndex].range.lowerBound]
 
-            let rawHasBoundary = containsSentenceBoundary(rawGap, nextTokenFirstChar: rawNextFirst)
-            let polishedHasBoundary = containsSentenceBoundary(polishedGap, nextTokenFirstChar: polishedNextFirst)
+            let rawBoundary = sentenceBoundaryGlyph(rawGap, nextTokenFirstChar: rawNextFirst)
+            let polishedBoundary = sentenceBoundaryGlyph(polishedGap, nextTokenFirstChar: polishedNextFirst)
 
-            if rawHasBoundary {
+            if let rawBoundary {
                 // A dictated boundary must survive ("...do this. You..." must not
                 // become "...do this.You...").
-                guard polishedHasBoundary else { return false }
+                guard let polishedBoundary else { return false }
+                // ...and a dictated mood mark must keep its type: a `?`↔`!` swap that
+                // balances the per-glyph counts (so the symbol-count check passes)
+                // still flips a question and a command between clauses ("do it? stop
+                // it!" → "do it! stop it?"). `.` is the soft mark — promoting it to a
+                // `?`/`!` ADDS a mood glyph, which the symbol-count check rejects.
+                if rawBoundary == "?" || rawBoundary == "!" {
+                    guard polishedBoundary == rawBoundary else { return false }
+                }
             } else {
                 // ...and the model must not invent one where the user dictated none
                 // ("ship it now" → "ship it. Now"), splitting one sentence into two.
-                guard !polishedHasBoundary else { return false }
+                guard polishedBoundary == nil else { return false }
             }
         }
 
         return true
     }
 
-    /// A `?`/`!` followed by whitespace (or ending the gap) is a boundary. A `.`
-    /// is a boundary only when followed by whitespace AND the next token is
-    /// capitalized — so an abbreviation/version dot ("fig. 3", "v1.2") is not a
-    /// false boundary, and a `.` with no following space ("this.Next") never is.
-    private static func containsSentenceBoundary(_ separator: Substring, nextTokenFirstChar: Character) -> Bool {
+    /// The first sentence-boundary glyph in `separator` (`?`/`!`/`.`), or nil if
+    /// none. A `?`/`!` followed by whitespace (or ending the gap) is a boundary; a
+    /// `.` is a boundary only when followed by whitespace AND the next token is
+    /// capitalized — so an abbreviation/version dot ("fig. 3", "v1.2") is not a false
+    /// boundary, and a `.` with no following space ("this.Next") never is. Returning
+    /// the glyph (not just a bool) lets the caller reject a `?`↔`!` mood swap that
+    /// keeps the per-glyph counts balanced.
+    private static func sentenceBoundaryGlyph(_ separator: Substring, nextTokenFirstChar: Character) -> Character? {
         var index = separator.startIndex
         while index < separator.endIndex {
             let character = separator[index]
             let after = separator.index(after: index)
             let followedByWhitespace = after < separator.endIndex && separator[after].isWhitespace
             if character == "?" || character == "!" {
-                if followedByWhitespace || after == separator.endIndex { return true }
+                if followedByWhitespace || after == separator.endIndex { return character }
             } else if character == "." {
-                if followedByWhitespace && nextTokenFirstChar.isUppercase { return true }
+                if followedByWhitespace && nextTokenFirstChar.isUppercase { return character }
             }
             index = after
         }
-        return false
+        return nil
     }
 }

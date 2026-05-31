@@ -187,6 +187,12 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("is it broken? really", "is it broken really", false),
             // Control: the `?` is preserved, only casing changes. Keep.
             ("is it broken?", "Is it broken?", true),
+            // A count-balanced `?`↔`!` swap between clauses still flips a question and
+            // a command, even though every glyph count is preserved. Reject.
+            ("do it? stop it!", "do it! stop it?", false),
+            ("go now? wait here!", "go now! wait here?", false),
+            // Control: both mood marks keep their type across clauses. Keep.
+            ("do it? stop it!", "Do it? Stop it!", true),
 
             // MARK: - rank 4: an invented period+capital splits one dictated sentence
             // into two. Reject (a restored trailing period is still fine, above).
