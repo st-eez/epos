@@ -88,7 +88,7 @@ public enum InsertionTargetGuard {
 ///
 /// Two checks with very different costs:
 /// - `focusChangedSinceStart()` copies the system-wide focused element and
-///   compares it to the home element with `CFEqual`. Cheap — safe per reconcile.
+///   compares its owning process to the home element's. Cheap — safe per reconcile.
 /// - `observedValue()` reads `kAXValueAttribute` (the whole field's text). The
 ///   expensive call; the session gates it to the pre-delete moment only.
 public protocol InsertionTargetObserver: AnyObject {
@@ -120,6 +120,11 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
 public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private let systemWide: AXUIElement
     private var homeElement: AXUIElement?
+    /// The process that owned the focused element at session start. Focus moving to a
+    /// different app changes this; an element-handle churn within the same app (a
+    /// Chromium/Electron terminal like cmux rebuilds its AX node between keystrokes) does
+    /// not — so the focus guard compares this, not the element's identity.
+    private var homePid: pid_t?
     /// True when the home element advertises `kAXValueAttribute` at session start.
     /// Set once at `captureBaseline`, before any delete, so the FIRST delete cycle
     /// already knows a text-exposing field is text-exposing — without it, the
@@ -145,6 +150,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     public func captureBaseline() {
         homeElement = copyFocusedElement()
         if let homeElement {
+            homePid = pid(of: homeElement)
             homeElementAdvertisesValue = advertisesValueAttribute(homeElement)
         } else {
             log.info("insertion guard: no focused element at session start; focus guard inactive")
@@ -152,16 +158,27 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     }
 
     public func focusChangedSinceStart() -> Bool {
-        // No baseline (couldn't read focus at start) → we can't prove focus
-        // moved, so don't fire the focus guard. The value guard still protects
-        // deletes.
-        guard let homeElement else { return false }
+        // No baseline pid (couldn't read focus/owner at start) → we can't prove focus
+        // moved, so don't fire the focus guard. The value guard still protects deletes.
+        guard let homePid else { return false }
         guard let current = copyFocusedElement() else {
             // Focus became unreadable (field/window went away). Treat as changed:
             // continuing to type blind risks the wrong target.
+            log.info("insertion guard: focused element unreadable mid-session; treating as focus change")
             return true
         }
-        return !CFEqual(homeElement, current)
+        // Compare by owning process, not element identity. A Chromium/Electron terminal
+        // such as cmux hands back a fresh AXUIElement for the same field between
+        // keystrokes, so `CFEqual` on the element reported a change and aborted
+        // mid-dictation even though focus never left the app. The pid is stable across
+        // that churn and still changes when focus moves to another app — the case the
+        // guard actually protects against. (A move to another window/field of the SAME
+        // app is not caught here; that is rare during push-to-talk, and the value guard
+        // still bounds deletes.)
+        guard let currentPid = pid(of: current) else { return true }
+        guard currentPid != homePid else { return false }
+        log.info("insertion guard: focus left the app mid-session (pid \(homePid) -> \(currentPid))")
+        return true
     }
 
     public func observedValue() -> String? {
@@ -182,6 +199,13 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         let result = AXUIElementCopyAttributeNames(element, &names)
         guard result == .success, let attributes = names as? [String] else { return false }
         return attributes.contains(kAXValueAttribute as String)
+    }
+
+    /// Owning process of an element. `AXUIElementGetPid` is a local lookup (no IPC to the
+    /// target app), so this stays cheap enough to run on every reconcile.
+    private func pid(of element: AXUIElement) -> pid_t? {
+        var processID: pid_t = 0
+        return AXUIElementGetPid(element, &processID) == .success ? processID : nil
     }
 
     private func copyFocusedElement() -> AXUIElement? {
