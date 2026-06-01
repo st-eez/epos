@@ -1,23 +1,22 @@
 import XCTest
 @testable import Epos
 
-/// `PolishVocabulary` is the single source of the filler vocabulary the content-
-/// retention guard and the engine prompt both reason about. The guard consumes it
-/// directly (a code reference, so it cannot drift). These tests pin the prompt to
-/// it: if a filler is added to the vocabulary, the prompt must name it too, or the
-/// model and the guard would disagree about what may be removed. (Spoken-symbol
-/// conversion is owned by `TranscriptCanonicalizer`, not the polish stage, so it
-/// is intentionally absent here.)
+/// `PolishVocabulary.singleFillers` is the single source of the filler words the
+/// content-retention guard accepts dropping and the engine prompt tells the model
+/// to remove. The guard consumes it directly (a code reference, so it cannot
+/// drift). This test pins the prompt to it: if a filler is added to or removed from
+/// the set, the prompt's interpolated enumeration must follow, or the model and the
+/// guard would disagree about what may be removed (a mismatch makes the guard
+/// reject the whole polish). (`fillerPhrases` is deliberately NOT asserted: the
+/// guard no longer drops those and the prompt no longer names them — see
+/// `PolishVocabulary`. Spoken-symbol conversion is owned by
+/// `TranscriptCanonicalizer`, not the polish stage, so it is absent here too.)
 final class PolishVocabularyTests: XCTestCase {
     func testPromptNamesEveryFillerSoItCannotDriftFromTheGuard() {
         let prompt = FoundationModelsPolishEngine.makeInstructions(knownTerms: []).lowercased()
 
         for filler in PolishVocabulary.singleFillers {
             XCTAssertTrue(prompt.contains(filler), "prompt should name filler '\(filler)'")
-        }
-        for phrase in PolishVocabulary.fillerPhrases {
-            let joined = phrase.joined(separator: " ")
-            XCTAssertTrue(prompt.contains(joined), "prompt should name filler phrase '\(joined)'")
         }
     }
 

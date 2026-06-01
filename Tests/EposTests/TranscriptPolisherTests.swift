@@ -119,9 +119,11 @@ final class TranscriptPolisherTests: XCTestCase {
     }
 
     func testPolishReturnsPolishedWhenAvailableAndGuardPasses() async {
-        // Legit cleanup: fillers removed, every substantive word retained — the
-        // guard passes and the polished text is used.
-        let raw = "um so i think we should uh ship the feature you know"
+        // Legit cleanup: only droppable fillers removed (um, sentence-initial so, uh),
+        // every substantive word retained — the guard passes and the polished text is
+        // used. (Ambiguous fillers like "you know" are no longer droppable: the guard
+        // would reject their removal, so they are deliberately absent here.)
+        let raw = "um so i think we should uh ship the feature"
         let engine = FakePolishEngine(result: "I think we should ship the feature.")
         let polisher = TranscriptPolisher(enabled: true, engine: engine)
 
@@ -235,6 +237,12 @@ final class TranscriptPolisherTests: XCTestCase {
 
         XCTAssertEqual(result.text, "CMUX is down.")
         XCTAssertEqual(result.outcome, .applied)
+        // The log reads `rawCharacterCount` instead of re-canonicalizing the raw
+        // transcript: on `.applied` it is the canonicalized-RAW baseline, distinct
+        // from the polished `result.text.count`, so rawChars − polishedChars stays
+        // the filler-removal delta on a single normalization.
+        XCTAssertEqual(result.rawCharacterCount, canonicalize("see mux is down").count)
+        XCTAssertNotEqual(result.rawCharacterCount, result.text.count)
     }
 
     func testFallbackOutcomesReturnCanonicalizedRaw() async {
@@ -252,14 +260,14 @@ final class TranscriptPolisherTests: XCTestCase {
     }
 
     func testEffectivePolishOutcomeDowngradesAppliedWhenNothingTyped() {
-        let applied = PolishResult(text: "polished", outcome: .applied)
+        let applied = PolishResult(text: "polished", outcome: .applied, rawCharacterCount: 8)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: false), .unchanged)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: true), .applied)
 
-        let timedOut = PolishResult(text: "raw", outcome: .timedOut)
+        let timedOut = PolishResult(text: "raw", outcome: .timedOut, rawCharacterCount: 3)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(timedOut, applied: false), .timedOut)
 
-        let tooLong = PolishResult(text: "raw", outcome: .tooLong)
+        let tooLong = PolishResult(text: "raw", outcome: .tooLong, rawCharacterCount: 3)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(tooLong, applied: false), .tooLong)
     }
 }

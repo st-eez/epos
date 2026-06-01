@@ -12,11 +12,26 @@ import Foundation
 /// user are the canonicalizer's deterministic, both-sides rules — never a model
 /// guess the guard cannot safely police.
 public enum PolishVocabulary {
-    /// Single-token disfluencies the model is allowed to drop. `so` is handled
-    /// separately (only droppable sentence-initially) and is intentionally absent.
-    public static let singleFillers: Set<String> = ["um", "uh", "er", "hmm", "like", "basically"]
+    /// Single-token disfluencies the model is allowed to drop. Deliberately MINIMAL:
+    /// only the pure non-words with no content sense. `so` is handled separately
+    /// (only droppable sentence-initially) and is intentionally absent; `like` is
+    /// handled by its own `isDroppableLike` arm in the guard, so it is absent here
+    /// too (it would be dead — the explicit `if raw == "like"` reject arm shadows
+    /// this set). "basically" is omitted on purpose: it is a content-bearing degree
+    /// adverb ("basically identical" ≠ "identical"), not a removable disfluency.
+    /// Multi-token phrases ("you know", "kind of", …) are likewise NOT droppable:
+    /// each has a common content use ("what kind of car", "explain what I mean") the
+    /// guard cannot distinguish from a verbal tic, so it keeps them.
+    public static let singleFillers: Set<String> = ["um", "uh", "er", "hmm"]
 
-    /// Multi-token filler phrases the model is allowed to drop as a unit.
+    /// Multi-token disfluency phrases. The guard does NOT drop these and the prompt
+    /// does NOT name them: each has a common content use ("what kind of car",
+    /// "explain what I mean", "sort of works") the guard cannot tell from a verbal
+    /// tic, so it keeps them (a false reject is harmless; a false drop alters
+    /// meaning). Retained only as the residual-filler signal for the offline polish
+    /// quality eval (`PolishEvalTests`); do NOT re-wire it into the guard's
+    /// drop-on-mismatch arm — that reopens the meaning-change hole this set used to
+    /// have.
     public static let fillerPhrases: [[String]] = [
         ["you", "know"],
         ["i", "mean"],

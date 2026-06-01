@@ -118,10 +118,13 @@ public final class AppCoordinator: ObservableObject {
         // the on-screen `canonicalize(rawStream)`. The snapshot also freezes the
         // rules for this recording, matching the build-once-per-recording intent.
         let canonicalizer = corrections.canonicalizer
+        // Only walk the correction rules for known terms when polish is on; when it's
+        // off (the default) the polisher short-circuits at its `enabled` gate and never
+        // reads `knownTerms`, so computing them on the fn-press hot path is wasted work.
         return TranscriptPolisher(
             enabled: settings.polishEnabled,
             engine: polishEngine,
-            knownTerms: polishKnownTerms(),
+            knownTerms: settings.polishEnabled ? polishKnownTerms() : [],
             canonicalize: { canonicalizer.canonicalize($0) }
         )
     }
@@ -293,13 +296,15 @@ public final class AppCoordinator: ObservableObject {
             // can't claim a polish the user never received.
             let applied = insertFinalTranscript(result.text)
             let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
-            // Count raw and polished on the SAME normalization: `result.text` for
-            // `.applied` is canonicalize(polished), so the raw baseline must also be
-            // canonicalized — otherwise "rawChars − polishedChars" conflates the
-            // canonicalizer's rewrite with polish's filler removal.
+            // Count raw and polished on the SAME normalization: both come from the
+            // polisher's own canonicalizer — `result.text` for `.applied` is
+            // canonicalize(polished), and `result.rawCharacterCount` is the matching
+            // canonicalize(raw) baseline `polish` already computed. Reusing it here
+            // avoids a third canonicalizer pass over the transcript in the finalize window.
             logPolishOutcome(
-                PolishResult(text: result.text, outcome: effectiveOutcome),
-                rawCount: corrections.canonicalize(finalText).count,
+                outcome: effectiveOutcome,
+                polishedCount: result.text.count,
+                rawCount: result.rawCharacterCount,
                 elapsedMs: millisecondsElapsed(since: polishStartedAt)
             )
             finishTextInsertionSession()
@@ -355,8 +360,8 @@ public final class AppCoordinator: ObservableObject {
     /// Privacy-safe observability for the polish stage: character counts only,
     /// never transcript text. Reads the policy's own `PolishOutcome` so the log
     /// can't drift from the decision the polisher actually made.
-    private func logPolishOutcome(_ result: PolishResult, rawCount: Int, elapsedMs: Int) {
-        switch result.outcome {
+    private func logPolishOutcome(outcome: PolishOutcome, polishedCount: Int, rawCount: Int, elapsedMs: Int) {
+        switch outcome {
         case .disabled:
             log.info("polish off (elapsedMs=\(elapsedMs))")
         case .unavailable:
@@ -368,7 +373,7 @@ public final class AppCoordinator: ObservableObject {
         case .unchanged:
             log.info("polish no-op or fallback (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .applied:
-            log.info("polish applied (rawChars=\(rawCount) polishedChars=\(result.text.count) elapsedMs=\(elapsedMs))")
+            log.info("polish applied (rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))")
         }
     }
 

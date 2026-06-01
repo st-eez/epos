@@ -89,8 +89,10 @@ public enum InsertionTargetGuard {
 /// Two checks with very different costs:
 /// - `focusChangedSinceStart()` copies the system-wide focused element and
 ///   compares its owning process to the home element's. Cheap — safe per reconcile.
-/// - `observedValue()` reads `kAXValueAttribute` (the whole field's text). The
-///   expensive call; the session gates it to the pre-delete moment only.
+/// - `observedValue()` reads `kAXValueAttribute` off the LIVE focused element (the
+///   whole field's text). The expensive call; the session gates it to the
+///   pre-delete moment only. Reading current focus — not a start-of-session
+///   snapshot — is what lets a same-app field move surface as value divergence.
 public protocol InsertionTargetObserver: AnyObject {
     /// Record the currently focused element as "home". Call at session start.
     func captureBaseline()
@@ -119,7 +121,6 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
 /// already requires; reads only the focused element, never walks the tree.
 public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private let systemWide: AXUIElement
-    private var homeElement: AXUIElement?
     /// The process that owned the focused element at session start. Focus moving to a
     /// different app changes this; an element-handle churn within the same app (a
     /// Chromium/Electron terminal like cmux rebuilds its AX node between keystrokes) does
@@ -148,18 +149,18 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     }
 
     public func captureBaseline() {
-        homeElement = copyFocusedElement()
-        if let homeElement {
-            homePid = pid(of: homeElement)
-            homeElementAdvertisesValue = advertisesValueAttribute(homeElement)
-        } else {
+        guard let baseline = copyFocusedElement() else {
             log.info("insertion guard: no focused element at session start; focus guard inactive")
+            return
         }
+        homePid = pid(of: baseline)
+        homeElementAdvertisesValue = advertisesValueAttribute(baseline)
     }
 
     public func focusChangedSinceStart() -> Bool {
         // No baseline pid (couldn't read focus/owner at start) → we can't prove focus
-        // moved, so don't fire the focus guard. The value guard still protects deletes.
+        // moved, so don't fire the focus guard. The live value read still bounds deletes:
+        // it reads whatever element holds focus now, so divergence there latches append-only.
         guard let homePid else { return false }
         guard let current = copyFocusedElement() else {
             // Focus became unreadable (field/window went away). Treat as changed:
@@ -172,9 +173,13 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         // keystrokes, so `CFEqual` on the element reported a change and aborted
         // mid-dictation even though focus never left the app. The pid is stable across
         // that churn and still changes when focus moves to another app — the case the
-        // guard actually protects against. (A move to another window/field of the SAME
-        // app is not caught here; that is rare during push-to-talk, and the value guard
-        // still bounds deletes.)
+        // guard actually protects against. A move to another window/field of the SAME app
+        // is NOT caught here (we can't tell it apart from cmux's churn without the
+        // element-identity check that broke cmux). Instead `observedValue` reads the live
+        // focused element, so the new field's content won't end with our committed text →
+        // the value guard latches append-only. That tail may then append into the other
+        // field, but it can never delete content that isn't ours — the existing
+        // append-only contract, which we accept here rather than risk a false abort.
         guard let currentPid = pid(of: current) else { return true }
         guard currentPid != homePid else { return false }
         log.info("insertion guard: focus left the app mid-session (pid \(homePid) -> \(currentPid))")
@@ -182,10 +187,17 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     }
 
     public func observedValue() -> String? {
-        guard let homeElement else { return nil }
+        // Read the element that holds focus RIGHT NOW, not a start-of-session snapshot.
+        // Deciding from current truth is what makes a same-app field move detectable: it
+        // reads the new field, whose text won't end with our committed text → divergence
+        // → append-only. cmux/Electron churn reads the same (fresh) node → empty → not
+        // text-exposing → uninformative, so self-correction proceeds exactly as before.
+        // A cross-app move is already aborted by `focusChangedSinceStart`'s pid check,
+        // before any reconcile reaches this read.
+        guard let focused = copyFocusedElement() else { return nil }
         var value: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
-            homeElement, kAXValueAttribute as CFString, &value
+            focused, kAXValueAttribute as CFString, &value
         )
         guard result == .success, let text = value as? String else { return nil }
         if !text.isEmpty { everReadNonEmptyValue = true }

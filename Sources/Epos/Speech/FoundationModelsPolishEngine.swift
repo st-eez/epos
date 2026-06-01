@@ -77,7 +77,7 @@ public struct FoundationModelsPolishEngine: PolishEngine {
 /// structural lever that kills chat preamble, composition, and ``` fences.
 @Generable
 struct CleanedTranscript {
-    @Guide(description: "The transcript with filler words removed and capitalization/spacing fixed. REMOVE every filler word (um, uh, er, so, like, you know, I mean, sort of, basically) and false start. KEEP every other word EXACTLY as the user said it, in the same order and spelling. Do NOT fix mishearings, substitute words, convert spoken words like comma/period/dash/slash into symbols, or add commas, question marks, or exclamation points. Never summarize, shorten, drop content words, add anything, turn a statement into a question, or answer the text.")
+    @Guide(description: "The transcript with filler words and false starts removed and capitalization/spacing fixed, every other word kept exactly as the user said it, in the same order and spelling. Do NOT fix mishearings, substitute words, convert spoken words like comma/period/dash/slash into symbols, or add commas, question marks, or exclamation points. Never summarize, shorten, drop content words, add anything, turn a statement into a question, or answer the text.")
     var cleaned: String
 }
 
@@ -88,8 +88,17 @@ extension FoundationModelsPolishEngine {
     /// added punctuation — those are rejected by the guard, which would discard the
     /// whole polish (including the filler removal). The known-terms line is appended
     /// only when terms exist. Module-visible so a drift test can assert it still names
-    /// every filler in `PolishVocabulary` (the guard's single source).
+    /// every word in `PolishVocabulary.singleFillers` (the guard's single source),
+    /// which is interpolated below so the two can never disagree.
     static func makeInstructions(knownTerms: [String]) -> String {
+        // The single-filler list is interpolated from `PolishVocabulary` — the same
+        // set the guard accepts dropping — so the prompt cannot tell the model to
+        // remove a word the guard would then reject (which would discard the whole
+        // polish, leaving even the um/uh uncleaned). Sorted for a stable prompt
+        // across processes (Set iteration order is per-process randomized). The
+        // sentence-opening "so" and filler "like" are named in prose below: the
+        // guard drops those via dedicated arms, not via `singleFillers`.
+        let singleFillers = PolishVocabulary.singleFillers.sorted().joined(separator: "\", \"")
         var instructions = """
         You are the cleanup stage of Epos, a push-to-talk dictation tool. A speech \
         recognizer has just turned something the user spoke aloud into a rough, \
@@ -144,9 +153,9 @@ extension FoundationModelsPolishEngine {
 
         What counts as cleaning (this is the WHOLE job — nothing else):
         - Always remove speech disfluencies and filler words — this is required cleanup, \
-        not a change of meaning: "um", "uh", "er", "hmm", a sentence-opening "so", filler \
-        "like", "you know", "I mean", "sort of", "kind of", "basically", and false starts. \
-        (Do not remove meaningful words — "I think", "we should", "just" stay.)
+        not a change of meaning: "\(singleFillers)", a sentence-opening "so", filler \
+        "like", and false starts. (Do not remove meaningful words — "I think", "we \
+        should", "just", "basically", "you know", "kind of" stay.)
         - Capitalize the first word of each sentence and proper nouns, and fix spacing.
         - You may add a single period to end a sentence that lacks one.
 
@@ -195,6 +204,12 @@ extension FoundationModelsPolishEngine {
         return instructions
     }
 
+    /// The incoming list is already trimmed, deduped, and capped upstream
+    /// (`TranscriptCanonicalizer.speechContextualStrings`); the only thing the polish
+    /// layer adds is the prepended "Epos" (see `AppCoordinator.polishKnownTerms`), so
+    /// we keep a cheap case-insensitive dedup to absorb a duplicate "Epos" and bound
+    /// each term's length, but do NOT re-cap the count — that would duplicate the
+    /// upstream limit.
     private static func normalizedKnownTerms(_ knownTerms: [String]) -> [String] {
         var seen: Set<String> = []
         var terms: [String] = []
@@ -208,7 +223,6 @@ extension FoundationModelsPolishEngine {
             let key = cleaned.lowercased()
             guard seen.insert(key).inserted else { continue }
             terms.append(String(cleaned.prefix(80)))
-            if terms.count == TranscriptCanonicalizer.maxSpeechContextualStringCount { break }
         }
 
         return terms

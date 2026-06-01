@@ -31,10 +31,18 @@ public protocol PolishSession: Sendable {
 public struct PolishInputTooLargeError: Error, Sendable {}
 
 /// The text to insert plus which decision path produced it, so the caller can
-/// log the outcome without re-deriving the policy's gate.
+/// log the outcome without re-deriving the policy's gate. `rawCharacterCount`
+/// carries `canonicalize(raw).count` — the canonicalized-raw baseline `polish`
+/// already computes — so the caller can log it without a third canonicalizer
+/// pass over the transcript on the finalize hot path. It equals `text.count` on
+/// every path except `.applied`, where `text` is the canonicalized *polished*
+/// string while `rawCharacterCount` stays the canonicalized *raw* baseline. The
+/// lone exception is the empty/whitespace early return, which carries the
+/// uncanonicalized `raw.count` — a path `runSession` never logs.
 public struct PolishResult: Sendable, Equatable {
     public let text: String
     public let outcome: PolishOutcome
+    public let rawCharacterCount: Int
 }
 
 /// Which path `TranscriptPolisher.polish` took. `unchanged` covers a model no-op,
@@ -106,25 +114,31 @@ public struct TranscriptPolisher: Sendable {
     /// (no-op, throw, or guard-fail) on every other path. Never throws.
     public func polish(_ raw: String) async -> PolishResult {
         guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return PolishResult(text: raw, outcome: .unchanged)
+            // Unreachable from the log site (`runSession` only polishes when the
+            // transcript is non-empty after trimming), so this `rawCharacterCount`
+            // is never logged; `raw.count` is a cheap, well-defined placeholder
+            // consistent with `text: raw`. Deliberately not canonicalized — running
+            // `canonicalize` here would reintroduce the wasted pass this field removes.
+            return PolishResult(text: raw, outcome: .unchanged, rawCharacterCount: raw.count)
         }
         let canonicalRaw = canonicalize(raw)
-        guard enabled else { return PolishResult(text: canonicalRaw, outcome: .disabled) }
-        guard engine.isAvailable else { return PolishResult(text: canonicalRaw, outcome: .unavailable) }
+        let rawCount = canonicalRaw.count
+        guard enabled else { return PolishResult(text: canonicalRaw, outcome: .disabled, rawCharacterCount: rawCount) }
+        guard engine.isAvailable else { return PolishResult(text: canonicalRaw, outcome: .unavailable, rawCharacterCount: rawCount) }
         switch await enginePolishAttempt(raw) {
         case .success(let polished):
             let candidate = canonicalize(polished)
             guard candidate != canonicalRaw,
                   Self.polishRetainsContent(raw: canonicalRaw, polished: candidate) else {
-                return PolishResult(text: canonicalRaw, outcome: .unchanged)
+                return PolishResult(text: canonicalRaw, outcome: .unchanged, rawCharacterCount: rawCount)
             }
-            return PolishResult(text: candidate, outcome: .applied)
+            return PolishResult(text: candidate, outcome: .applied, rawCharacterCount: rawCount)
         case .failed:
-            return PolishResult(text: canonicalRaw, outcome: .unchanged)
+            return PolishResult(text: canonicalRaw, outcome: .unchanged, rawCharacterCount: rawCount)
         case .tooLong:
-            return PolishResult(text: canonicalRaw, outcome: .tooLong)
+            return PolishResult(text: canonicalRaw, outcome: .tooLong, rawCharacterCount: rawCount)
         case .timedOut:
-            return PolishResult(text: canonicalRaw, outcome: .timedOut)
+            return PolishResult(text: canonicalRaw, outcome: .timedOut, rawCharacterCount: rawCount)
         }
     }
 

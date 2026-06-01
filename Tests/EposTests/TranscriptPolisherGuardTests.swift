@@ -20,9 +20,11 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                 "dollar home slash bin",
                 false
             ),
-            // Filler-removal: um/uh/so/like/you-know stripped, the content words
-            // remain exactly in order. Keep.
-            ("um so like we should uh ship it you know", "we should ship it", true),
+            // Filler-removal: leading um/so/like and a mid "uh" stripped, the
+            // content words remain exactly in order. "you know" is NOT a droppable
+            // phrase (it has content uses the guard can't distinguish), so the model
+            // keeping it is fine — every content word survives. Keep.
+            ("um so like we should uh ship it you know", "we should ship it you know", true),
             // A "like" between content words is treated as a comparator the guard
             // cannot distinguish from a verbal tic, so the model may not DROP it —
             // not even when a filler sits beside it (a filler neighbor does not make
@@ -204,6 +206,68 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("we are done. Ship now", "we are done-ship now", false),
             // Control: the same words without the boundary merge legitimately. Keep.
             ("we are done ship now", "we are done-ship now", true),
+
+            // MARK: - finding 1: a comma may DROP only when stranded beside a removed
+            // filler — never beside a kept content word, and never be added. Policy is
+            // positional and per-gap: a comma is never added to a gap, and a gap may
+            // drop at most one comma per dropped filler it contains (one disfluency is
+            // delimited by at most one comma).
+            //
+            // Comma beside two KEPT content words: dropping it changes meaning
+            // ("let's eat, grandma" → "let's eat grandma"). Unlicensed → reject.
+            ("let's eat, grandma", "let's eat grandma", false),
+            // Comma stranded by a dropped filler ("um,") → licensed to drop. Keep.
+            ("um, hello", "hello", true),
+            // The "a, b" comma sits in a gap with no dropped filler, so it cannot drop
+            // even though "um" is removed two gaps over → reject.
+            ("a, b, um, c", "a b c", false),
+            // One filler licenses one comma drop: "um,, hello" has two commas in the
+            // leading gap but only one dropped filler, so dropping both over-drops a
+            // comma the disfluency never stranded → reject.
+            ("um,, hello", "hello", false),
+            // An added comma is always rejected (covered above by "lets eat grandma"
+            // → "lets eat, grandma"); here a filler is removed AND a comma added —
+            // the addition still rejects even though a drop would have been licensed.
+            ("um hello there", "hello, there", false),
+            // Count-neutral RELOCATION: the comma moves from the kept-word boundary
+            // "eat,grandma" to "let's,eat". Totals match (1→1), so a count-based check
+            // waves it through; the per-gap check sees a comma appear in a gap that had
+            // none → reject.
+            ("let's eat, grandma", "let's, eat grandma", false),
+            // Filler-budget MASKING: "um" is dropped (licensing its "um, c" comma), but
+            // the unlicensed "a, b" comma is dropped while a NEW comma appears at the
+            // kept-word "b c" boundary. A net count compares 2→1 and could pass; the
+            // per-gap check rejects the dropped "a,b" and the added "b,c" independently.
+            ("a, b um, c", "a b, c", false),
+            // Within-gap content comma: "buy milk, um, eggs" surrounds the filler "um"
+            // with the list separator on one side. One filler licenses dropping ONE
+            // comma, not both — so collapsing the list to "buy milk eggs" over-drops
+            // the content comma → reject, while the correct "buy milk, eggs" is kept.
+            ("buy milk, um, eggs", "buy milk eggs", false),
+            ("buy milk, um, eggs", "buy milk, eggs", true),
+
+            // MARK: - finding 5: an all-caps acronym must not silently fold to/from a
+            // lowercase homograph, in EITHER direction (the fold changes meaning).
+            // Model lowercased an acronym ("IT" → "it"). Reject.
+            ("escalate to IT now", "escalate to it now", false),
+            // Model uppercased a word into an acronym ("us" → "US"). Symmetric. Reject.
+            ("log in to us", "log in to US", false),
+            // Control: a single letter is not an acronym, so ordinary sentence-initial
+            // case folding ("I" → "i") still matches. Keep.
+            ("I think", "i think", true),
+
+            // MARK: - finding 10: a leading "like" the model KEPT matches as content
+            // (keeping a possible filler never changes meaning); a leading discourse
+            // "like" the model DROPPED still drops. Both keep.
+            ("Like button is broken", "Like button is broken", true),
+            ("Like we should ship", "we should ship", true),
+
+            // MARK: - regression: a dropped negation inverts meaning. Reject.
+            ("do not ship it", "do ship it", false),
+            ("it isn't ready", "it is ready", false),
+            ("we never agreed", "we agreed", false),
+            // Regression: a number change is a content change. Reject.
+            ("retry after 15 seconds", "retry after 50 seconds", false),
         ]
 
         for testCase in cases {

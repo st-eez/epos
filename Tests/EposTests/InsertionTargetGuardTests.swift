@@ -69,7 +69,10 @@ final class InsertionTargetGuardTests: XCTestCase {
 
     func testValueNotEndingWithExpectedFallsBackToAppendOnly() {
         // The field mutated our tail (autocorrect "teh" -> "the"): on-screen text
-        // no longer ends with what we believe we typed, so stop deleting.
+        // no longer ends with what we believe we typed, so stop deleting. This is
+        // also the path a same-app field move takes: the live observer reads the
+        // newly-focused field, whose content does not end with our committed text,
+        // so decide latches append-only instead of blind-deleting the wrong field.
         XCTAssertEqual(
             InsertionTargetGuard.decide(expected: "type teh", observed: .value("type the")),
             .stopAppendOnly
