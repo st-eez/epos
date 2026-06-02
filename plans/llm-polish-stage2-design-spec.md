@@ -38,7 +38,7 @@ Today the pipeline is: fn key → AudioCapture → Transcriber (SpeechTranscribe
 - `SystemLanguageModel.default.availability == .available` is reachable from the app process without a special entitlement (probe-verified on this machine; re-checked at runtime).
 - LLM polish is currently an explicit **Non-Goal** in `specs/baseline.md` (lines 5, 24, backlog 208). This spec's implementation MUST update `baseline.md` (Non-Goal → opt-in shipped feature; correct "MLX" → FoundationModels).
 - Live insertion / erase-and-retype flash is **not** unit-testable (memory `epos-insertion-not-unit-testable`): correctness requires the installed signed app dictating into a real app. The policy logic around the model call IS unit-testable behind a seam.
-- Diagnostics: transcript text may appear in local dogfood logs when it is the behavior under test, especially rejected polish candidates. Do not log secrets, credentials, environment-specific values, or unrelated app content.
+- Diagnostics: transcript text may appear in local dogfood logs when it is the behavior under test, especially rejected polish candidates.
 - Module size: keep `TranscriptPolisher` < ~250 LOC (CLAUDE.md).
 
 ## Requirements
