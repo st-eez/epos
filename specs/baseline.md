@@ -178,6 +178,7 @@ Test what would silently break, skip the rest.
 - `ProgressiveTranscriptInsertionSession`: immediate per-partial streaming, the live reconcile that backspaces and retypes a revised word on partials and finals so the field converges to the recognizer's text, cancel, and idempotent repeat finals.
 - `KeystrokeTextInjector`: grapheme-safe UTF-16 chunking of synthesized keystrokes.
 - Transcript timing diagnostics: emit quoted transcript text so dogfood runs can debug recognizer timing and text churn.
+- Opt-in dogfood evals: replay saved wavs for recognition-context checks, text-only polish scoring, and the combined wav -> transcript -> canonicalizer -> polish guard pipeline with rejected candidate text and guard diffs in JSONL.
 - Hotkey, audio capture, indicator UI: not unit tested; verified by running the app.
 
 Target: < 30 tests total. If we cross that, we are testing implementation, not behavior.

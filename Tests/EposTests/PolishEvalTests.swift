@@ -77,26 +77,13 @@ final class PolishEvalTests: XCTestCase {
                     output: result.text,
                     outcome: String(describing: result.outcome),
                     changed: result.text != raw,
-                    retainedFiller: Self.retainsFiller(result.text)
+                    retainedFiller: PolishEvalScoring.retainsFiller(result.text)
                 ))
             }
         }
 
         print(Self.report(rows))
         try Self.writeJSONL(rows)
-    }
-
-    /// A whole-word filler still present in the OUTPUT — the polish-quality miss
-    /// signal. Whole-word so "uh" doesn't match inside "though".
-    private static func retainsFiller(_ text: String) -> Bool {
-        let words = text.lowercased().split { !$0.isLetter }.map(String.init)
-        let wordSet = Set(words)
-        if !PolishVocabulary.singleFillers.isDisjoint(with: wordSet) { return true }
-        return PolishVocabulary.fillerPhrases.contains { phrase in
-            guard let first = phrase.first, let start = words.firstIndex(of: first) else { return false }
-            return start + phrase.count <= words.count
-                && Array(words[start..<(start + phrase.count)]) == phrase
-        }
     }
 
     private static func report(_ rows: [PolishEvalRow]) -> String {
