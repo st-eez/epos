@@ -599,9 +599,9 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(files.filter { $0.pathExtension == "wav" }.count, 1)
     }
 
-    func testTranscriberPresetRequestsAccurateVolatileResults() {
+    func testTranscriberPresetRequestsLowLatencyVolatileResults() {
         XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.volatileResults))
-        XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.fastResults))
+        XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.fastResults))
         XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.alternativeTranscriptions))
     }
 

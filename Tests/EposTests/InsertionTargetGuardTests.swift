@@ -382,14 +382,10 @@ final class InsertionTargetGuardTests: XCTestCase {
         // now reads empty has diverged — its content vanished. The session must latch
         // append-only and NEVER blind-backspace into content that isn't ours.
         //
-        // It must also never silently FREEZE. A raw final is loss-proof, so it appends
-        // its tail past the committed length even here. With a replacement final ("the
-        // door" -> "the window") that yields a bounded seam glitch ("the doorow") rather
-        // than a clean retype — a delete we're forbidden to make under the latch. That
-        // is the deliberate trade that stops a long extension final from being dropped
-        // wholesale (the real data-loss bug). The volatile partial stays conservative
-        // (it could be a flickering lateral revision), so it appends nothing; only the
-        // authoritative final appends.
+        // It must also not graft mid-token tails. A replacement final ("the door" ->
+        // "the window") cannot be fixed without deleting, so under the latch the raw
+        // final stays conservative instead of producing a bounded but visible seam
+        // glitch ("the doorow"). Clean word-boundary extensions are covered separately.
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
@@ -410,10 +406,35 @@ final class InsertionTargetGuardTests: XCTestCase {
             backend.operations.contains { if case .delete = $0 { true } else { false } },
             "empty read from a text-exposing field must not trigger a blind delete"
         )
-        // Partial appends nothing (conservative); the raw final appends its positional
-        // tail past the 8-char commit — "the window".dropFirst(8) == "ow".
-        XCTAssertEqual(backend.operations, [.insert("the door"), .insert("ow")])
+        XCTAssertEqual(backend.operations, [.insert("the door")])
         XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testAppendOnlyRawFinalDoesNotGraftMidWordCorrectionTail() {
+        // Real dogfood regression: the recognizer emitted a partial ending in
+        // "bched.", then final-corrected it to "batched.". If the AX guard latches
+        // append-only before that correction, appending by raw length grafts "d." and
+        // leaves visible corruption like "bched.d.". Under the latch, do no harm:
+        // leave the partial rather than append a suffix from inside a word.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("seems to getting bched.")
+        observer.value = ""
+        session.acceptFinalTranscript("seems to getting batched.")
+
+        XCTAssertEqual(backend.fieldText, "seems to getting bched.")
+        XCTAssertEqual(backend.operations, [.insert("seems to getting bched.")])
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
     }
 
     func testSessionSelfCorrectsWhenDictatingBeforeTrailingText() {

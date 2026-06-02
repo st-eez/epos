@@ -154,16 +154,12 @@ public final class ProgressiveTranscriptInsertionSession {
         // Append-only: never delete, only type new tail past what we last committed,
         // so we can't corrupt the field's own edits. WHICH tail depends on the source:
         //
-        // - A raw final (`lossProofAppend`) is the recognizer's authoritative,
-        //   only-growing end-state. Append everything past `committedText`'s LENGTH so
-        //   the dictated words always land — even when the recognizer re-cased or
-        //   punctuated the prefix we already typed, breaking a byte-prefix match (the
-        //   bug that silently froze append-only and dropped the rest of the dictation).
-        //   Slicing by length, not by common prefix, makes successive finals advance
-        //   monotonically instead of re-anchoring and stacking a duplicated graft. The
-        //   cost is a bounded seam glitch (≤ the prefix's casing/punctuation length
-        //   drift) plus a leading-case nit we can't delete away — recoverable, unlike
-        //   lost words.
+        // - A raw final (`lossProofAppend`) is the recognizer's authoritative end-
+        //   state. When the final only extends the commit, append that extension. When
+        //   the final re-cases/punctuates an earlier prefix and then adds new words,
+        //   append only a length-based tail if it starts at a word boundary. Never
+        //   graft a mid-token suffix: "bched." -> "batched." cannot be fixed without
+        //   deleting, and appending "d." would make the visible text worse.
         // - A volatile partial or the polished rewrite stays conservative: it appends
         //   only a clean prefix-extension. Partials flicker (a lateral revision would
         //   graft garbage), and a polish that doesn't extend the commit must stay
@@ -171,9 +167,10 @@ public final class ProgressiveTranscriptInsertionSession {
         if appendOnly {
             deleteCount = 0
             if lossProofAppend {
-                insertion = newTarget.count > committedText.count
-                    ? String(newTarget.dropFirst(committedText.count))
-                    : ""
+                insertion = Self.lossProofAppendTail(from: committedText, to: newTarget)
+                if insertion.isEmpty, newTarget.count > committedText.count, !newTarget.hasPrefix(committedText) {
+                    log.info("append-only raw final suppressed unsafe mid-token tail committedChars=\(committedText.utf16.count) targetChars=\(newTarget.utf16.count)")
+                }
             } else {
                 insertion = newTarget.hasPrefix(committedText)
                     ? String(newTarget.dropFirst(committedText.count))
@@ -195,5 +192,32 @@ public final class ProgressiveTranscriptInsertionSession {
         committedText = appendOnly ? committedText + insertion : newTarget
         log.info("progressive reconcile deletedChars=\(deleteCount) insertedChars=\(insertion.utf16.count) totalChars=\(committedText.utf16.count) appendOnly=\(self.appendOnly)")
         return applied
+    }
+
+    private static func lossProofAppendTail(from committed: String, to target: String) -> String {
+        guard target.count > committed.count else { return "" }
+        if target.hasPrefix(committed) {
+            return String(target.dropFirst(committed.count))
+        }
+        guard let boundary = target.index(
+            target.startIndex,
+            offsetBy: committed.count,
+            limitedBy: target.endIndex
+        ), boundary < target.endIndex else {
+            return ""
+        }
+        guard !isInsideWord(in: target, at: boundary) else { return "" }
+        return String(target[boundary...])
+    }
+
+    private static func isInsideWord(in text: String, at index: String.Index) -> Bool {
+        guard index > text.startIndex, index < text.endIndex else { return false }
+        return isWordCharacter(text[text.index(before: index)]) && isWordCharacter(text[index])
+    }
+
+    private static func isWordCharacter(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy { scalar in
+            CharacterSet.alphanumerics.contains(scalar) || scalar == "_"
+        }
     }
 }
