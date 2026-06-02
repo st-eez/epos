@@ -319,6 +319,7 @@ public final class AppCoordinator: ObservableObject {
                 outcome: effectiveOutcome,
                 polishedCount: result.text.count,
                 rawCount: result.rawCharacterCount,
+                guardRejection: result.guardRejection,
                 elapsedMs: millisecondsElapsed(since: polishStartedAt)
             )
             finishTextInsertionSession()
@@ -375,7 +376,13 @@ public final class AppCoordinator: ObservableObject {
     /// Local dogfood observability for the polish stage. Reads the policy's own
     /// `PolishOutcome` so the log can't drift from the decision the polisher
     /// actually made.
-    private func logPolishOutcome(outcome: PolishOutcome, polishedCount: Int, rawCount: Int, elapsedMs: Int) {
+    private func logPolishOutcome(
+        outcome: PolishOutcome,
+        polishedCount: Int,
+        rawCount: Int,
+        guardRejection: PolishGuardRejection? = nil,
+        elapsedMs: Int
+    ) {
         switch outcome {
         case .disabled:
             log.info("polish off (elapsedMs=\(elapsedMs))")
@@ -388,7 +395,8 @@ public final class AppCoordinator: ObservableObject {
         case .sameText:
             log.info("polish skipped: model returned same text (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .guardRejected:
-            log.info("polish rejected: retention guard (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+            let detail = guardRejection?.logDescription ?? "reason=unknown"
+            log.info("polish rejected: retention guard (\(detail) rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .engineFailed:
             log.info("polish fallback: engine failed (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .abandoned:

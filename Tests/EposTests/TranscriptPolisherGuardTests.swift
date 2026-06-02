@@ -287,4 +287,19 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             )
         }
     }
+
+    func testRetentionEvaluationReportsFailureStageAndDiff() throws {
+        let evaluation = TranscriptPolisher.polishRetentionEvaluation(
+            raw: "test 1st thing",
+            polished: "Test first thing."
+        )
+
+        XCTAssertFalse(evaluation.retainsContent)
+        let rejection = try XCTUnwrap(evaluation.rejection)
+        XCTAssertEqual(rejection.reason, .contentTokensChanged)
+        XCTAssertTrue(rejection.diff.contains("kind=raw-token-changed"))
+        XCTAssertTrue(rejection.diff.contains("rawIndex=1"))
+        XCTAssertTrue(rejection.diff.contains("polishedIndex=1"))
+        XCTAssertTrue(rejection.diff.contains("hint=ordinal-normalization"))
+    }
 }

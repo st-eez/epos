@@ -23,7 +23,20 @@ extension TranscriptPolisher {
     /// True when the polished text preserves the raw content-token sequence and
     /// existing sentence boundaries under the allowed cleanup above.
     public static func polishRetainsContent(raw: String, polished: String) -> Bool {
-        guard !polished.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        polishRetentionEvaluation(raw: raw, polished: polished).retainsContent
+    }
+
+    /// The full guard decision, with privacy-safe rejection metadata for dogfood
+    /// diagnostics. The diff deliberately reports token shapes, counts, and policy
+    /// hints rather than transcript text.
+    public static func polishRetentionEvaluation(raw: String, polished: String) -> PolishRetentionEvaluation {
+        guard !polished.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return rejectedPolish(
+                reason: .emptyPolished,
+                polished: polished,
+                diff: "rawChars=\(raw.count) polishedChars=\(polished.count)"
+            )
+        }
 
         let rawSpans = tokenSpans(from: raw)
         let polishedSpans = tokenSpans(from: polished)
@@ -32,14 +45,48 @@ extension TranscriptPolisher {
         // free AND introduces no new non-whitespace characters ("..." -> "." is a
         // fine conversion; "..." -> "???" is an unrelated rewrite).
         if rawSpans.isEmpty {
-            guard polishedSpans.isEmpty else { return false }
-            return nonWhitespaceScalars(polished).isSubset(of: nonWhitespaceScalars(raw))
+            guard polishedSpans.isEmpty else {
+                return rejectedPolish(
+                    reason: .contentTokensChanged,
+                    polished: polished,
+                    diff: contentTokenDiffSummary(
+                        rawSpans: rawSpans,
+                        polishedSpans: polishedSpans,
+                        rejection: .init(kind: .polishedTokenAdded, rawIndex: nil, polishedIndex: 0)
+                    )
+                )
+            }
+            let rawScalars = nonWhitespaceScalars(raw)
+            let polishedScalars = nonWhitespaceScalars(polished)
+            guard polishedScalars.isSubset(of: rawScalars) else {
+                return rejectedPolish(
+                    reason: .zeroContentRewrite,
+                    polished: polished,
+                    diff: [
+                        "rawNonWhitespaceScalars=\(rawScalars.count)",
+                        "polishedNonWhitespaceScalars=\(polishedScalars.count)",
+                        "introducedScalars=\(polishedScalars.subtracting(rawScalars).count)"
+                    ].joined(separator: " ")
+                )
+            }
+            return acceptedPolish()
         }
 
-        guard let matches = matchedContentTokens(raw: raw, rawSpans: rawSpans, polishedSpans: polishedSpans) else {
-            return false
+        let matches: [TokenMatch]
+        switch contentTokenMatch(raw: raw, rawSpans: rawSpans, polishedSpans: polishedSpans) {
+        case .matched(let tokenMatches):
+            matches = tokenMatches
+        case .rejected(let rejection):
+            return rejectedPolish(
+                reason: .contentTokensChanged,
+                polished: polished,
+                diff: contentTokenDiffSummary(
+                    rawSpans: rawSpans,
+                    polishedSpans: polishedSpans,
+                    rejection: rejection
+                )
+            )
         }
-        guard !matches.isEmpty else { return false }
         // The model must not change the symbols the user dictated — neither ADD
         // meaning-bearing punctuation ("ship it" -> "ship it?", "the error is
         // timeout" -> "the error is: timeout"), DROP or SWAP a dictated `?`/`!`
@@ -49,7 +96,13 @@ extension TranscriptPolisher {
         // unbudgeted (boundary-checked below). The comma is handled separately,
         // positionally: it may drop ONLY when stranded by a removed filler, never be
         // added, and never drop beside a kept content word.
-        guard symbolUsageIsJustified(raw: raw, polished: polished) else { return false }
+        guard symbolUsageIsJustified(raw: raw, polished: polished) else {
+            return rejectedPolish(
+                reason: .symbolUsageChanged,
+                polished: polished,
+                diff: symbolDiffSummary(raw: raw, polished: polished)
+            )
+        }
         guard commaUsageIsJustified(
             raw: raw,
             polished: polished,
@@ -57,15 +110,26 @@ extension TranscriptPolisher {
             polishedSpans: polishedSpans,
             matches: matches
         ) else {
-            return false
+            return rejectedPolish(
+                reason: .commaUsageChanged,
+                polished: polished,
+                diff: commaDiffSummary(raw: raw, polished: polished)
+            )
         }
-        return preservesRawSentenceBoundaries(
+        guard preservesRawSentenceBoundaries(
             raw: raw,
             polished: polished,
             rawSpans: rawSpans,
             polishedSpans: polishedSpans,
             matches: matches
-        )
+        ) else {
+            return rejectedPolish(
+                reason: .sentenceBoundaryChanged,
+                polished: polished,
+                diff: sentenceBoundaryDiffSummary(raw: raw, polished: polished)
+            )
+        }
+        return acceptedPolish()
     }
 
     private struct TokenSpan {
@@ -82,6 +146,24 @@ extension TranscriptPolisher {
     private struct TokenMatch {
         let rawIndex: Int
         let polishedIndex: Int
+    }
+
+    private enum ContentTokenMatchResult {
+        case matched([TokenMatch])
+        case rejected(ContentTokenRejection)
+    }
+
+    private struct ContentTokenRejection {
+        let kind: ContentTokenRejectionKind
+        let rawIndex: Int?
+        let polishedIndex: Int?
+    }
+
+    private enum ContentTokenRejectionKind: String {
+        case noContentMatched = "no-content-matched"
+        case rawTokenChanged = "raw-token-changed"
+        case rawTokenDeleted = "raw-token-deleted"
+        case polishedTokenAdded = "polished-token-added"
     }
 
     // MARK: Tokenization
@@ -143,16 +225,35 @@ extension TranscriptPolisher {
         Set(text.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })
     }
 
+    private static func acceptedPolish() -> PolishRetentionEvaluation {
+        PolishRetentionEvaluation(retainsContent: true, rejection: nil)
+    }
+
+    private static func rejectedPolish(
+        reason: PolishGuardRejectionReason,
+        polished: String,
+        diff: String
+    ) -> PolishRetentionEvaluation {
+        PolishRetentionEvaluation(
+            retainsContent: false,
+            rejection: PolishGuardRejection(
+                reason: reason,
+                candidateCharacterCount: polished.count,
+                diff: diff
+            )
+        )
+    }
+
     // MARK: Matching
 
     /// Walk the raw tokens against the polished tokens, allowing only filler drops
     /// and an already-spoken hyphen-merge. Any other unmatched raw token, or any
     /// leftover polished token (an addition), rejects the whole polish.
-    private static func matchedContentTokens(
+    private static func contentTokenMatch(
         raw rawText: String,
         rawSpans: [TokenSpan],
         polishedSpans: [TokenSpan]
-    ) -> [TokenMatch]? {
+    ) -> ContentTokenMatchResult {
         let rawTokens = rawSpans.map(\.text)
         var rawIndex = 0
         var polishedIndex = 0
@@ -198,11 +299,125 @@ extension TranscriptPolisher {
             ) {
                 rawIndex += 1; continue
             }
+            return .rejected(ContentTokenRejection(
+                kind: polished == nil ? .rawTokenDeleted : .rawTokenChanged,
+                rawIndex: rawIndex,
+                polishedIndex: polished == nil ? nil : polishedIndex
+            ))
+        }
+
+        guard polishedIndex == polishedSpans.count else {
+            return .rejected(ContentTokenRejection(
+                kind: .polishedTokenAdded,
+                rawIndex: nil,
+                polishedIndex: polishedIndex
+            ))
+        }
+        guard !matches.isEmpty else {
+            return .rejected(ContentTokenRejection(kind: .noContentMatched, rawIndex: nil, polishedIndex: nil))
+        }
+        return .matched(matches)
+    }
+
+    private static func contentTokenDiffSummary(
+        rawSpans: [TokenSpan],
+        polishedSpans: [TokenSpan],
+        rejection: ContentTokenRejection
+    ) -> String {
+        var parts = [
+            "kind=\(rejection.kind.rawValue)",
+            "rawTokens=\(rawSpans.count)",
+            "polishedTokens=\(polishedSpans.count)"
+        ]
+        if let rawIndex = rejection.rawIndex, rawSpans.indices.contains(rawIndex) {
+            appendTokenSummary(prefix: "raw", index: rawIndex, span: rawSpans[rawIndex], to: &parts)
+        }
+        if let polishedIndex = rejection.polishedIndex, polishedSpans.indices.contains(polishedIndex) {
+            appendTokenSummary(prefix: "polished", index: polishedIndex, span: polishedSpans[polishedIndex], to: &parts)
+        }
+        if let hint = tokenChangeHint(rawSpans: rawSpans, polishedSpans: polishedSpans, rejection: rejection) {
+            parts.append("hint=\(hint)")
+        }
+        return parts.joined(separator: " ")
+    }
+
+    private static func appendTokenSummary(
+        prefix: String,
+        index: Int,
+        span: TokenSpan,
+        to parts: inout [String]
+    ) {
+        parts.append("\(prefix)Index=\(index)")
+        parts.append("\(prefix)TokenShape=\(tokenShape(span.original))")
+        parts.append("\(prefix)TokenChars=\(span.original.count)")
+    }
+
+    private static func tokenShape(_ token: String) -> String {
+        if isNumericOrdinal(token) { return "numeric-ordinal" }
+        if isOrdinalWord(token) { return "ordinal-word" }
+        if token.allSatisfy(\.isNumber) { return "number" }
+        if isAcronym(token) { return "acronym" }
+        if token.allSatisfy(\.isLetter) { return "word" }
+        if token.contains("-") { return "hyphenated" }
+        if token.contains(".") { return "dotted" }
+        if token.contains("'") || token.contains("\u{2019}") { return "apostrophe" }
+        if token.contains(where: \.isNumber), token.contains(where: \.isLetter) { return "alphanumeric" }
+        return "mixed"
+    }
+
+    private static func tokenChangeHint(
+        rawSpans: [TokenSpan],
+        polishedSpans: [TokenSpan],
+        rejection: ContentTokenRejection
+    ) -> String? {
+        guard
+            let rawIndex = rejection.rawIndex,
+            let polishedIndex = rejection.polishedIndex,
+            rawSpans.indices.contains(rawIndex),
+            polishedSpans.indices.contains(polishedIndex)
+        else {
             return nil
         }
 
-        return polishedIndex == polishedSpans.count ? matches : nil
+        let raw = rawSpans[rawIndex]
+        let polished = polishedSpans[polishedIndex]
+        if (isNumericOrdinal(raw.original) && isOrdinalWord(polished.original))
+            || (isOrdinalWord(raw.original) && isNumericOrdinal(polished.original)) {
+            return "ordinal-normalization"
+        }
+        if raw.text == polished.text, !acronymCaseAgrees(raw, polished) {
+            return "acronym-case-fold"
+        }
+        if tokenShape(raw.original) == "number", tokenShape(polished.original) == "number" {
+            return "number-changed"
+        }
+        if tokenShape(raw.original) != tokenShape(polished.original) {
+            return "token-shape-changed"
+        }
+        return nil
     }
+
+    private static func isNumericOrdinal(_ token: String) -> Bool {
+        let lowercased = token.lowercased()
+        guard ["st", "nd", "rd", "th"].contains(where: { lowercased.hasSuffix($0) }) else {
+            return false
+        }
+        let suffixStart = lowercased.index(lowercased.endIndex, offsetBy: -2)
+        let digits = lowercased[..<suffixStart]
+        return !digits.isEmpty && digits.allSatisfy(\.isNumber)
+    }
+
+    private static func isOrdinalWord(_ token: String) -> Bool {
+        ordinalWords.contains(normalizeToken(token))
+    }
+
+    private static let ordinalWords: Set<String> = [
+        "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+        "eleventh", "twelfth", "thirteenth", "fourteenth", "fifteenth", "sixteenth", "seventeenth",
+        "eighteenth", "nineteenth", "twentieth", "twenty-first", "twenty-second", "twenty-third",
+        "twenty-fourth", "twenty-fifth", "twenty-sixth", "twenty-seventh", "twenty-eighth",
+        "twenty-ninth", "thirtieth", "thirty-first"
+    ]
 
     /// True when, given two tokens whose normalized forms are equal, their case is
     /// compatible. An all-caps acronym ("IT", "US") must not silently fold to/from a
@@ -438,6 +653,67 @@ extension TranscriptPolisher {
             counts[character, default: 0] += 1
         }
         return counts
+    }
+
+    private static func symbolDiffSummary(raw: String, polished: String) -> String {
+        let rawCounts = significantSymbolCounts(raw)
+        let polishedCounts = significantSymbolCounts(polished)
+        let changed = Set(rawCounts.keys).union(polishedCounts.keys)
+            .filter { $0 != "." && $0 != "," && rawCounts[$0, default: 0] != polishedCounts[$0, default: 0] }
+            .sorted { symbolLabel($0) < symbolLabel($1) }
+        let symbolDiffs = changed.prefix(6).map {
+            "\(symbolLabel($0)):\(rawCounts[$0, default: 0])->\(polishedCounts[$0, default: 0])"
+        }
+        return [
+            "changedSymbols=\(changed.count)",
+            "symbolDiffs=\(symbolDiffs.joined(separator: ","))"
+        ].joined(separator: " ")
+    }
+
+    private static func commaDiffSummary(raw: String, polished: String) -> String {
+        [
+            "rawCommas=\(raw.filter { $0 == "," }.count)",
+            "polishedCommas=\(polished.filter { $0 == "," }.count)"
+        ].joined(separator: " ")
+    }
+
+    private static func sentenceBoundaryDiffSummary(raw: String, polished: String) -> String {
+        let rawCounts = sentenceBoundaryCounts(raw)
+        let polishedCounts = sentenceBoundaryCounts(polished)
+        let boundaryDiffs = [".", "?", "!"].map {
+            "\($0):\(rawCounts[Character($0), default: 0])->\(polishedCounts[Character($0), default: 0])"
+        }
+        return "boundaryDiffs=\(boundaryDiffs.joined(separator: ","))"
+    }
+
+    private static func sentenceBoundaryCounts(_ text: String) -> [Character: Int] {
+        var counts: [Character: Int] = [:]
+        for character in text where character == "." || character == "?" || character == "!" {
+            counts[character, default: 0] += 1
+        }
+        return counts
+    }
+
+    private static func symbolLabel(_ symbol: Character) -> String {
+        switch symbol {
+        case "?": return "question"
+        case "!": return "exclamation"
+        case ":": return "colon"
+        case ";": return "semicolon"
+        case "\u{2014}": return "em-dash"
+        case "\u{2013}": return "en-dash"
+        case "/": return "slash"
+        case "-": return "hyphen"
+        case "$": return "dollar"
+        case "(": return "left-paren"
+        case ")": return "right-paren"
+        case "[": return "left-bracket"
+        case "]": return "right-bracket"
+        case "{": return "left-brace"
+        case "}": return "right-brace"
+        case "\u{2026}": return "ellipsis"
+        default: return "other"
+        }
     }
 
     // MARK: Sentence boundaries

@@ -126,7 +126,27 @@ final class TranscriptPolisherTests: XCTestCase {
 
         XCTAssertEqual(result.text, raw)
         XCTAssertEqual(result.outcome, .guardRejected)
+        XCTAssertEqual(result.guardRejection?.reason, .contentTokensChanged)
+        XCTAssertEqual(result.guardRejection?.candidateCharacterCount, engine.result.count)
         XCTAssertEqual(engine.polishCallCount, 1)
+    }
+
+    func testGuardRejectedOutcomeIncludesPrivacySafeOrdinalDiagnostics() async throws {
+        let engine = FakePolishEngine(result: "Test first thing.")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+
+        let result = await polisher.polish("test 1st thing")
+
+        XCTAssertEqual(result.text, "test 1st thing")
+        XCTAssertEqual(result.outcome, .guardRejected)
+        let rejection = try XCTUnwrap(result.guardRejection)
+        XCTAssertEqual(rejection.reason, .contentTokensChanged)
+        XCTAssertEqual(rejection.candidateCharacterCount, "Test first thing.".count)
+        XCTAssertTrue(rejection.diff.contains("rawTokenShape=numeric-ordinal"))
+        XCTAssertTrue(rejection.diff.contains("polishedTokenShape=ordinal-word"))
+        XCTAssertTrue(rejection.diff.contains("hint=ordinal-normalization"))
+        XCTAssertFalse(rejection.logDescription.contains("1st"))
+        XCTAssertFalse(rejection.logDescription.contains("first"))
     }
 
     func testPolishReturnsPolishedWhenAvailableAndGuardPasses() async {

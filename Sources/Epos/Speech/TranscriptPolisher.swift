@@ -43,6 +43,19 @@ public struct PolishResult: Sendable, Equatable {
     public let text: String
     public let outcome: PolishOutcome
     public let rawCharacterCount: Int
+    public let guardRejection: PolishGuardRejection?
+
+    public init(
+        text: String,
+        outcome: PolishOutcome,
+        rawCharacterCount: Int,
+        guardRejection: PolishGuardRejection? = nil
+    ) {
+        self.text = text
+        self.outcome = outcome
+        self.rawCharacterCount = rawCharacterCount
+        self.guardRejection = guardRejection
+    }
 }
 
 /// Which path `TranscriptPolisher.polish` took. Every non-`.applied` case keeps
@@ -58,6 +71,30 @@ public enum PolishOutcome: Sendable, Equatable {
     case abandoned
     case suppressedByInsertion
     case applied
+}
+
+public struct PolishRetentionEvaluation: Sendable, Equatable {
+    public let retainsContent: Bool
+    public let rejection: PolishGuardRejection?
+}
+
+public struct PolishGuardRejection: Sendable, Equatable {
+    public let reason: PolishGuardRejectionReason
+    public let candidateCharacterCount: Int
+    public let diff: String
+
+    public var logDescription: String {
+        "reason=\(reason.rawValue) candidateChars=\(candidateCharacterCount) \(diff)"
+    }
+}
+
+public enum PolishGuardRejectionReason: String, Sendable, Equatable {
+    case emptyPolished = "empty-polished"
+    case zeroContentRewrite = "zero-content-rewrite"
+    case contentTokensChanged = "content-tokens-changed"
+    case symbolUsageChanged = "symbol-usage-changed"
+    case commaUsageChanged = "comma-usage-changed"
+    case sentenceBoundaryChanged = "sentence-boundary-changed"
 }
 
 private enum EnginePolishAttempt: Sendable, Equatable {
@@ -135,8 +172,14 @@ public struct TranscriptPolisher: Sendable {
             guard candidate != canonicalRaw else {
                 return PolishResult(text: canonicalRaw, outcome: .sameText, rawCharacterCount: rawCount)
             }
-            guard Self.polishRetainsContent(raw: canonicalRaw, polished: candidate) else {
-                return PolishResult(text: canonicalRaw, outcome: .guardRejected, rawCharacterCount: rawCount)
+            let retention = Self.polishRetentionEvaluation(raw: canonicalRaw, polished: candidate)
+            guard retention.retainsContent else {
+                return PolishResult(
+                    text: canonicalRaw,
+                    outcome: .guardRejected,
+                    rawCharacterCount: rawCount,
+                    guardRejection: retention.rejection
+                )
             }
             return PolishResult(text: candidate, outcome: .applied, rawCharacterCount: rawCount)
         case .failed:
