@@ -49,6 +49,20 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(cleaned, "Check the CLAUDE.md. Check the CLAUDE.md.")
     }
 
+    func testCanonicalizerNormalizesNetSuiteAliases() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        // Two-word decomposition, the capitalized form the recognizer emits, the
+        // homophone, and the already-correct no-space form all fold to "NetSuite".
+        XCTAssertEqual(canonicalizer.canonicalize("open net suite today"), "open NetSuite today")
+        XCTAssertEqual(canonicalizer.canonicalize("Net Suite"), "NetSuite")
+        XCTAssertEqual(canonicalizer.canonicalize("our net sweet account"), "our NetSuite account")
+        XCTAssertEqual(canonicalizer.canonicalize("netsuite"), "NetSuite")
+
+        // Substring guard: a longer word that merely contains "netsuite" is untouched.
+        XCTAssertEqual(canonicalizer.canonicalize("visit netsuitehq dot com"), "visit netsuitehq dot com")
+    }
+
     func testCanonicalizerFixesCurrentDefaultCustomEntries() {
         let canonicalizer = TranscriptCanonicalizer()
 

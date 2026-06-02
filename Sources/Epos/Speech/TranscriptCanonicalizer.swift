@@ -68,6 +68,13 @@ public struct TranscriptCanonicalizer: Sendable {
             canonical: "CMUX",
             aliases: ["CMUX", "simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
         ),
+        // "suite"/"sweet" are homophones, so the recognizer renders the spoken brand as
+        // a two-word common phrase ("net suite", "Net Sweet"). The "NetSuite" alias is the
+        // already-correct/no-space form; case-insensitive matching folds in the rest.
+        Rule(
+            canonical: "NetSuite",
+            aliases: ["NetSuite", "net suite", "net sweet", "net suit"]
+        ),
         Rule(
             canonical: "AGENTS.md",
             aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
