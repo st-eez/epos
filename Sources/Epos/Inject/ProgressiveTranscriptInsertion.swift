@@ -157,7 +157,14 @@ public final class ProgressiveTranscriptInsertionSession {
         if deleteCount > 0 { insertionSession.deleteBackward(count: deleteCount) }
         if !insertion.isEmpty { insertionSession.insert(insertion) }
 
-        committedText = newTarget
+        // In normal mode the backspace-and-retype makes the field equal `newTarget`,
+        // so the commit advances to it. In append-only we never delete, so the field
+        // is only ever the previous commit plus what we just appended — advancing the
+        // commit to `newTarget` would let it REGRESS below the on-screen text when a
+        // revised partial is shorter (the delete was suppressed), and a later partial
+        // growing the word back would then re-append a suffix already on screen
+        // ("ticket" → "tick" → "ticket" yielded "ticketet"). Track only what landed.
+        committedText = appendOnly ? committedText + insertion : newTarget
         log.info("progressive reconcile deletedChars=\(deleteCount) insertedChars=\(insertion.utf16.count) totalChars=\(committedText.utf16.count) appendOnly=\(self.appendOnly)")
         return applied
     }

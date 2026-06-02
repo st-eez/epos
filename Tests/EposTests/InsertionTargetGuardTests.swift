@@ -140,27 +140,68 @@ final class InsertionTargetGuardTests: XCTestCase {
         observer.value = "THE DOOR"
         session.acceptPartialTranscript("the window")
         // Latch is load-bearing: this revision shares only "the " with the commit,
-        // so unguarded code would backspace 6 and retype. Once latched the session
-        // must NOT delete — it appends nothing here ("the glass" isn't a prefix of
-        // the commit "the window") and leaves the field's own text intact.
+        // so unguarded code would backspace and retype. Once latched the session must
+        // NOT delete. These lateral revisions ("the window" → "the glass" → "the
+        // glass pane") do not EXTEND our last consistent commit ("the door"), so they
+        // append nothing — grafting a tail onto a field that already diverged would
+        // corrupt it. Crucially the commit stays "the door" and never regresses to a
+        // shorter revision (a regress is what duplicated word endings; see
+        // testAppendOnlyDoesNotDuplicateWordEndingOnShrinkThenGrowRevision).
         observer.value = "anything"
         session.acceptPartialTranscript("the glass")
-        // A later growth still appends only the genuinely-new tail past the commit.
         session.acceptPartialTranscript("the glass pane")
-        session.acceptFinalTranscript("the glass pane")
+        // A genuine EXTENSION of the commit still appends only the new tail.
+        session.acceptPartialTranscript("the door is open")
+        session.acceptFinalTranscript("the door is open")
 
         // First insert is unguarded (deleteCount 0). The revision to "the window"
-        // diverged → latched append-only with no delete. "the glass" shares no
-        // appendable prefix → no op. "the glass pane" appends " pane".
+        // diverged → latched append-only with no delete; the lateral revisions append
+        // nothing; only "the door is open", which extends the commit, appends " is open".
         XCTAssertEqual(
             backend.operations,
-            [.insert("the door"), .insert(" pane")]
+            [.insert("the door"), .insert(" is open")]
         )
         XCTAssertFalse(
             backend.operations.contains { if case .delete = $0 { true } else { false } },
             "append-only latch must never backspace"
         )
         XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testAppendOnlyDoesNotDuplicateWordEndingOnShrinkThenGrowRevision() {
+        // Regression: a word ending was duplicated ("check the ticket" → "ticketet").
+        // Once append-only latched, a recognizer partial that revised the last word
+        // SHORTER regressed `committedText` below the on-screen text (the delete it
+        // wanted was suppressed), and the next partial growing the word back appended
+        // the suffix that was already there. Under the latch the commit must track
+        // only what was actually appended, never regress to a shorter revision.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("check the ticket")
+        // A divergent read latches append-only just as the recognizer revises the
+        // final word shorter — the delete it wants can no longer be applied.
+        observer.value = ""
+        session.acceptPartialTranscript("check the tick")
+        // The recognizer revises the word back to its full form.
+        session.acceptPartialTranscript("check the ticket")
+        session.acceptFinalTranscript("check the ticket")
+        session.finish()
+
+        XCTAssertEqual(
+            backend.fieldText, "check the ticket",
+            "append-only must not duplicate the word ending"
+        )
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
     }
 
     func testOpaqueAppEmptyReadStillSelfCorrects() {
