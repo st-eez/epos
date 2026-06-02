@@ -20,11 +20,13 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                 "dollar home slash bin",
                 false
             ),
-            // Filler-removal: leading um/so/like and a mid "uh" stripped, the
-            // content words remain exactly in order. "you know" is NOT a droppable
+            // Filler-removal: hard single-token fillers stripped, the content words
+            // remain exactly in order. "you know" is NOT a droppable
             // phrase (it has content uses the guard can't distinguish), so the model
             // keeping it is fine — every content word survives. Keep.
-            ("um so like we should uh ship it you know", "we should ship it you know", true),
+            ("um we should uh ship it you know", "we should ship it you know", true),
+            // Explicit comma-delimited opening disfluencies are droppable.
+            ("um, so, like, we should uh ship it", "we should ship it", true),
             // A "like" between content words is treated as a comparator the guard
             // cannot distinguish from a verbal tic, so the model may not DROP it —
             // not even when a filler sits beside it (a filler neighbor does not make
@@ -257,10 +259,17 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("I think", "i think", true),
 
             // MARK: - finding 10: a leading "like" the model KEPT matches as content
-            // (keeping a possible filler never changes meaning); a leading discourse
-            // "like" the model DROPPED still drops. Both keep.
+            // (keeping a possible filler never changes meaning); if the model DROPS
+            // an ambiguous leading "like" or "so" with no comma-delimited
+            // disfluency marker, reject and keep the raw words.
             ("Like button is broken", "Like button is broken", true),
-            ("Like we should ship", "we should ship", true),
+            ("Like button is broken", "button is broken", false),
+            ("Like we should ship", "we should ship", false),
+            ("so that it works", "that it works", false),
+
+            // MARK: - an all-caps acronym must not be droppable just because its
+            // normalized lowercase form is a filler token.
+            ("go to the ER now", "go to the now", false),
 
             // MARK: - regression: a dropped negation inverts meaning. Reject.
             ("do not ship it", "do ship it", false),

@@ -67,6 +67,81 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
+    func testPositionedValueAllowsInsertionBeforeTrailingFieldText() {
+        let context = InsertionTargetContext(prefix: "hello ", suffix: " world")
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(
+                expected: "cot",
+                observed: .positionedValue(
+                    "hello cot world",
+                    context: context,
+                    selectedRange: InsertionTargetTextRange(location: "hello cot".utf16.count, length: 0)
+                )
+            ),
+            .proceed
+        )
+    }
+
+    func testPositionedValueRejectsWhenCaretMovedAwayFromInsertion() {
+        let context = InsertionTargetContext(prefix: "hello ", suffix: " world")
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(
+                expected: "cot",
+                observed: .positionedValue(
+                    "hello cot world",
+                    context: context,
+                    selectedRange: InsertionTargetTextRange(location: 0, length: 0)
+                )
+            ),
+            .abort
+        )
+    }
+
+    func testPositionedValueRejectsSuffixMatchWhenCaretMovedAwayFromEnd() {
+        let context = InsertionTargetContext(prefix: "", suffix: "")
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(
+                expected: "cot",
+                observed: .positionedValue(
+                    "cot",
+                    context: context,
+                    selectedRange: InsertionTargetTextRange(location: 0, length: 0)
+                )
+            ),
+            .abort
+        )
+    }
+
+    func testPositionedValueRejectsSuffixFallbackWhenTrailingTextEndsWithExpected() {
+        let context = InsertionTargetContext(prefix: "hello ", suffix: " world cot")
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(
+                expected: "cot",
+                observed: .positionedValue(
+                    "hello cot world cot",
+                    context: context,
+                    selectedRange: InsertionTargetTextRange(location: "hello cot world cot".utf16.count, length: 0)
+                )
+            ),
+            .abort
+        )
+    }
+
+    func testPositionedValueFallsBackToAppendOnlyWhenValueDivergesAtInsertionCaret() {
+        let context = InsertionTargetContext(prefix: "", suffix: "")
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(
+                expected: "type teh",
+                observed: .positionedValue(
+                    "type the",
+                    context: context,
+                    selectedRange: InsertionTargetTextRange(location: "type teh".utf16.count, length: 0)
+                )
+            ),
+            .stopAppendOnly
+        )
+    }
+
     func testValueNotEndingWithExpectedFallsBackToAppendOnly() {
         // The field mutated our tail (autocorrect "teh" -> "the"): on-screen text
         // no longer ends with what we believe we typed, so stop deleting. This is
@@ -341,6 +416,55 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
+    func testSessionSelfCorrectsWhenDictatingBeforeTrailingText() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "hello ", suffix: " world")
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("cot")
+        observer.value = "hello cot world"
+        observer.selectedRange = InsertionTargetTextRange(location: "hello cot".utf16.count, length: 0)
+        session.acceptPartialTranscript("caught")
+        session.acceptFinalTranscript("caught")
+        session.finish()
+
+        XCTAssertEqual(backend.operations, [.insert("cot"), .delete(2), .insert("aught")])
+        XCTAssertEqual(backend.fieldText, "caught")
+        XCTAssertEqual(backend.finishCount, 1)
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testSessionDoesNotDeleteWhenCaretLeavesMidFieldInsertionSpan() {
+        let backend = FieldBackedRecordingBackend(initialText: "hello  world cot", caretOffset: "hello ".utf16.count)
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "hello ", suffix: " world cot")
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("cot")
+        observer.value = "hello cot world cot"
+        observer.selectedRange = InsertionTargetTextRange(location: "hello cot world cot".utf16.count, length: 0)
+        backend.caretOffset = "hello cot world cot".utf16.count
+        session.acceptPartialTranscript("caught")
+        session.acceptFinalTranscript("caught")
+        session.finish()
+
+        XCTAssertEqual(backend.operations, [.insert("cot")])
+        XCTAssertEqual(backend.fieldText, "hello cot world cot")
+        XCTAssertEqual(backend.finishCount, 0)
+        XCTAssertEqual(backend.cancelCount, 1)
+    }
+
     // MARK: - Final polished insert (issue 4) and minimal-edit diff (issue 8)
 
     func testFinalPolishedReturnsFalseWhenAppendOnlyLatchSuppressesIt() {
@@ -469,12 +593,16 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     var focusChanged = false
     var value: String?
     var exposesText = false
+    var insertionContext: InsertionTargetContext?
+    var selectedRange: InsertionTargetTextRange?
     private(set) var baselineCaptured = false
 
     func captureBaseline() { baselineCaptured = true }
     func focusChangedSinceStart() -> Bool { focusChanged }
     func observedValue() -> String? { value }
+    func observedSelectedRange() -> InsertionTargetTextRange? { selectedRange }
     func exposesTextValue() -> Bool { exposesText }
+    func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
 }
 
 private final class GuardRecordingBackend: TextInsertionBackend {
@@ -509,6 +637,65 @@ private final class GuardRecordingBackend: TextInsertionBackend {
         init(backend: GuardRecordingBackend) { self.backend = backend }
         func insert(_ text: String) { backend.record(.insert(text)) }
         func deleteBackward(count: Int) { backend.record(.delete(count)) }
+        func finish() { backend.finishSession() }
+        func cancel() { backend.cancelSession() }
+    }
+}
+
+private final class FieldBackedRecordingBackend: TextInsertionBackend {
+    enum Operation: Equatable {
+        case insert(String)
+        case delete(Int)
+    }
+
+    private(set) var operations: [Operation] = []
+    private(set) var finishCount = 0
+    private(set) var cancelCount = 0
+    private var field: String
+    var caretOffset: Int
+
+    var fieldText: String { field }
+
+    init(initialText: String, caretOffset: Int) {
+        self.field = initialText
+        self.caretOffset = caretOffset
+    }
+
+    func startInsertionSession() -> any TextInsertionSession {
+        Session(backend: self)
+    }
+
+    fileprivate func recordInsert(_ text: String) {
+        operations.append(.insert(text))
+        let index = field.utf16.index(field.utf16.startIndex, offsetBy: caretOffset)
+        guard let stringIndex = String.Index(index, within: field) else { return }
+        field.insert(contentsOf: text, at: stringIndex)
+        caretOffset += text.utf16.count
+    }
+
+    fileprivate func recordDelete(_ count: Int) {
+        operations.append(.delete(count))
+        let utf16 = field.utf16
+        guard
+            let endUTF16 = utf16.index(utf16.startIndex, offsetBy: caretOffset, limitedBy: utf16.endIndex),
+            let startUTF16 = utf16.index(endUTF16, offsetBy: -count, limitedBy: utf16.startIndex),
+            let start = String.Index(startUTF16, within: field),
+            let end = String.Index(endUTF16, within: field)
+        else {
+            return
+        }
+        field.removeSubrange(start..<end)
+        caretOffset -= count
+    }
+
+    fileprivate func finishSession() { finishCount += 1 }
+    fileprivate func cancelSession() { cancelCount += 1 }
+
+    private final class Session: TextInsertionSession {
+        private let backend: FieldBackedRecordingBackend
+        init(backend: FieldBackedRecordingBackend) { self.backend = backend }
+        func insert(_ text: String) { backend.recordInsert(text) }
+        func deleteBackward(count: Int) { backend.recordDelete(count) }
         func finish() { backend.finishSession() }
         func cancel() { backend.cancelSession() }
     }

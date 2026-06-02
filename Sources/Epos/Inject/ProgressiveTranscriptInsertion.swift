@@ -131,9 +131,12 @@ public final class ProgressiveTranscriptInsertionSession {
         // `.notRead` (an AX-opaque app such as cmux → uninformative, keep
         // self-correcting). Only divergence forces append-only.
         if deleteCount > 0, !appendOnly {
+            let context = target.baselineInsertionContext()
             let observation = InsertionTargetObservation.read(
                 target.observedValue(),
-                exposesText: target.exposesTextValue()
+                exposesText: target.exposesTextValue(),
+                context: context,
+                selectedRange: context == nil ? nil : target.observedSelectedRange()
             )
             switch InsertionTargetGuard.decide(expected: committedText, observed: observation) {
             case .abort:

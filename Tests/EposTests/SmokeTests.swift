@@ -80,12 +80,12 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("open c-mux"), "open CMUX")
     }
 
-    func testCanonicalizerNormalizesProjectYamlToYamlExtension() {
+    func testCanonicalizerNormalizesProjectYamlToYmlExtension() {
         let canonicalizer = TranscriptCanonicalizer()
 
-        XCTAssertEqual(canonicalizer.canonicalize("edit project dot yaml"), "edit project.yaml")
-        XCTAssertEqual(canonicalizer.canonicalize("edit project dot yml"), "edit project.yaml")
-        XCTAssertEqual(canonicalizer.canonicalize("edit project.yml"), "edit project.yaml")
+        XCTAssertEqual(canonicalizer.canonicalize("edit project dot yaml"), "edit project.yml")
+        XCTAssertEqual(canonicalizer.canonicalize("edit project dot yml"), "edit project.yml")
+        XCTAssertEqual(canonicalizer.canonicalize("edit project.yml"), "edit project.yml")
     }
 
     func testCanonicalizerOnlyAppliesListedAliases() {
@@ -562,9 +562,9 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(files.filter { $0.pathExtension == "wav" }.count, 1)
     }
 
-    func testTranscriberPresetRequestsFastVolatileResults() {
+    func testTranscriberPresetRequestsAccurateVolatileResults() {
         XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.volatileResults))
-        XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.fastResults))
+        XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.fastResults))
         XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.alternativeTranscriptions))
     }
 

@@ -185,26 +185,17 @@ extension TranscriptPolisher {
                 }
             }
 
-            // 2. Force-drop a droppable filler "like" the model removed. After
-            //    `isDroppableLike` was tightened, this fires only sentence-initially
-            //    (or with no semantic anchor around it), where "like" is a discourse
-            //    marker. A post-content "like" is never force-dropped: the guard
-            //    can't tell a comparator ("tastes like") from a verbal tic, so it
-            //    keeps it (matched as content above, or — if the model dropped it —
-            //    rejected by the "like" arm of drop-on-mismatch below).
-            if raw == "like", isDroppableLike(in: rawTokens, at: rawIndex, matchedContent: matchedContent) {
-                rawIndex += 1
-                continue
-            }
-
-            // 3. Drop-on-mismatch: filler removal only.
-            if raw == "so", !matchedContent {
-                rawIndex += 1; continue
-            }
-            if raw == "like" {
-                return nil
-            }
-            if PolishVocabulary.singleFillers.contains(raw) {
+            // 2. Drop-on-mismatch: filler removal only. The deletion decision uses
+            //    the original token surface, not only the normalized text, so all-
+            //    caps acronyms such as "ER" cannot be dropped as filler "er".
+            if canDropRawToken(
+                rawSpans[rawIndex],
+                raw: rawText,
+                rawSpans: rawSpans,
+                rawTokens: rawTokens,
+                at: rawIndex,
+                matchedContent: matchedContent
+            ) {
                 rawIndex += 1; continue
             }
             return nil
@@ -269,16 +260,33 @@ extension TranscriptPolisher {
         return parts
     }
 
-    /// "like" is droppable only when nothing marks it as content: no semantic
-    /// anchor on either side (a comparator verb or pronoun), and only sentence-
-    /// initially (`!matchedContent`), where it is a discourse marker ("Like, we
-    /// should ship it"). A filler merely sitting next to "like" does NOT make it
-    /// droppable — "it tastes like um chicken" must keep its comparator "like" even
-    /// though the filler "um" follows. Once a content word precedes "like" it is
-    /// almost always a comparator ("tastes like", "works like") or quotative ("I was
-    /// like") the guard cannot distinguish from a verbal tic, so it is kept: matched
-    /// as content if the model kept it, or rejected by the "like" arm of
-    /// drop-on-mismatch if the model dropped it.
+    private static func canDropRawToken(
+        _ span: TokenSpan,
+        raw: String,
+        rawSpans: [TokenSpan],
+        rawTokens: [String],
+        at index: Int,
+        matchedContent: Bool
+    ) -> Bool {
+        let token = span.text
+        if PolishVocabulary.singleFillers.contains(token) {
+            return !isAcronym(span.original)
+        }
+        if token == "so" {
+            return !matchedContent && isCommaDelimitedDiscourseMarker(raw: raw, rawSpans: rawSpans, at: index)
+        }
+        if token == "like" {
+            return isDroppableLike(in: rawTokens, raw: raw, rawSpans: rawSpans, at: index, matchedContent: matchedContent)
+        }
+        return false
+    }
+
+    /// "like" is droppable only when nothing marks it as content AND the source
+    /// punctuation marks it as a disfluency ("Like, we should ship it"). A bare
+    /// leading "like" is ambiguous ("Like button is broken"), so dropping it
+    /// rejects and keeps the raw words. A filler merely sitting next to "like" does
+    /// NOT make it droppable — "it tastes like um chicken" must keep its comparator
+    /// "like" even though the filler "um" follows.
     private static func isDroppableLike(in tokens: [String], at index: Int, matchedContent: Bool) -> Bool {
         let previous = index > 0 ? tokens[index - 1] : nil
         let next = index + 1 < tokens.count ? tokens[index + 1] : nil
@@ -286,6 +294,27 @@ extension TranscriptPolisher {
         if let previous, PolishVocabulary.semanticLikePrevious.contains(previous) { return false }
         if let next, PolishVocabulary.semanticLikeNext.contains(next) { return false }
         return !matchedContent
+    }
+
+    private static func isDroppableLike(
+        in tokens: [String],
+        raw: String,
+        rawSpans: [TokenSpan],
+        at index: Int,
+        matchedContent: Bool
+    ) -> Bool {
+        isDroppableLike(in: tokens, at: index, matchedContent: matchedContent)
+            && isCommaDelimitedDiscourseMarker(raw: raw, rawSpans: rawSpans, at: index)
+    }
+
+    private static func isCommaDelimitedDiscourseMarker(
+        raw: String,
+        rawSpans: [TokenSpan],
+        at index: Int
+    ) -> Bool {
+        guard index + 1 < rawSpans.count else { return false }
+        let gap = raw[rawSpans[index].range.upperBound..<rawSpans[index + 1].range.lowerBound]
+        return gap.contains(",")
     }
 
     // MARK: Added/dropped symbols and punctuation

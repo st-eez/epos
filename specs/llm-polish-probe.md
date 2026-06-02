@@ -40,8 +40,8 @@ generation passed the leash/refusal/latency checks; see `specs/baseline.md`.
    ```
 3. **Per input:** time the `respond` call; catch `GenerationError` (esp. `.guardrailViolation`, `.refusal`, `.exceededContextWindowSize`); run twice to confirm greedy determinism (identical output expected). Print raw → polished side by side, latency ms, and refusal flag.
 4. **Instruction variants** (the core comparison):
-   - **V1** — bare "Correct, don't compose. Fix recognition errors, spoken punctuation, and obvious filename forms (e.g. 'project dot yaml' → project.yaml). Remove filler words. Do not reword, do not change meaning, do not resolve self-corrections like 'no wait' — transcribe them literally."
-   - **V2** — V1 + "Known terms, prefer these exact spellings when a similar-sounding word appears: CMUX, Stath, Epos, CLAUDE.md, AGENTS.md, project.yaml, /goal." (List sourced from `CorrectionStore` / `TranscriptCanonicalizer.defaultRules`.)
+   - **V1** — bare "Correct, don't compose. Fix recognition errors, spoken punctuation, and obvious filename forms (e.g. 'project dot yaml' → project.yml). Remove filler words. Do not reword, do not change meaning, do not resolve self-corrections like 'no wait' — transcribe them literally."
+   - **V2** — V1 + "Known terms, prefer these exact spellings when a similar-sounding word appears: CMUX, Stath, Epos, CLAUDE.md, AGENTS.md, project.yml, /goal." (List sourced from `CorrectionStore` / `TranscriptCanonicalizer.defaultRules`.)
 
 ## Inputs
 

@@ -10,7 +10,7 @@ This doc records the empirical justification that `baseline.md` references.
 ## Question
 
 Can Apple's recognition biasing fix domain jargon (CMUX, Stath, CLAUDE.md,
-project.yaml) *at the source*, so we rely less on the correction layer?
+project.yml) *at the source*, so we rely less on the correction layer?
 
 ## Findings
 
@@ -50,13 +50,13 @@ still beats 0.22.
 ### 4. Why `DictationTranscriber` loses
 
 Whole-sentence garbling ("Stath pushed the fix to" → "Start push to fix to") — an
-engine-quality issue independent of vocabulary, worse across every preset. It also
-lacks `.fastResults` (a latency risk). The LM's source wins (e.g. CMUX recovery) are
-exactly what the canonicalizer already fixes via aliases.
+engine-quality issue independent of vocabulary, worse across every preset. The LM's
+source wins (e.g. CMUX recovery) are exactly what the canonicalizer already fixes via
+aliases.
 
 Honest nuance: the custom LM had two genuine source wins the canonicalizer
-structurally can't match — exact `project.yaml` (since fixed: the canonicalizer's
-default rule now emits `.yaml`) and `README` ("read me", not aliased). Both marginal.
+structurally can't match — exact `project.yml` and `README` ("read me", not aliased).
+Both marginal.
 
 ## Consequences
 

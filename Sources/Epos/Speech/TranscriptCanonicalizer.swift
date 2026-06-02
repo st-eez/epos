@@ -80,7 +80,7 @@ public struct TranscriptCanonicalizer: Sendable {
             aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
         ),
         Rule(canonical: "README.md", aliases: ["README.md", "read me dot md", "readme dot md", "read me md"]),
-        Rule(canonical: "project.yaml", aliases: ["project.yaml", "project.yml", "project dot yaml", "project dot yml"]),
+        Rule(canonical: "project.yml", aliases: ["project.yml", "project.yaml", "project dot yml", "project dot yaml"]),
         Rule(canonical: ".env", aliases: ["dot env"]),
         // Developer-token shorthands. Plain alias->canonical, so they ride the same
         // engine as user rules; only the flag-prefix form needs the pre-pass below.

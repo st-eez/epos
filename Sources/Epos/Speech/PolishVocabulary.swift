@@ -13,12 +13,11 @@ import Foundation
 /// guess the guard cannot safely police.
 public enum PolishVocabulary {
     /// Single-token disfluencies the model is allowed to drop. Deliberately MINIMAL:
-    /// only the pure non-words with no content sense. `so` is handled separately
-    /// (only droppable sentence-initially) and is intentionally absent; `like` is
-    /// handled by its own `isDroppableLike` arm in the guard, so it is absent here
-    /// too (it would be dead — the explicit `if raw == "like"` reject arm shadows
-    /// this set). "basically" is omitted on purpose: it is a content-bearing degree
-    /// adverb ("basically identical" ≠ "identical"), not a removable disfluency.
+    /// only the pure non-words with no content sense. `so` and `like` are handled
+    /// separately because they are only droppable when comma-delimited as opening
+    /// discourse markers; bare leading uses are ambiguous content and must survive.
+    /// "basically" is omitted on purpose: it is a content-bearing degree adverb
+    /// ("basically identical" ≠ "identical"), not a removable disfluency.
     /// Multi-token phrases ("you know", "kind of", …) are likewise NOT droppable:
     /// each has a common content use ("what kind of car", "explain what I mean") the
     /// guard cannot distinguish from a verbal tic, so it keeps them.

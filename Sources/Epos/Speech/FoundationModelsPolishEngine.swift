@@ -96,8 +96,8 @@ extension FoundationModelsPolishEngine {
         // remove a word the guard would then reject (which would discard the whole
         // polish, leaving even the um/uh uncleaned). Sorted for a stable prompt
         // across processes (Set iteration order is per-process randomized). The
-        // sentence-opening "so" and filler "like" are named in prose below: the
-        // guard drops those via dedicated arms, not via `singleFillers`.
+        // Comma-delimited sentence-opening "so" and "like" are named in prose
+        // below: the guard drops those via dedicated arms, not via `singleFillers`.
         let singleFillers = PolishVocabulary.singleFillers.sorted().joined(separator: "\", \"")
         var instructions = """
         You are the cleanup stage of Epos, a push-to-talk dictation tool. A speech \
@@ -153,9 +153,10 @@ extension FoundationModelsPolishEngine {
 
         What counts as cleaning (this is the WHOLE job — nothing else):
         - Always remove speech disfluencies and filler words — this is required cleanup, \
-        not a change of meaning: "\(singleFillers)", a sentence-opening "so", filler \
-        "like", and false starts. (Do not remove meaningful words — "I think", "we \
-        should", "just", "basically", "you know", "kind of" stay.)
+        not a change of meaning: "\(singleFillers)", comma-delimited sentence-opening \
+        "so" or "like" ("So, we should ship it" → "we should ship it"), and false \
+        starts. (Do not remove meaningful words — "I think", "we should", "just", \
+        "basically", "you know", "kind of" stay.)
         - Capitalize the first word of each sentence and proper nouns, and fix spacing.
         - You may add a single period to end a sentence that lacks one.
 

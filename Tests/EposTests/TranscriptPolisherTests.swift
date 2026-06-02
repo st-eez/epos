@@ -119,11 +119,12 @@ final class TranscriptPolisherTests: XCTestCase {
     }
 
     func testPolishReturnsPolishedWhenAvailableAndGuardPasses() async {
-        // Legit cleanup: only droppable fillers removed (um, sentence-initial so, uh),
-        // every substantive word retained — the guard passes and the polished text is
-        // used. (Ambiguous fillers like "you know" are no longer droppable: the guard
-        // would reject their removal, so they are deliberately absent here.)
-        let raw = "um so i think we should uh ship the feature"
+        // Legit cleanup: only droppable fillers removed (um, comma-delimited
+        // sentence-initial so, uh), every substantive word retained — the guard
+        // passes and the polished text is used. (Ambiguous fillers like "you know"
+        // are no longer droppable: the guard would reject their removal, so they are
+        // deliberately absent here.)
+        let raw = "um, so, i think we should uh ship the feature"
         let engine = FakePolishEngine(result: "I think we should ship the feature.")
         let polisher = TranscriptPolisher(enabled: true, engine: engine)
 

@@ -23,7 +23,7 @@ public final class Transcriber: @unchecked Sendable {
 
     static let speechPreset = SpeechTranscriber.Preset(
         transcriptionOptions: [],
-        reportingOptions: [.volatileResults, .fastResults],
+        reportingOptions: [.volatileResults],
         attributeOptions: [.transcriptionConfidence]
     )
 
