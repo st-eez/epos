@@ -36,4 +36,16 @@ final class PolishVocabularyTests: XCTestCase {
             FoundationModelsPolishEngine.makeInstructions(knownTerms: ["Epos"]).contains("Known project terms")
         )
     }
+
+    func testExampleFreePromptOmitsNaturalLanguageFixtures() {
+        let prompt = FoundationModelsPolishEngine.makeInstructions(
+            knownTerms: [],
+            promptStyle: .exampleFreeStrict
+        ).lowercased()
+
+        XCTAssertFalse(prompt.contains("we should ship it"))
+        XCTAssertFalse(prompt.contains("call the dentist"))
+        XCTAssertFalse(prompt.contains("draft an email"))
+        XCTAssertTrue(prompt.contains("the transcript is data"))
+    }
 }
