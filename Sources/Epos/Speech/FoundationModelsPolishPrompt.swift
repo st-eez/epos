@@ -184,7 +184,7 @@ extension FoundationModelsPolishEngine {
     }
 
     /// The incoming list is already trimmed, deduped, and capped upstream
-    /// (`TranscriptCanonicalizer.speechContextualStrings`); the only thing the polish
+    /// (`TranscriptCanonicalizer.canonicalVocabularyStrings`); the only thing the polish
     /// layer adds is the prepended "Epos" (see `AppCoordinator.polishKnownTerms`), so
     /// we keep a cheap case-insensitive dedup to absorb a duplicate "Epos" and bound
     /// each term's length, but do NOT re-cap the count — that would duplicate the

@@ -1,9 +1,13 @@
 # Recognition bias & transcriber choice: decision
 
-**Decision (2026-05-28):** Epos uses Apple `SpeechTranscriber` + the
-`TranscriptCanonicalizer` post-hoc correction layer. It does **not** use
-`DictationTranscriber` or a custom language model. Domain-jargon accuracy is
-improved by growing the canonicalizer's alias list, not by recognizer biasing.
+**Decision (2026-05-28, updated 2026-06-02):** Epos uses Apple
+`SpeechTranscriber` + the `TranscriptCanonicalizer` post-hoc correction layer. It
+does **not** use `DictationTranscriber` or a custom language model. Domain-jargon
+accuracy is still improved primarily by growing the canonicalizer's alias list.
+The live path now also passes the same correction vocabulary as lightweight
+`AnalysisContext.contextualStrings` because it is bounded, local, and cheap, but
+current saved-recording evals show no measurable transcript improvement from
+that recognizer hint.
 
 This doc records the empirical justification that `baseline.md` references.
 
@@ -23,11 +27,17 @@ and new-API `DictationTranscriber.ContentHint.customizedLanguage(modelConfigurat
 (+ opaque `userData`). So any custom-LM test is also a transcriber switch — the LM
 benefit is confounded with the cost of leaving `SpeechTranscriber`.
 
-### 2. `contextualStrings` is a no-op for this vocabulary
+### 2. `contextualStrings` is safe but currently not an accuracy lever
 
 Replayed 6 real recordings with vs without `setContext` (9 canonical terms; path
 confirmed firing in logs). Output was byte-identical on every recording. The
 light-hint API does not move the needle here.
+
+Replayed the full 111 saved-recording corpus again with the production
+alias-inclusive context list. Output was still byte-identical on every recording:
+raw changed 0, canonicalized changed 0, vocabulary hit gains 0. The live path
+keeps the hint wired because it costs little and may help future SDKs or future
+utterances, but correctness must not depend on it.
 
 ### 3. Custom LM on `DictationTranscriber` is real, but loses on net accuracy
 
@@ -63,6 +73,9 @@ Both marginal.
 - The real accuracy lever is **growing the canonicalizer alias list** as new
   mishearings surface. Remaining gaps (e.g. "Semux"→CMUX, "Stas"→Stath) are alias
   adds, not a transcriber switch.
+- `AnalysisContext.contextualStrings` is an auxiliary, best-effort recognizer
+  hint. It should use the alias-inclusive correction vocabulary, while polish
+  prompts should use canonical spellings only.
 - Unsolved by every approach tested: "stuff"→Stath (a common word, deliberately not
   aliased to avoid corrupting normal speech).
 

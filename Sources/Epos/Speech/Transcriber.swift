@@ -63,9 +63,8 @@ public final class Transcriber: @unchecked Sendable {
     /// Throws `TranscriberError.alreadyRunning` if a prior session hasn't been `finish`ed.
     ///
     /// `contextualStrings` biases recognition toward known vocabulary via
-    /// `AnalysisContext`. It defaults to empty, so the live recording path runs
-    /// unbiased; only the recognition-bias evaluation passes a non-empty list while
-    /// the approach is being validated.
+    /// `AnalysisContext`. It defaults to empty for tests and ad hoc callers; the
+    /// production coordinator passes correction vocabulary for each recording.
     public func start(contextualStrings: [String] = []) async throws -> AsyncStream<TranscriptEvent> {
         let alreadyRunning = lock.withLock { self.session != nil }
         if alreadyRunning {
@@ -147,14 +146,18 @@ public final class Transcriber: @unchecked Sendable {
     /// Build an `AnalysisContext` from a bias list, trimming and de-duplicating.
     /// Returns nil for an empty list so the caller skips `setContext` entirely.
     static func analysisContext(contextualStrings: [String]) -> AnalysisContext? {
-        let strings = Array(contextualStrings
-            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-            .filter { !$0.isEmpty }
-            .prefix(TranscriptCanonicalizer.maxSpeechContextualStringCount))
+        var seen: Set<String> = []
+        let strings = contextualStrings.compactMap { string -> String? in
+            let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            guard seen.insert(trimmed.lowercased()).inserted else { return nil }
+            return trimmed
+        }
+        .prefix(TranscriptCanonicalizer.maxSpeechContextualStringCount)
         guard !strings.isEmpty else { return nil }
 
         let context = AnalysisContext()
-        context.contextualStrings[.general] = strings
+        context.contextualStrings[.general] = Array(strings)
         log.info("applying speech context count=\(strings.count)")
         return context
     }

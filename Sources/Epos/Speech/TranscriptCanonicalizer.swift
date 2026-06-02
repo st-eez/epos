@@ -134,28 +134,43 @@ public struct TranscriptCanonicalizer: Sendable {
         return output
     }
 
-    /// Canonical vocabulary to feed the recognizer as `AnalysisContext` bias so it
-    /// can produce these terms up front instead of relying on the post-hoc rewrite.
+    /// Canonical vocabulary to pass to the polish model as known exact spellings.
     /// Yields each rule's canonical form once (de-duplicated, capped), skipping
     /// pure-symbol canonicals like `--` or `/` that carry no pronounceable token.
+    public var canonicalVocabularyStrings: [String] {
+        contextualStrings(includingAliases: false)
+    }
+
+    /// Vocabulary to feed the recognizer as `AnalysisContext` bias so it can produce
+    /// these terms up front instead of relying only on the post-hoc rewrite. Includes
+    /// canonical forms plus unguarded spoken aliases, because the recognizer hears
+    /// phrases like "net suite" or "claude dot md" before the canonicalizer rewrites
+    /// them into their written forms.
     ///
     /// Note: a canonical's *written* form (`CLAUDE.md`) is not how it is *spoken*
     /// (`claude dot md`), so biasing helps most for terms pronounced as written
-    /// (proper nouns, acronyms). This is the recognition-bias surface under
-    /// evaluation; it is not yet wired into the live recording path.
+    /// (proper nouns, acronyms). Alias forms cover the spoken spellings.
     public var speechContextualStrings: [String] {
+        contextualStrings(includingAliases: true)
+    }
+
+    private func contextualStrings(includingAliases: Bool) -> [String] {
         var phrases: [String] = []
         var seen: Set<String> = []
 
         for rule in rules {
-            let phrase = rule.canonical.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard Self.isUsefulSpeechContext(phrase) else { continue }
+            let candidates = [rule.canonical]
+                + (includingAliases && rule.contexts.isEmpty ? Self.allAliases(for: rule) : [])
+            for candidate in candidates {
+                let phrase = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard Self.isUsefulSpeechContext(phrase) else { continue }
 
-            let key = phrase.lowercased()
-            guard seen.insert(key).inserted else { continue }
+                let key = Self.normalizedPhrase(phrase)
+                guard seen.insert(key).inserted else { continue }
 
-            phrases.append(phrase)
-            if phrases.count == Self.maxSpeechContextualStringCount { break }
+                phrases.append(phrase)
+                if phrases.count == Self.maxSpeechContextualStringCount { return phrases }
+            }
         }
 
         return phrases

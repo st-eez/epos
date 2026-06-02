@@ -713,7 +713,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.alternativeTranscriptions))
     }
 
-    func testSpeechContextualStringsSkipsPureSymbolsAndDeduplicates() {
+    func testCanonicalVocabularyStringsSkipsPureSymbolsAndDeduplicates() {
         let canonicalizer = TranscriptCanonicalizer(rules: [
             .init(canonical: "CMUX", aliases: ["see mux"]),
             .init(canonical: "--", aliases: ["dash dash"]),
@@ -723,13 +723,41 @@ final class SmokeTests: XCTestCase {
         ])
 
         // Pure-punctuation canonicals are dropped; case-insensitive duplicates collapse.
-        XCTAssertEqual(canonicalizer.speechContextualStrings, ["CMUX", "Epos"])
+        XCTAssertEqual(canonicalizer.canonicalVocabularyStrings, ["CMUX", "Epos"])
+    }
+
+    func testSpeechContextualStringsIncludesUsefulUnguardedAliases() {
+        let canonicalizer = TranscriptCanonicalizer(rules: [
+            .init(canonical: "CMUX", aliases: ["see mux"]),
+            .init(canonical: "--", aliases: ["dash dash"]),
+            .init(canonical: "/", aliases: ["slash"]),
+            .init(canonical: "cmux", aliases: ["cmox"]),
+            .init(canonical: "Epos", aliases: ["epos"]),
+            .init(canonical: "Aster", aliases: ["esther"], contexts: ["message to"])
+        ])
+
+        XCTAssertEqual(
+            canonicalizer.speechContextualStrings,
+            ["CMUX", "see mux", "dash dash", "slash", "cmox", "Epos", "Aster"]
+        )
     }
 
     func testAnalysisContextNilForEmptyOrBlankVocabulary() {
         XCTAssertNil(Transcriber.analysisContext(contextualStrings: []))
         XCTAssertNil(Transcriber.analysisContext(contextualStrings: ["   ", ""]))
         XCTAssertNotNil(Transcriber.analysisContext(contextualStrings: ["Epos"]))
+    }
+
+    func testAnalysisContextTrimsDeduplicatesAndPreservesOrder() throws {
+        let context = try XCTUnwrap(Transcriber.analysisContext(contextualStrings: [
+            " Epos ",
+            "epos",
+            "CMUX",
+            "cmux",
+            "NetSuite"
+        ]))
+
+        XCTAssertEqual(context.contextualStrings[.general], ["Epos", "CMUX", "NetSuite"])
     }
 
     /// Regression: pre-fix, `Transcriber.finish()` hung in `await drain?.value`

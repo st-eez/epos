@@ -136,6 +136,10 @@ public final class AppCoordinator: ObservableObject {
     }
 
     private func polishKnownTerms() -> [String] {
+        ["Epos"] + corrections.canonicalizer.canonicalVocabularyStrings
+    }
+
+    func speechContextualStrings() -> [String] {
         ["Epos"] + corrections.canonicalizer.speechContextualStrings
     }
 
@@ -218,12 +222,17 @@ public final class AppCoordinator: ObservableObject {
         transcriptTiming.start()
         indicator.show()
         let sessionPolisher = makePolisher()
+        let contextualStrings = speechContextualStrings()
         activePolisher = sessionPolisher
         sessionPolisher.prewarm()
         log.info("recording start")
 
         transcriptionTask = Task { [weak self] in
-            await self?.runSession(format: format, polisher: sessionPolisher)
+            await self?.runSession(
+                format: format,
+                polisher: sessionPolisher,
+                contextualStrings: contextualStrings
+            )
         }
     }
 
@@ -237,7 +246,11 @@ public final class AppCoordinator: ObservableObject {
         Task { await transcriber.finish() }
     }
 
-    private func runSession(format: AVAudioFormat, polisher: TranscriptPolisher) async {
+    private func runSession(
+        format: AVAudioFormat,
+        polisher: TranscriptPolisher,
+        contextualStrings: [String]
+    ) async {
         let transcriber = self.transcriber
         let audio = self.audio
         let dogfood = self.dogfood
@@ -245,7 +258,7 @@ public final class AppCoordinator: ObservableObject {
 
         let events: AsyncStream<TranscriptEvent>
         do {
-            events = try await transcriber.start()
+            events = try await transcriber.start(contextualStrings: contextualStrings)
             guard state == .recording else {
                 cancelTextInsertionSession()
                 await resetToIdle()

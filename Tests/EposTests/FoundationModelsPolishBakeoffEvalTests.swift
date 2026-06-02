@@ -39,7 +39,7 @@ final class FoundationModelsPolishBakeoffEvalTests: XCTestCase {
         try SavedRecordingEvalSupport.prepareOutput(outputURL)
 
         let canonicalizer = TranscriptCanonicalizer.load()
-        let knownTerms = ["Epos"] + canonicalizer.speechContextualStrings
+        let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
         let limit = environment["EPOS_EVAL_LIMIT"].flatMap(Int.init)
         let transcripts = Array(Self.transcripts.prefix(limit ?? Self.transcripts.count))
         let variants = [

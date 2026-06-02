@@ -84,7 +84,7 @@ No `Core/`, no `Utilities/`, no `Models/` folder of empty types. (Settings, the 
 FnHotkey.press
   -> AppCoordinator.startRecording
      -> AudioCapture.start (16 kHz mono Float32 buffers)
-     -> Transcriber.start (SpeechAnalyzer + SpeechTranscriber module)
+     -> Transcriber.start (SpeechAnalyzer + SpeechTranscriber module, correction vocabulary as speech context)
      -> RecordingIndicator.show
   // types canonicalized deltas live -> TextInsertionBackend (synthesized keystrokes)
   // shows listening state -> RecordingIndicator (pill: status dot + meter)

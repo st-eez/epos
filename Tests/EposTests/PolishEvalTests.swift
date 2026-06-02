@@ -59,7 +59,7 @@ final class PolishEvalTests: XCTestCase {
         try XCTSkipUnless(engine.isAvailable, "FoundationModels model unavailable in this context")
 
         let canonicalizer = TranscriptCanonicalizer.load()
-        let knownTerms = ["Epos"] + canonicalizer.speechContextualStrings
+        let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
         let polisher = TranscriptPolisher(
             enabled: true,
             engine: engine,

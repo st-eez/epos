@@ -7,7 +7,8 @@ import XCTest
 /// (text-to-polish only), this runs the production finalization stack for each
 /// recording:
 ///
-///   wav -> SpeechTranscriber -> TranscriptCanonicalizer -> TranscriptPolisher -> guard outcome
+///   wav -> SpeechTranscriber + production speech context
+///       -> TranscriptCanonicalizer -> TranscriptPolisher -> guard outcome
 ///
 /// Skipped unless `EPOS_RUN_DOGFOOD_EVAL=1`, since it needs real saved audio and
 /// the on-device FoundationModels polish model:
@@ -44,7 +45,8 @@ final class DogfoodPipelineEvalTests: XCTestCase {
         try XCTSkipIf(selectedRecordings.isEmpty, "No .wav recordings found at \(recordingsDirectory.path)")
 
         let canonicalizer = TranscriptCanonicalizer.load()
-        let knownTerms = ["Epos"] + canonicalizer.speechContextualStrings
+        let speechContextualStrings = ["Epos"] + canonicalizer.speechContextualStrings
+        let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
         try SavedRecordingEvalSupport.prepareOutput(outputURL)
 
         var summary = DogfoodPipelineEvalSummary()
@@ -59,7 +61,11 @@ final class DogfoodPipelineEvalTests: XCTestCase {
             polisher.prewarm()
 
             let transcribeStarted = Date()
-            let transcription = try await SavedRecordingEvalSupport.transcribe(recording: recording, locale: locale)
+            let transcription = try await SavedRecordingEvalSupport.transcribe(
+                recording: recording,
+                locale: locale,
+                contextualStrings: speechContextualStrings
+            )
             let transcribeSeconds = Date().timeIntervalSince(transcribeStarted)
 
             let canonicalizedRaw = canonicalizer.canonicalize(transcription.text)
