@@ -26,9 +26,9 @@ extension TranscriptPolisher {
         polishRetentionEvaluation(raw: raw, polished: polished).retainsContent
     }
 
-    /// The full guard decision, with privacy-safe rejection metadata for dogfood
-    /// diagnostics. The diff deliberately reports token shapes, counts, and policy
-    /// hints rather than transcript text.
+    /// The full guard decision, with rejection metadata for dogfood
+    /// diagnostics. The rejected candidate is logged verbatim so dogfood runs can
+    /// evaluate the model's attempted rewrite; the diff adds structured context.
     public static func polishRetentionEvaluation(raw: String, polished: String) -> PolishRetentionEvaluation {
         guard !polished.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return rejectedPolish(
@@ -238,6 +238,7 @@ extension TranscriptPolisher {
             retainsContent: false,
             rejection: PolishGuardRejection(
                 reason: reason,
+                candidateText: polished,
                 candidateCharacterCount: polished.count,
                 diff: diff
             )

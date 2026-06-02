@@ -637,6 +637,48 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(contents.contains(#"displayText="raw final""#))
     }
 
+    @MainActor
+    func testCoordinatorPolishRejectionLogIncludesRawAndCandidateText() throws {
+        let directory = try makeTemporaryDirectory()
+        let sink = DiagnosticLogSink(
+            configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
+            directory: directory
+        )
+        let coordinator = AppCoordinator(
+            textInsertion: RecordingTextInsertionBackend(),
+            diagnostics: sink,
+            autoStart: false
+        )
+        let rejection = PolishGuardRejection(
+            reason: .contentTokensChanged,
+            candidateText: "Test first thing.\nNext line",
+            candidateCharacterCount: 27,
+            diff: "kind=raw-token-changed hint=ordinal-normalization"
+        )
+
+        coordinator.logPolishOutcome(
+            outcome: .guardRejected,
+            rawText: "test 1st thing\nnext line",
+            polishedCount: 0,
+            rawCount: 24,
+            guardRejection: rejection,
+            elapsedMs: 12
+        )
+        sink.flush()
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(files.count, 1)
+        let contents = try String(contentsOf: files[0], encoding: .utf8)
+        XCTAssertTrue(contents.contains("polish rejected: retention guard"))
+        XCTAssertTrue(contents.contains(#"rawText="test 1st thing\nnext line""#))
+        XCTAssertTrue(contents.contains(#"candidateText="Test first thing.\nNext line""#))
+        XCTAssertTrue(contents.contains("reason=content-tokens-changed"))
+        XCTAssertTrue(contents.contains("hint=ordinal-normalization"))
+    }
+
     func testDogfoodTapDiscardsRecordingWhenTranscriptIsEmpty() throws {
         let directory = try makeTemporaryDirectory()
         let tap = DogfoodTap(recordingsDirectory: directory)

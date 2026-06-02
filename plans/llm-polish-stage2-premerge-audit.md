@@ -251,8 +251,8 @@ Surfaced after the audit, while dictating on the installed app. Not polish-speci
   blind delete it exists to prevent. Do the instrumentation below first.
 
 - **OPEN — instrument the latch before touching it.** At the `.stopAppendOnly` decision,
-  log expected-length vs on-screen-length (lengths only — privacy-safe, no transcript
-  text) and the divergence reason (`.value` mismatch vs `.emptyExposed`). The next repro
-  then distinguishes AX lag from genuine divergence, which is the evidence needed before
-  changing the latch heuristic. Confirm production latched on `.value`-mismatch (not
-  `.emptyExposed`) before considering a reason-gated narrowing of the loss-proof append.
+  log expected-length vs on-screen-length and the divergence reason (`.value` mismatch
+  vs `.emptyExposed`). The next repro then distinguishes AX lag from genuine divergence,
+  which is the evidence needed before changing the latch heuristic. Confirm production
+  latched on `.value`-mismatch (not `.emptyExposed`) before considering a reason-gated
+  narrowing of the loss-proof append.

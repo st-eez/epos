@@ -317,6 +317,7 @@ public final class AppCoordinator: ObservableObject {
             // avoids a third canonicalizer pass over the transcript in the finalize window.
             logPolishOutcome(
                 outcome: effectiveOutcome,
+                rawText: result.text,
                 polishedCount: result.text.count,
                 rawCount: result.rawCharacterCount,
                 guardRejection: result.guardRejection,
@@ -376,8 +377,9 @@ public final class AppCoordinator: ObservableObject {
     /// Local dogfood observability for the polish stage. Reads the policy's own
     /// `PolishOutcome` so the log can't drift from the decision the polisher
     /// actually made.
-    private func logPolishOutcome(
+    func logPolishOutcome(
         outcome: PolishOutcome,
+        rawText: String,
         polishedCount: Int,
         rawCount: Int,
         guardRejection: PolishGuardRejection? = nil,
@@ -396,7 +398,10 @@ public final class AppCoordinator: ObservableObject {
             log.info("polish skipped: model returned same text (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .guardRejected:
             let detail = guardRejection?.logDescription ?? "reason=unknown"
-            log.info("polish rejected: retention guard (\(detail) rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+            log.info(
+                "polish rejected: retention guard " +
+                    "(rawText=\(String(reflecting: rawText)) \(detail) rawChars=\(rawCount) elapsedMs=\(elapsedMs))"
+            )
         case .engineFailed:
             log.info("polish fallback: engine failed (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .abandoned:

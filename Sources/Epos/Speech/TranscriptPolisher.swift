@@ -80,11 +80,12 @@ public struct PolishRetentionEvaluation: Sendable, Equatable {
 
 public struct PolishGuardRejection: Sendable, Equatable {
     public let reason: PolishGuardRejectionReason
+    public let candidateText: String
     public let candidateCharacterCount: Int
     public let diff: String
 
     public var logDescription: String {
-        "reason=\(reason.rawValue) candidateChars=\(candidateCharacterCount) \(diff)"
+        "reason=\(reason.rawValue) candidateChars=\(candidateCharacterCount) candidateText=\(String(reflecting: candidateText)) \(diff)"
     }
 }
 

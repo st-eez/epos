@@ -38,7 +38,7 @@ Today the pipeline is: fn key → AudioCapture → Transcriber (SpeechTranscribe
 - `SystemLanguageModel.default.availability == .available` is reachable from the app process without a special entitlement (probe-verified on this machine; re-checked at runtime).
 - LLM polish is currently an explicit **Non-Goal** in `specs/baseline.md` (lines 5, 24, backlog 208). This spec's implementation MUST update `baseline.md` (Non-Goal → opt-in shipped feature; correct "MLX" → FoundationModels).
 - Live insertion / erase-and-retype flash is **not** unit-testable (memory `epos-insertion-not-unit-testable`): correctness requires the installed signed app dictating into a real app. The policy logic around the model call IS unit-testable behind a seam.
-- Privacy: no transcript text in diagnostic logs (`EposLogger`).
+- Diagnostics: transcript text may appear in local dogfood logs when it is the behavior under test, especially rejected polish candidates. Do not log secrets, credentials, environment-specific values, or unrelated app content.
 - Module size: keep `TranscriptPolisher` < ~250 LOC (CLAUDE.md).
 
 ## Requirements
@@ -89,7 +89,7 @@ The recording indicator stays visible through the polish window. Mechanism: the 
 - Flag on + available + over-compressed output → raw path (guard).
 - Flag on + available + good output → polished text reconciled into the field; canonicalizer still applied.
 - Flag on + available → recording indicator stays visible from fn-release until the polished text is reconciled (does not hide during the polish wait).
-- No transcript text in logs.
+- Rejected polish candidates are logged with the raw fallback text, candidate text, guard rejection reason, and diff context so model behavior can be evaluated from logs.
 - `swift build -Xswiftc -warnings-as-errors`, `swift test`, `swiftlint --quiet` all green.
 - E2E (signed app): dictating a benign declarative sentence with `polishEnabled` shows raw text live, then a single erase-and-retype to the cleaned text within ~2s; toggling off reverts to today's behavior.
 

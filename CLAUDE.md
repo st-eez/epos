@@ -68,7 +68,7 @@ Use `log stream` only as a manual, bounded debugging command; do not leave it ru
 /usr/bin/log stream --predicate 'subsystem == "com.steez.Epos"' --info --debug
 ```
 
-Diagnostic log events must stay privacy-aware: no transcript text, PII, secrets, or environment-specific values.
+Diagnostic logs are a local dogfood/debug surface and may include transcript text when the transcript is the behavior under test, such as timing diagnostics or rejected polish candidates. Do not log secrets, credentials, environment-specific values, or unrelated app content.
 
 ## Code Change Rules
 
