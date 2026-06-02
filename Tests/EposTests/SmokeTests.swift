@@ -509,15 +509,15 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(files.isEmpty)
     }
 
-    func testTranscriptTimingDiagnosticsDoNotLogTranscriptText() {
+    func testTranscriptTimingDiagnosticsLogTranscriptText() {
         var diagnostics = TranscriptTimingDiagnostics()
         diagnostics.start(now: Date(timeIntervalSince1970: 100))
 
         let message = diagnostics.eventMessage(
             kind: .partial,
-            eventText: "private dictated phrase",
+            eventText: "private dictated phrase\nnext\tline",
             finalText: "private",
-            partialText: "dictated phrase",
+            partialText: "dictated phrase\nnext\tline",
             now: Date(timeIntervalSince1970: 101.234)
         )
 
@@ -525,13 +525,50 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(message.contains("seq=1"))
         XCTAssertTrue(message.contains("kind=partial"))
         XCTAssertTrue(message.contains("elapsedMs=1234"))
-        XCTAssertTrue(message.contains("eventChars=23"))
+        XCTAssertTrue(message.contains("eventChars=33"))
         XCTAssertTrue(message.contains("finalChars=7"))
-        XCTAssertTrue(message.contains("partialChars=15"))
-        XCTAssertTrue(message.contains("displayChars=22"))
-        XCTAssertFalse(message.contains("private"))
-        XCTAssertFalse(message.contains("dictated"))
-        XCTAssertFalse(message.contains("phrase"))
+        XCTAssertTrue(message.contains("partialChars=25"))
+        XCTAssertTrue(message.contains("displayChars=32"))
+        XCTAssertTrue(message.contains(#"eventText="private dictated phrase\nnext\tline""#))
+        XCTAssertTrue(message.contains(#"finalText="private""#))
+        XCTAssertTrue(message.contains(#"partialText="dictated phrase\nnext\tline""#))
+        XCTAssertTrue(message.contains(#"displayText="privatedictated phrase\nnext\tline""#))
+    }
+
+    @MainActor
+    func testCoordinatorTranscriptTimingLogIncludesRawTranscriptText() throws {
+        let directory = try makeTemporaryDirectory()
+        let sink = DiagnosticLogSink(
+            configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
+            directory: directory
+        )
+        let coordinator = AppCoordinator(
+            textInsertion: RecordingTextInsertionBackend(),
+            diagnostics: sink,
+            autoStart: false
+        )
+
+        coordinator.handlePartialTranscript("raw partial\nnext\tline")
+        coordinator.logTranscriptTiming(kind: .partial, eventText: "raw partial\nnext\tline")
+        coordinator.handleFinalTranscriptSegment("raw final")
+        coordinator.logTranscriptTiming(kind: .final, eventText: "raw final")
+        sink.flush()
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(files.count, 1)
+        let contents = try String(contentsOf: files[0], encoding: .utf8)
+        XCTAssertTrue(contents.contains("\tinfo\tcoordinator\ttranscript timing seq=1 kind=partial"))
+        XCTAssertTrue(contents.contains(#"eventText="raw partial\nnext\tline""#))
+        XCTAssertTrue(contents.contains(#"partialText="raw partial\nnext\tline""#))
+        XCTAssertTrue(contents.contains(#"displayText="raw partial\nnext\tline""#))
+        XCTAssertTrue(contents.contains("\tinfo\tcoordinator\ttranscript timing seq=2 kind=final"))
+        XCTAssertTrue(contents.contains(#"eventText="raw final""#))
+        XCTAssertTrue(contents.contains(#"finalText="raw final""#))
+        XCTAssertTrue(contents.contains(#"partialText="""#))
+        XCTAssertTrue(contents.contains(#"displayText="raw final""#))
     }
 
     func testDogfoodTapDiscardsRecordingWhenTranscriptIsEmpty() throws {

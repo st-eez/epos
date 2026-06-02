@@ -44,7 +44,7 @@ public final class AppCoordinator: ObservableObject {
     public let corrections = CorrectionStore()
     // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
-    private let log = EposLogger(category: "coordinator")
+    private let log: EposLogger
     private var transcriptTiming = TranscriptTimingDiagnostics()
 
     private var transcriptionTask: Task<Void, Never>?
@@ -73,12 +73,14 @@ public final class AppCoordinator: ObservableObject {
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         settings: Settings = Settings.load(),
         polishEngine: any PolishEngine = FoundationModelsPolishEngine(),
+        diagnostics: DiagnosticLogSink = .shared,
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
         self.audio = audio
         self.textInsertion = textInsertion
         self.polishEngine = polishEngine
+        self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -357,9 +359,9 @@ public final class AppCoordinator: ObservableObject {
         ))
     }
 
-    /// Privacy-safe observability for the polish stage: character counts only,
-    /// never transcript text. Reads the policy's own `PolishOutcome` so the log
-    /// can't drift from the decision the polisher actually made.
+    /// Local dogfood observability for the polish stage. Reads the policy's own
+    /// `PolishOutcome` so the log can't drift from the decision the polisher
+    /// actually made.
     private func logPolishOutcome(outcome: PolishOutcome, polishedCount: Int, rawCount: Int, elapsedMs: Int) {
         switch outcome {
         case .disabled:

@@ -39,11 +39,19 @@ struct TranscriptTimingDiagnostics {
             "eventChars=\(Self.characterCount(eventText))",
             "finalChars=\(finalChars)",
             "partialChars=\(partialChars)",
-            "displayChars=\(finalChars + partialChars)"
+            "displayChars=\(finalChars + partialChars)",
+            "eventText=\(Self.quoted(eventText))",
+            "finalText=\(Self.quoted(finalText))",
+            "partialText=\(Self.quoted(partialText))",
+            "displayText=\(Self.quoted(finalText + partialText))"
         ].joined(separator: " ")
     }
 
     private static func characterCount(_ text: String) -> Int {
         text.utf16.count
+    }
+
+    private static func quoted(_ text: String) -> String {
+        String(reflecting: text)
     }
 }
