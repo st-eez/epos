@@ -52,7 +52,11 @@ public final class ProgressiveTranscriptInsertionSession {
     /// the field matches the recognizer's final text for the segment exactly.
     public func acceptFinalTranscript(_ text: String) {
         guard !didFinish else { return }
-        reconcile(to: canonicalize(text))
+        // Raw per-segment finals are authoritative and only grow across a recording,
+        // so under the append-only latch they take the loss-proof append (see
+        // `reconcile`): the user's dictated words must never be silently dropped, even
+        // when the recognizer re-cased/punctuated the prefix we already typed.
+        reconcile(to: canonicalize(text), lossProofAppend: true)
     }
 
     /// Reconcile to the already-canonicalized, already-guard-validated final
@@ -101,7 +105,7 @@ public final class ProgressiveTranscriptInsertionSession {
     }
 
     @discardableResult
-    private func reconcile(to newTarget: String) -> Bool {
+    private func reconcile(to newTarget: String, lossProofAppend: Bool = false) -> Bool {
         guard newTarget != committedText else { return false }
 
         if !didCaptureBaseline {
@@ -144,13 +148,34 @@ public final class ProgressiveTranscriptInsertionSession {
             }
         }
 
-        // Append-only: never delete, only type the genuinely new tail past what we
-        // last committed, so we can't corrupt the field's own edits.
+        // Append-only: never delete, only type new tail past what we last committed,
+        // so we can't corrupt the field's own edits. WHICH tail depends on the source:
+        //
+        // - A raw final (`lossProofAppend`) is the recognizer's authoritative,
+        //   only-growing end-state. Append everything past `committedText`'s LENGTH so
+        //   the dictated words always land — even when the recognizer re-cased or
+        //   punctuated the prefix we already typed, breaking a byte-prefix match (the
+        //   bug that silently froze append-only and dropped the rest of the dictation).
+        //   Slicing by length, not by common prefix, makes successive finals advance
+        //   monotonically instead of re-anchoring and stacking a duplicated graft. The
+        //   cost is a bounded seam glitch (≤ the prefix's casing/punctuation length
+        //   drift) plus a leading-case nit we can't delete away — recoverable, unlike
+        //   lost words.
+        // - A volatile partial or the polished rewrite stays conservative: it appends
+        //   only a clean prefix-extension. Partials flicker (a lateral revision would
+        //   graft garbage), and a polish that doesn't extend the commit must stay
+        //   suppressible.
         if appendOnly {
             deleteCount = 0
-            insertion = newTarget.hasPrefix(committedText)
-                ? String(newTarget.dropFirst(committedText.count))
-                : ""
+            if lossProofAppend {
+                insertion = newTarget.count > committedText.count
+                    ? String(newTarget.dropFirst(committedText.count))
+                    : ""
+            } else {
+                insertion = newTarget.hasPrefix(committedText)
+                    ? String(newTarget.dropFirst(committedText.count))
+                    : ""
+            }
         }
 
         let applied = deleteCount > 0 || !insertion.isEmpty

@@ -204,6 +204,71 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
+    func testAppendOnlyRawFinalRecoversReCasedExtensionInsteadOfFreezing() {
+        // Regression for silent data loss: a lowercase partial latched append-only,
+        // then the recognizer's authoritative final re-cased the already-typed prefix
+        // ("hello ..." -> "Hello ...") AND extended it. The byte-prefix gate saw no
+        // clean prefix-extension and froze, dropping the entire tail of the dictation
+        // ("bar baz qux" here; the full clause in production). A raw final is loss-proof:
+        // it appends everything past what we already typed, so the words always land.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello world foo")
+        // A divergent value read on the next guarded delete latches append-only.
+        observer.value = ""
+        session.acceptPartialTranscript("hello world")
+        // Authoritative final re-cases the prefix (H) and extends past the commit.
+        session.acceptFinalTranscript("Hello world foo bar baz qux")
+        session.finish()
+
+        // Pre-fix the byte-prefix gate froze at "hello world foo" and dropped the tail.
+        // Casing of the already-typed prefix can't be fixed under the latch (no delete),
+        // but the new words must land.
+        XCTAssertEqual(backend.fieldText, "hello world foo bar baz qux")
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
+    }
+
+    func testAppendOnlyRawFinalsAdvanceByLengthWithoutStackingAcrossFinals() {
+        // Locks the loss-proof append to slice by COMMITTED LENGTH, not common prefix.
+        // A common-prefix slice re-anchors at the low divergence point on every final
+        // ("the door" vs "The door" share nothing at char 0), grafting and then STACKING
+        // a duplicate across successive finals ("the doorThe doorThe door is open").
+        // Slicing by length advances monotonically: one bounded seam, no stacking.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("the door")
+        observer.value = ""
+        session.acceptPartialTranscript("the do") // revision -> guarded delete -> latch
+        // Two finals: the first re-cases the prefix (same length, nothing to append),
+        // the second extends. Neither byte-prefix-matches the committed lowercase text.
+        session.acceptFinalTranscript("The door")
+        session.acceptFinalTranscript("The door is open")
+        session.finish()
+
+        XCTAssertEqual(backend.fieldText, "the door is open")
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
+    }
+
     func testOpaqueAppEmptyReadStillSelfCorrects() {
         // Apps that expose no editable text via Accessibility (web/Electron
         // terminals like cmux) report an empty value regardless of content and
@@ -238,10 +303,18 @@ final class InsertionTargetGuardTests: XCTestCase {
     }
 
     func testTextExposingFieldEmptyReadLatchesAppendOnlyAndNeverDeletes() {
-        // A native field that HAS shown real text this session (exposesText true)
-        // but now reads empty has genuinely diverged — its content vanished. An
-        // empty read here is divergence, not noise, so the session must latch
-        // append-only and never blind-backspace into content that isn't ours.
+        // A native field that HAS shown real text this session (exposesText true) but
+        // now reads empty has diverged — its content vanished. The session must latch
+        // append-only and NEVER blind-backspace into content that isn't ours.
+        //
+        // It must also never silently FREEZE. A raw final is loss-proof, so it appends
+        // its tail past the committed length even here. With a replacement final ("the
+        // door" -> "the window") that yields a bounded seam glitch ("the doorow") rather
+        // than a clean retype — a delete we're forbidden to make under the latch. That
+        // is the deliberate trade that stops a long extension final from being dropped
+        // wholesale (the real data-loss bug). The volatile partial stays conservative
+        // (it could be a flickering lateral revision), so it appends nothing; only the
+        // authoritative final appends.
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
@@ -262,7 +335,9 @@ final class InsertionTargetGuardTests: XCTestCase {
             backend.operations.contains { if case .delete = $0 { true } else { false } },
             "empty read from a text-exposing field must not trigger a blind delete"
         )
-        XCTAssertEqual(backend.operations, [.insert("the door")])
+        // Partial appends nothing (conservative); the raw final appends its positional
+        // tail past the 8-char commit — "the window".dropFirst(8) == "ow".
+        XCTAssertEqual(backend.operations, [.insert("the door"), .insert("ow")])
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
