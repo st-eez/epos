@@ -20,6 +20,16 @@ final class PolishVocabularyTests: XCTestCase {
         }
     }
 
+    func testPromptDoesNotLicenseAmbiguousDeletionBeyondTheGuard() {
+        let prompt = FoundationModelsPolishEngine.makeInstructions(knownTerms: []).lowercased()
+
+        XCTAssertTrue(prompt.contains("do not remove meaningful words"))
+        XCTAssertTrue(prompt.contains("bare \"so\" or \"like\" without a comma must stay"))
+        XCTAssertTrue(prompt.contains("the only words you may remove are the exact"))
+        XCTAssertTrue(prompt.contains("\"you know\""))
+        XCTAssertTrue(prompt.contains("\"i mean\""))
+    }
+
     func testKnownTermsLineIsAppendedOnlyWhenTermsExist() {
         XCTAssertFalse(FoundationModelsPolishEngine.makeInstructions(knownTerms: []).contains("Known project terms"))
         XCTAssertTrue(

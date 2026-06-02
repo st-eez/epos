@@ -27,10 +27,9 @@ public enum PolishVocabulary {
     /// does NOT name them: each has a common content use ("what kind of car",
     /// "explain what I mean", "sort of works") the guard cannot tell from a verbal
     /// tic, so it keeps them (a false reject is harmless; a false drop alters
-    /// meaning). Retained only as the residual-filler signal for the offline polish
-    /// quality eval (`PolishEvalTests`); do NOT re-wire it into the guard's
-    /// drop-on-mismatch arm — that reopens the meaning-change hole this set used to
-    /// have.
+    /// meaning). Retained as documentation of intentionally ambiguous phrases; do
+    /// NOT re-wire it into the guard's drop-on-mismatch arm — that reopens the
+    /// meaning-change hole this set used to have.
     public static let fillerPhrases: [[String]] = [
         ["you", "know"],
         ["i", "mean"],

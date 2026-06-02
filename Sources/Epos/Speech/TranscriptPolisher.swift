@@ -67,6 +67,7 @@ public enum PolishOutcome: Sendable, Equatable {
     case tooLong
     case sameText
     case guardRejected
+    case deterministicCleanup
     case engineFailed
     case abandoned
     case suppressedByInsertion
@@ -166,15 +167,28 @@ public struct TranscriptPolisher: Sendable {
         let canonicalRaw = canonicalize(raw)
         let rawCount = canonicalRaw.count
         guard enabled else { return PolishResult(text: canonicalRaw, outcome: .disabled, rawCharacterCount: rawCount) }
-        guard engine.isAvailable else { return PolishResult(text: canonicalRaw, outcome: .unavailable, rawCharacterCount: rawCount) }
+        let deterministicCleanup = self.deterministicCleanup(canonicalRaw: canonicalRaw, rawCount: rawCount)
+        guard engine.isAvailable else {
+            return deterministicCleanup
+                ?? PolishResult(text: canonicalRaw, outcome: .unavailable, rawCharacterCount: rawCount)
+        }
         switch await enginePolishAttempt(raw) {
         case .success(let polished):
             let candidate = canonicalize(polished)
             guard candidate != canonicalRaw else {
-                return PolishResult(text: canonicalRaw, outcome: .sameText, rawCharacterCount: rawCount)
+                return deterministicCleanup
+                    ?? PolishResult(text: canonicalRaw, outcome: .sameText, rawCharacterCount: rawCount)
             }
             let retention = Self.polishRetentionEvaluation(raw: canonicalRaw, polished: candidate)
             guard retention.retainsContent else {
+                if let deterministicCleanup {
+                    return PolishResult(
+                        text: deterministicCleanup.text,
+                        outcome: .deterministicCleanup,
+                        rawCharacterCount: rawCount,
+                        guardRejection: retention.rejection
+                    )
+                }
                 return PolishResult(
                     text: canonicalRaw,
                     outcome: .guardRejected,
@@ -184,13 +198,16 @@ public struct TranscriptPolisher: Sendable {
             }
             return PolishResult(text: candidate, outcome: .applied, rawCharacterCount: rawCount)
         case .failed:
-            return PolishResult(text: canonicalRaw, outcome: .engineFailed, rawCharacterCount: rawCount)
+            return deterministicCleanup
+                ?? PolishResult(text: canonicalRaw, outcome: .engineFailed, rawCharacterCount: rawCount)
         case .abandoned:
             return PolishResult(text: canonicalRaw, outcome: .abandoned, rawCharacterCount: rawCount)
         case .tooLong:
-            return PolishResult(text: canonicalRaw, outcome: .tooLong, rawCharacterCount: rawCount)
+            return deterministicCleanup
+                ?? PolishResult(text: canonicalRaw, outcome: .tooLong, rawCharacterCount: rawCount)
         case .timedOut:
-            return PolishResult(text: canonicalRaw, outcome: .timedOut, rawCharacterCount: rawCount)
+            return deterministicCleanup
+                ?? PolishResult(text: canonicalRaw, outcome: .timedOut, rawCharacterCount: rawCount)
         }
     }
 
@@ -198,7 +215,9 @@ public struct TranscriptPolisher: Sendable {
     /// keystrokes actually landed (the append-only latch suppressed the retype),
     /// so observability never claims a polish the user didn't receive.
     public static func effectivePolishOutcome(_ result: PolishResult, applied: Bool) -> PolishOutcome {
-        (result.outcome == .applied && !applied) ? .suppressedByInsertion : result.outcome
+        ((result.outcome == .applied || result.outcome == .deterministicCleanup) && !applied)
+            ? .suppressedByInsertion
+            : result.outcome
     }
 
     /// Hint the engine to load the model so the first real polish is faster. A
@@ -214,6 +233,13 @@ public struct TranscriptPolisher: Sendable {
     /// prior polish (which may still be decoding for up to the timeout).
     public func abandonInFlightPolish() {
         inFlightAbandon.trigger()
+    }
+
+    private func deterministicCleanup(canonicalRaw: String, rawCount: Int) -> PolishResult? {
+        let cleaned = TranscriptDeterministicCleaner.clean(canonicalRaw)
+        guard cleaned != canonicalRaw else { return nil }
+        guard Self.polishRetainsContent(raw: canonicalRaw, polished: cleaned) else { return nil }
+        return PolishResult(text: cleaned, outcome: .deterministicCleanup, rawCharacterCount: rawCount)
     }
 
     private func enginePolishAttempt(_ raw: String) async -> EnginePolishAttempt {

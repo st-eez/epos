@@ -115,6 +115,21 @@ final class TranscriptPolisherTests: XCTestCase {
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1.5)
     }
 
+    func testAbandonDoesNotApplyDeterministicCleanupFromPriorRecording() async {
+        let engine = FakePolishEngine(result: "polished output", delayNanoseconds: 2_000_000_000)
+        let polisher = TranscriptPolisher(
+            enabled: true,
+            engine: engine,
+            timeoutNanoseconds: 10_000_000_000
+        )
+        polisher.abandonInFlightPolish()
+
+        let result = await polisher.polish("hello uh world")
+
+        XCTAssertEqual(result.text, "hello uh world")
+        XCTAssertEqual(result.outcome, .abandoned)
+    }
+
     func testPolishReturnsRawWhenOutputFailsRetentionGuard() async {
         // The engine over-compressed a multi-clause command to a trailing
         // fragment; the retention guard must reject it and keep the raw words.
@@ -164,6 +179,41 @@ final class TranscriptPolisherTests: XCTestCase {
         XCTAssertEqual(result.text, "I think we should ship the feature.")
         XCTAssertEqual(result.outcome, .applied)
         XCTAssertEqual(engine.polishCallCount, 1)
+    }
+
+    func testDeterministicCleanupAppliesWhenModelOverDeletes() async {
+        let raw = "um so like we should uh ship it you know"
+        let engine = FakePolishEngine(result: "we should ship it")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+
+        let result = await polisher.polish(raw)
+
+        XCTAssertEqual(result.text, "so like we should ship it you know")
+        XCTAssertEqual(result.outcome, .deterministicCleanup)
+        XCTAssertEqual(result.guardRejection?.reason, .contentTokensChanged)
+        XCTAssertEqual(engine.polishCallCount, 1)
+    }
+
+    func testDeterministicCleanupRunsWhenEngineUnavailable() async {
+        let engine = FakePolishEngine(isAvailable: false, result: "ignored")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+
+        let result = await polisher.polish("hello uh world")
+
+        XCTAssertEqual(result.text, "hello world")
+        XCTAssertEqual(result.outcome, .deterministicCleanup)
+        XCTAssertEqual(engine.polishCallCount, 0)
+    }
+
+    func testDeterministicCleanupMustPassRetentionGuardBeforeUse() async {
+        let engine = FakePolishEngine(isAvailable: false, result: "ignored")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+
+        let result = await polisher.polish(", hello uh")
+
+        XCTAssertEqual(result.text, ", hello uh")
+        XCTAssertEqual(result.outcome, .unavailable)
+        XCTAssertEqual(engine.polishCallCount, 0)
     }
 
     func testPolishReturnsRawForEmptyInputWithoutCallingEngine() async {
@@ -295,6 +345,16 @@ final class TranscriptPolisherTests: XCTestCase {
         let applied = PolishResult(text: "polished", outcome: .applied, rawCharacterCount: 8)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: false), .suppressedByInsertion)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: true), .applied)
+
+        let deterministic = PolishResult(text: "cleaned", outcome: .deterministicCleanup, rawCharacterCount: 10)
+        XCTAssertEqual(
+            TranscriptPolisher.effectivePolishOutcome(deterministic, applied: false),
+            .suppressedByInsertion
+        )
+        XCTAssertEqual(
+            TranscriptPolisher.effectivePolishOutcome(deterministic, applied: true),
+            .deterministicCleanup
+        )
 
         let timedOut = PolishResult(text: "raw", outcome: .timedOut, rawCharacterCount: 3)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(timedOut, applied: false), .timedOut)

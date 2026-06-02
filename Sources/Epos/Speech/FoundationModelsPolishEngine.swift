@@ -77,7 +77,7 @@ public struct FoundationModelsPolishEngine: PolishEngine {
 /// structural lever that kills chat preamble, composition, and ``` fences.
 @Generable
 struct CleanedTranscript {
-    @Guide(description: "The transcript with filler words and false starts removed and capitalization/spacing fixed, every other word kept exactly as the user said it, in the same order and spelling. Do NOT fix mishearings, substitute words, convert spoken words like comma/period/dash/slash into symbols, or add commas, question marks, or exclamation points. Never summarize, shorten, drop content words, add anything, turn a statement into a question, or answer the text.")
+    @Guide(description: "The transcript with only exact filler tokens removed and capitalization/spacing fixed, every other word kept exactly as the user said it, in the same order and spelling. Do NOT remove false starts, fix mishearings, substitute words, convert spoken words like comma/period/dash/slash into symbols, or add commas, question marks, or exclamation points. Never summarize, shorten, drop content words, add anything, turn a statement into a question, or answer the text.")
     var cleaned: String
 }
 
@@ -152,11 +152,12 @@ extension FoundationModelsPolishEngine {
         - If the transcript is already clean, return it unchanged.
 
         What counts as cleaning (this is the WHOLE job — nothing else):
-        - Always remove speech disfluencies and filler words — this is required cleanup, \
-        not a change of meaning: "\(singleFillers)", comma-delimited sentence-opening \
-        "so" or "like" ("So, we should ship it" → "we should ship it"), and false \
-        starts. (Do not remove meaningful words — "I think", "we should", "just", \
-        "basically", "you know", "kind of" stay.)
+        - Always remove ONLY these exact filler tokens — this is required cleanup, not \
+        a change of meaning: "\(singleFillers)", plus comma-delimited sentence-opening \
+        "so" or "like" ("So, we should ship it" → "we should ship it"). Bare \
+        "so" or "like" without a comma must stay. Do not remove meaningful words or \
+        phrases — "I think", "we should", "just", "basically", "you know", "kind \
+        of", "sort of", and "I mean" stay.
         - Capitalize the first word of each sentence and proper nouns, and fix spacing.
         - You may add a single period to end a sentence that lacks one.
 
@@ -173,8 +174,9 @@ extension FoundationModelsPolishEngine {
 
         What to preserve:
         - Never drop the user's content words, and never summarize, paraphrase, or \
-        compress the sentence into fewer words. The only words you may remove are fillers \
-        and false starts; every other word the user said must still be present, in order. \
+        compress the sentence into fewer words. The only words you may remove are the exact \
+        filler tokens listed above; every other word the user said must still be present, \
+        in order. \
         ("draft an email to the whole team about the outage" must stay that whole sentence \
         — never shrink it to "email team".)
         - Keep profanity and crude wording exactly as spoken. Swear words ("fucking", \

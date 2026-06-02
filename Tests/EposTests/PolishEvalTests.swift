@@ -14,13 +14,13 @@ import XCTest
 ///   EPOS_RUN_POLISH_EVAL=1 swift test --filter PolishEvalTests
 ///
 /// Prints a per-row raw→outcome→output table plus a summary, and writes
-/// `.build/evals/polish-eval.jsonl`. Tune against two numbers: `retainedFiller`
-/// should trend to 0 (polish is doing its job) and there must be ZERO meaning
-/// changes on inspection (the safety bar). Refreshing the real-clip transcripts
-/// after recording new audio uses the `LLMPolishProbe` harness — a local-only,
-/// gitignored probe project NOT present in a fresh checkout: where it exists, run
-/// `swift run LLMPolishProbe --transcribe-only` and paste the raw lines into
-/// `realClipTranscripts`.
+/// `.build/evals/polish-eval.jsonl` with guard rejection candidate text and diffs.
+/// Tune against two numbers: retained filler in the output should trend to 0
+/// (polish is doing its job) and there must be ZERO meaning changes on inspection
+/// (the safety bar). Refreshing the real-clip transcripts after recording new audio
+/// uses the `LLMPolishProbe` harness — a local-only, gitignored probe project NOT
+/// present in a fresh checkout: where it exists, run `swift run LLMPolishProbe
+/// --transcribe-only` and paste the raw lines into `realClipTranscripts`.
 final class PolishEvalTests: XCTestCase {
     /// Transcripts of the saved clips in ~/Library/Caches/Epos/recordings, as
     /// re-transcribed by the production preset (see the probe). Clean, filler-free
@@ -70,14 +70,25 @@ final class PolishEvalTests: XCTestCase {
         var rows: [PolishEvalRow] = []
         for (label, corpus) in [("real", Self.realClipTranscripts), ("stress", Self.stressTranscripts)] {
             for raw in corpus {
+                let canonicalizedRaw = canonicalizer.canonicalize(raw)
                 let result = await polisher.polish(raw)
                 rows.append(PolishEvalRow(
                     set: label,
                     raw: raw,
+                    canonicalizedRaw: canonicalizedRaw,
                     output: result.text,
                     outcome: String(describing: result.outcome),
-                    changed: result.text != raw,
-                    retainedFiller: PolishEvalScoring.retainsFiller(result.text)
+                    rawChangedByCanonicalizer: canonicalizedRaw != raw,
+                    outputChangedFromRaw: result.text != raw,
+                    outputChangedFromCanonicalizedRaw: result.text != canonicalizedRaw,
+                    retainedFillerInRaw: PolishEvalScoring.retainsFiller(raw),
+                    retainedFillerInOutput: PolishEvalScoring.retainsFiller(result.text),
+                    rawCharacterCount: result.rawCharacterCount,
+                    outputCharacterCount: result.text.count,
+                    guardRejectionReason: result.guardRejection?.reason.rawValue,
+                    guardRejectionCandidate: result.guardRejection?.candidateText,
+                    guardRejectionCandidateCharacterCount: result.guardRejection?.candidateCharacterCount,
+                    guardRejectionDiff: result.guardRejection?.diff
                 ))
             }
         }
@@ -89,16 +100,57 @@ final class PolishEvalTests: XCTestCase {
     private static func report(_ rows: [PolishEvalRow]) -> String {
         var lines = ["", "════════ Polish eval ════════"]
         for row in rows {
-            lines.append("[\(row.set)] <\(row.outcome)>\(row.changed ? " CHANGED" : "")\(row.retainedFiller ? " FILLER-LEFT" : "")")
+            var tags = ["<\(row.outcome)>"]
+            if row.rawChangedByCanonicalizer { tags.append("CANON") }
+            if row.outputChangedFromCanonicalizedRaw { tags.append("POLISHED") }
+            if row.retainedFillerInOutput { tags.append("FILLER-LEFT") }
+            lines.append("[\(row.set)] \(tags.joined(separator: " "))")
             lines.append("  raw: \(row.raw)")
+            if row.rawChangedByCanonicalizer {
+                lines.append("  can: \(row.canonicalizedRaw)")
+            }
             lines.append("  out: \(row.output)")
+            if let candidate = row.guardRejectionCandidate {
+                lines.append("  candidate: \(candidate)")
+            }
+            if let reason = row.guardRejectionReason, let diff = row.guardRejectionDiff {
+                lines.append("  rejection: \(reason) \(diff)")
+            }
         }
         let applied = rows.filter { $0.outcome == "applied" }.count
-        let fillerLeft = rows.filter { $0.retainedFiller }.count
+        let canonicalizerChanged = rows.filter(\.rawChangedByCanonicalizer).count
+        let polishChanged = rows.filter(\.outputChangedFromCanonicalizedRaw).count
+        let retainedFillerRaw = rows.filter(\.retainedFillerInRaw).count
+        let retainedFillerOutput = rows.filter(\.retainedFillerInOutput).count
         lines.append("")
-        lines.append("rows: \(rows.count)  applied: \(applied)  retainedFiller: \(fillerLeft)")
+        lines.append("rows: \(rows.count)  applied: \(applied)")
+        lines.append("canonicalizer changed raw: \(canonicalizerChanged)")
+        lines.append("polish changed canonicalized raw: \(polishChanged)")
+        lines.append("retained filler raw/output: \(retainedFillerRaw)/\(retainedFillerOutput)")
+        lines.append("outcomes: \(outcomeSummary(rows))")
+        lines.append("guard rejections: \(guardRejectionSummary(rows))")
         lines.append("(inspect every row for meaning changes — that is the safety bar; retainedFiller is the quality miss count)")
         return lines.joined(separator: "\n")
+    }
+
+    private static func outcomeSummary(_ rows: [PolishEvalRow]) -> String {
+        rows
+            .reduce(into: [String: Int]()) { counts, row in counts[row.outcome, default: 0] += 1 }
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ", ")
+    }
+
+    private static func guardRejectionSummary(_ rows: [PolishEvalRow]) -> String {
+        let counts = rows.reduce(into: [String: Int]()) { counts, row in
+            guard let reason = row.guardRejectionReason else { return }
+            counts[reason, default: 0] += 1
+        }
+        guard !counts.isEmpty else { return "none" }
+        return counts
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ", ")
     }
 
     private static func writeJSONL(_ rows: [PolishEvalRow]) throws {
@@ -115,8 +167,18 @@ final class PolishEvalTests: XCTestCase {
 private struct PolishEvalRow: Codable {
     let set: String
     let raw: String
+    let canonicalizedRaw: String
     let output: String
     let outcome: String
-    let changed: Bool
-    let retainedFiller: Bool
+    let rawChangedByCanonicalizer: Bool
+    let outputChangedFromRaw: Bool
+    let outputChangedFromCanonicalizedRaw: Bool
+    let retainedFillerInRaw: Bool
+    let retainedFillerInOutput: Bool
+    let rawCharacterCount: Int
+    let outputCharacterCount: Int
+    let guardRejectionReason: String?
+    let guardRejectionCandidate: String?
+    let guardRejectionCandidateCharacterCount: Int?
+    let guardRejectionDiff: String?
 }

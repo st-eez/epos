@@ -164,13 +164,7 @@ enum SavedRecordingEvalSupport {
 enum PolishEvalScoring {
     static func retainsFiller(_ text: String) -> Bool {
         let words = text.lowercased().split { !$0.isLetter }.map(String.init)
-        let wordSet = Set(words)
-        if !PolishVocabulary.singleFillers.isDisjoint(with: wordSet) { return true }
-        return PolishVocabulary.fillerPhrases.contains { phrase in
-            guard let first = phrase.first, let start = words.firstIndex(of: first) else { return false }
-            return start + phrase.count <= words.count
-                && Array(words[start..<(start + phrase.count)]) == phrase
-        }
+        return !PolishVocabulary.singleFillers.isDisjoint(with: Set(words))
     }
 }
 

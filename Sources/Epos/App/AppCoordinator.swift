@@ -402,6 +402,13 @@ public final class AppCoordinator: ObservableObject {
                 "polish rejected: retention guard " +
                     "(rawText=\(String(reflecting: rawText)) \(detail) rawChars=\(rawCount) elapsedMs=\(elapsedMs))"
             )
+        case .deterministicCleanup:
+            let rejectionDetail = guardRejection.map { " guardRejected=\($0.logDescription)" } ?? ""
+            log.info(
+                "polish deterministic cleanup applied " +
+                    "(rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
+                    rejectionDetail
+            )
         case .engineFailed:
             log.info("polish fallback: engine failed (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .abandoned:
