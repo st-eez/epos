@@ -12,17 +12,105 @@ public struct DiagnosticLogConfiguration: Equatable, Sendable {
     public var enabled: Bool
     public var maxFileBytes: UInt64
     public var maxFileCount: Int
+    public var maxMessageCharacters: Int
 
-    public init(enabled: Bool = true, maxFileBytes: UInt64 = 1_000_000, maxFileCount: Int = 7) {
+    public init(
+        enabled: Bool = true,
+        maxFileBytes: UInt64 = 10_000_000,
+        maxFileCount: Int = 14,
+        maxMessageCharacters: Int = 20_000
+    ) {
         self.enabled = enabled
         self.maxFileBytes = maxFileBytes
         self.maxFileCount = maxFileCount
+        self.maxMessageCharacters = maxMessageCharacters
     }
 
     public static func load(
         from environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> DiagnosticLogConfiguration {
-        DiagnosticLogConfiguration(enabled: environment["EPOS_DIAGNOSTIC_LOGS"] != "0")
+        DiagnosticLogConfiguration(
+            enabled: environment["EPOS_DIAGNOSTIC_LOGS"] != "0",
+            maxFileBytes: positiveUInt64(
+                environment["EPOS_DIAGNOSTIC_MAX_FILE_BYTES"],
+                defaultValue: 10_000_000
+            ),
+            maxFileCount: positiveInt(
+                environment["EPOS_DIAGNOSTIC_MAX_FILE_COUNT"],
+                defaultValue: 14
+            ),
+            maxMessageCharacters: positiveInt(
+                environment["EPOS_DIAGNOSTIC_MAX_MESSAGE_CHARS"],
+                defaultValue: 20_000
+            )
+        )
+    }
+
+    private static func positiveUInt64(_ raw: String?, defaultValue: UInt64) -> UInt64 {
+        guard let raw, let value = UInt64(raw), value > 0 else { return defaultValue }
+        return value
+    }
+
+    private static func positiveInt(_ raw: String?, defaultValue: Int) -> Int {
+        guard let raw, let value = Int(raw), value > 0 else { return defaultValue }
+        return value
+    }
+}
+
+final class RecordingLogContextStorage: @unchecked Sendable {
+    private let lock = NSLock()
+    private var activeRecordingID: String?
+
+    func activate(_ recordingID: String) {
+        lock.withLock {
+            activeRecordingID = recordingID
+        }
+    }
+
+    func clear(_ recordingID: String?) {
+        lock.withLock {
+            guard recordingID == nil || activeRecordingID == recordingID else { return }
+            activeRecordingID = nil
+        }
+    }
+
+    func current() -> String? {
+        lock.withLock { activeRecordingID }
+    }
+}
+
+public enum RecordingID {
+    public static func make() -> String {
+        String(UUID().uuidString.prefix(8)).lowercased()
+    }
+}
+
+enum RecordingLogContext {
+    private static let storage = RecordingLogContextStorage()
+
+    static func makeRecordingID() -> String {
+        RecordingID.make()
+    }
+
+    static func activate(_ recordingID: String) {
+        storage.activate(sanitize(recordingID))
+    }
+
+    static func clear(_ recordingID: String? = nil) {
+        storage.clear(recordingID.map(sanitize))
+    }
+
+    static var currentRecordingID: String? {
+        storage.current()
+    }
+
+    private static func sanitize(_ recordingID: String) -> String {
+        let allowed = CharacterSet.alphanumerics.union(CharacterSet(charactersIn: "-_"))
+        let scalars = recordingID.unicodeScalars.map { scalar in
+            allowed.contains(scalar) ? Character(scalar) : "_"
+        }
+        let sanitized = String(String(scalars).prefix(64))
+        return sanitized.isEmpty ? "unknown" : sanitized
     }
 }
 
@@ -140,20 +228,20 @@ public final class DiagnosticLogSink: @unchecked Sendable {
         [
             Self.timestampString(from: date),
             level.rawValue,
-            Self.sanitize(category),
-            Self.sanitize(message)
+            sanitize(category),
+            sanitize(message)
         ].joined(separator: "\t")
     }
 
-    private static func sanitize(_ text: String) -> String {
+    private func sanitize(_ text: String) -> String {
         let collapsed = text
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\t", with: " ")
-        if collapsed.count <= 2_000 {
+        if collapsed.count <= configuration.maxMessageCharacters {
             return collapsed
         }
-        return String(collapsed.prefix(2_000))
+        return String(collapsed.prefix(configuration.maxMessageCharacters))
     }
 
     private static func fileSize(_ url: URL, fileManager: FileManager) -> UInt64 {
@@ -195,27 +283,35 @@ public struct EposLogger: Sendable {
         self.diagnostics = diagnostics
     }
 
-    public func debug(_ message: @autoclosure () -> String) {
-        let text = message()
+    public func debug(_ message: @autoclosure () -> String, recordingID: String? = nil) {
+        let text = scoped(message(), recordingID: recordingID)
         system.debug("\(text, privacy: .public)")
         diagnostics.append(level: .debug, category: category, message: text)
     }
 
-    public func info(_ message: @autoclosure () -> String) {
-        let text = message()
+    public func info(_ message: @autoclosure () -> String, recordingID: String? = nil) {
+        let text = scoped(message(), recordingID: recordingID)
         system.info("\(text, privacy: .public)")
         diagnostics.append(level: .info, category: category, message: text)
     }
 
-    public func error(_ message: @autoclosure () -> String) {
-        let text = message()
+    public func error(_ message: @autoclosure () -> String, recordingID: String? = nil) {
+        let text = scoped(message(), recordingID: recordingID)
         system.error("\(text, privacy: .public)")
         diagnostics.append(level: .error, category: category, message: text)
     }
 
-    public func fault(_ message: @autoclosure () -> String) {
-        let text = message()
+    public func fault(_ message: @autoclosure () -> String, recordingID: String? = nil) {
+        let text = scoped(message(), recordingID: recordingID)
         system.fault("\(text, privacy: .public)")
         diagnostics.append(level: .fault, category: category, message: text)
+    }
+
+    private func scoped(_ message: String, recordingID: String?) -> String {
+        guard !message.hasPrefix("recordingID=") else { return message }
+        guard let recordingID = recordingID ?? RecordingLogContext.currentRecordingID else {
+            return message
+        }
+        return "recordingID=\(recordingID) \(message)"
     }
 }

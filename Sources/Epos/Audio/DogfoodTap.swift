@@ -12,6 +12,7 @@ final class DogfoodTap: @unchecked Sendable {
     private let recordingsDirectory: URL?
     private var file: AVAudioFile?
     private var fileURL: URL?
+    private var fileRecordingID: String?
 
     init(recordingsDirectory: URL? = nil) {
         self.recordingsDirectory = recordingsDirectory
@@ -21,7 +22,7 @@ final class DogfoodTap: @unchecked Sendable {
     /// it does only a cheap deep-copy of the samples here (the engine reuses
     /// `buffer` after the callback returns) and hands the copy to the write queue.
     /// Opens a new file on the first write after construction or after `stop()`.
-    func write(_ buffer: AVAudioPCMBuffer) {
+    func write(_ buffer: AVAudioPCMBuffer, recordingID: String? = nil) {
         guard buffer.frameLength > 0 else { return }
         guard let copy = Self.copy(buffer) else { return }
         // `copy` is freshly allocated and handed off exclusively to the write queue —
@@ -32,15 +33,20 @@ final class DogfoodTap: @unchecked Sendable {
             if self.file == nil {
                 guard let opened = Self.openFile(
                     format: sendableCopy.format,
-                    recordingsDirectory: self.recordingsDirectory
+                    recordingsDirectory: self.recordingsDirectory,
+                    recordingID: recordingID
                 ) else { return }
                 self.file = opened.file
                 self.fileURL = opened.url
+                self.fileRecordingID = recordingID
             }
             do {
                 try self.file?.write(from: sendableCopy)
             } catch {
-                Self.log.error("audio file write failed: \(String(describing: error))")
+                Self.log.error(
+                    "audio file write failed: \(String(describing: error))",
+                    recordingID: self.fileRecordingID ?? recordingID
+                )
             }
         }
     }
@@ -51,14 +57,19 @@ final class DogfoodTap: @unchecked Sendable {
     func stop(keeping shouldKeep: Bool = true) {
         queue.async {
             let url = self.fileURL
+            let recordingID = self.fileRecordingID
             self.file = nil
             self.fileURL = nil
+            self.fileRecordingID = nil
             if !shouldKeep, let url {
                 do {
                     try FileManager.default.removeItem(at: url)
-                    Self.log.info("discarded recording \(url.lastPathComponent)")
+                    Self.log.info("discarded recording \(url.lastPathComponent)", recordingID: recordingID)
                 } catch {
-                    Self.log.error("recording discard failed: \(String(describing: error))")
+                    Self.log.error(
+                        "recording discard failed: \(String(describing: error))",
+                        recordingID: recordingID
+                    )
                 }
             }
         }
@@ -110,7 +121,8 @@ final class DogfoodTap: @unchecked Sendable {
 
     private static func openFile(
         format: AVAudioFormat,
-        recordingsDirectory: URL?
+        recordingsDirectory: URL?,
+        recordingID: String?
     ) -> (file: AVAudioFile, url: URL)? {
         guard let dir = recordingsDirectory ?? defaultRecordingsDirectory() else {
             return nil
@@ -121,10 +133,10 @@ final class DogfoodTap: @unchecked Sendable {
         let url = dir.appendingPathComponent("\(formatter.string(from: Date())).wav")
         do {
             let file = try AVAudioFile(forWriting: url, settings: format.settings)
-            log.info("recording to \(url.lastPathComponent)")
+            log.info("recording to \(url.lastPathComponent)", recordingID: recordingID)
             return (file, url)
         } catch {
-            log.error("audio file open failed: \(String(describing: error))")
+            log.error("audio file open failed: \(String(describing: error))", recordingID: recordingID)
             return nil
         }
     }

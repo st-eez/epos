@@ -509,6 +509,72 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(files.isEmpty)
     }
 
+    func testDiagnosticLogConfigurationDefaultsAreDogfoodSized() {
+        let configuration = DiagnosticLogConfiguration.load(from: [:])
+
+        XCTAssertTrue(configuration.enabled)
+        XCTAssertEqual(configuration.maxFileBytes, 10_000_000)
+        XCTAssertEqual(configuration.maxFileCount, 14)
+        XCTAssertEqual(configuration.maxMessageCharacters, 20_000)
+    }
+
+    func testDiagnosticLogConfigurationReadsDogfoodLimitOverrides() {
+        let configuration = DiagnosticLogConfiguration.load(from: [
+            "EPOS_DIAGNOSTIC_MAX_FILE_BYTES": "123456",
+            "EPOS_DIAGNOSTIC_MAX_FILE_COUNT": "3",
+            "EPOS_DIAGNOSTIC_MAX_MESSAGE_CHARS": "4567"
+        ])
+
+        XCTAssertEqual(configuration.maxFileBytes, 123_456)
+        XCTAssertEqual(configuration.maxFileCount, 3)
+        XCTAssertEqual(configuration.maxMessageCharacters, 4_567)
+    }
+
+    func testDiagnosticLogSinkUsesConfiguredMessageLimit() throws {
+        let directory = try makeTemporaryDirectory()
+        let sink = DiagnosticLogSink(
+            configuration: .init(
+                enabled: true,
+                maxFileBytes: 100_000,
+                maxFileCount: 7,
+                maxMessageCharacters: 12
+            ),
+            directory: directory
+        )
+
+        sink.append(level: .info, category: "test", message: "abcdefghijklmnop")
+        sink.flush()
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        let contents = try String(contentsOf: files[0], encoding: .utf8)
+        XCTAssertTrue(contents.contains("\tinfo\ttest\tabcdefghijkl\n"))
+    }
+
+    func testEposLoggerPrefixesActiveRecordingID() throws {
+        RecordingLogContext.clear()
+        defer { RecordingLogContext.clear() }
+        let directory = try makeTemporaryDirectory()
+        let sink = DiagnosticLogSink(
+            configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
+            directory: directory
+        )
+        let logger = EposLogger(category: "test", diagnostics: sink)
+
+        RecordingLogContext.activate("rec-test")
+        logger.info("hello")
+        sink.flush()
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        let contents = try String(contentsOf: files[0], encoding: .utf8)
+        XCTAssertTrue(contents.contains("\tinfo\ttest\trecordingID=rec-test hello"))
+    }
+
     func testTranscriptTimingDiagnosticsLogTranscriptText() {
         var diagnostics = TranscriptTimingDiagnostics()
         diagnostics.start(now: Date(timeIntervalSince1970: 100))

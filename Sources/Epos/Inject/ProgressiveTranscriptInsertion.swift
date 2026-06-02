@@ -117,7 +117,8 @@ public final class ProgressiveTranscriptInsertionSession {
         // land safely. Stop the whole session without backspacing — cleanup
         // backspacing would itself delete the wrong characters.
         if target.focusChangedSinceStart() {
-            log.info("insertion guard: focus changed mid-session; aborting insertion")
+            let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: .focusChanged)
+            log.info("insertion guard decision \(evaluation.logFields) action=abort")
             cancel()
             return false
         }
@@ -138,14 +139,15 @@ public final class ProgressiveTranscriptInsertionSession {
                 context: context,
                 selectedRange: context == nil ? nil : target.observedSelectedRange()
             )
-            switch InsertionTargetGuard.decide(expected: committedText, observed: observation) {
+            let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
+            switch evaluation.decision {
             case .abort:
-                log.info("insertion guard: target unreadable on pre-delete check; aborting")
+                log.info("insertion guard decision \(evaluation.logFields) action=abort")
                 cancel()
                 return false
             case .stopAppendOnly:
                 appendOnly = true
-                log.info("insertion guard: on-screen text diverged; switching to append-only")
+                log.info("insertion guard decision \(evaluation.logFields) action=appendOnly")
             case .proceed:
                 break
             }

@@ -45,20 +45,25 @@ public struct PolishResult: Sendable, Equatable {
     public let rawCharacterCount: Int
 }
 
-/// Which path `TranscriptPolisher.polish` took. `unchanged` covers a model no-op,
-/// a guard rejection, and an engine throw — all keep the user's raw words.
+/// Which path `TranscriptPolisher.polish` took. Every non-`.applied` case keeps
+/// the user's raw words, but the reason stays visible for dogfood diagnostics.
 public enum PolishOutcome: Sendable, Equatable {
     case disabled
     case unavailable
     case timedOut
     case tooLong
-    case unchanged
+    case sameText
+    case guardRejected
+    case engineFailed
+    case abandoned
+    case suppressedByInsertion
     case applied
 }
 
 private enum EnginePolishAttempt: Sendable, Equatable {
     case success(String)
     case failed
+    case abandoned
     case tooLong
     case timedOut
 }
@@ -110,8 +115,7 @@ public struct TranscriptPolisher: Sendable {
 
     /// Returns the text to insert plus the path taken: `.applied` with the
     /// canonicalized polished text on the happy path, or the canonicalized raw
-    /// text with `.disabled`/`.unavailable`/`.timedOut`/`.tooLong`/`.unchanged`
-    /// (no-op, throw, or guard-fail) on every other path. Never throws.
+    /// text with a specific fallback outcome on every other path. Never throws.
     public func polish(_ raw: String) async -> PolishResult {
         guard !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             // Unreachable from the log site (`runSession` only polishes when the
@@ -119,7 +123,7 @@ public struct TranscriptPolisher: Sendable {
             // is never logged; `raw.count` is a cheap, well-defined placeholder
             // consistent with `text: raw`. Deliberately not canonicalized — running
             // `canonicalize` here would reintroduce the wasted pass this field removes.
-            return PolishResult(text: raw, outcome: .unchanged, rawCharacterCount: raw.count)
+            return PolishResult(text: raw, outcome: .sameText, rawCharacterCount: raw.count)
         }
         let canonicalRaw = canonicalize(raw)
         let rawCount = canonicalRaw.count
@@ -128,13 +132,17 @@ public struct TranscriptPolisher: Sendable {
         switch await enginePolishAttempt(raw) {
         case .success(let polished):
             let candidate = canonicalize(polished)
-            guard candidate != canonicalRaw,
-                  Self.polishRetainsContent(raw: canonicalRaw, polished: candidate) else {
-                return PolishResult(text: canonicalRaw, outcome: .unchanged, rawCharacterCount: rawCount)
+            guard candidate != canonicalRaw else {
+                return PolishResult(text: canonicalRaw, outcome: .sameText, rawCharacterCount: rawCount)
+            }
+            guard Self.polishRetainsContent(raw: canonicalRaw, polished: candidate) else {
+                return PolishResult(text: canonicalRaw, outcome: .guardRejected, rawCharacterCount: rawCount)
             }
             return PolishResult(text: candidate, outcome: .applied, rawCharacterCount: rawCount)
         case .failed:
-            return PolishResult(text: canonicalRaw, outcome: .unchanged, rawCharacterCount: rawCount)
+            return PolishResult(text: canonicalRaw, outcome: .engineFailed, rawCharacterCount: rawCount)
+        case .abandoned:
+            return PolishResult(text: canonicalRaw, outcome: .abandoned, rawCharacterCount: rawCount)
         case .tooLong:
             return PolishResult(text: canonicalRaw, outcome: .tooLong, rawCharacterCount: rawCount)
         case .timedOut:
@@ -142,12 +150,11 @@ public struct TranscriptPolisher: Sendable {
         }
     }
 
-    /// Downgrade a `.applied` outcome to `.unchanged` when the insertion layer
-    /// reports that no keystrokes actually landed (the append-only latch
-    /// suppressed the retype), so observability never claims a polish the user
-    /// didn't receive.
+    /// Downgrade a `.applied` outcome when the insertion layer reports that no
+    /// keystrokes actually landed (the append-only latch suppressed the retype),
+    /// so observability never claims a polish the user didn't receive.
     public static func effectivePolishOutcome(_ result: PolishResult, applied: Bool) -> PolishOutcome {
-        (result.outcome == .applied && !applied) ? .unchanged : result.outcome
+        (result.outcome == .applied && !applied) ? .suppressedByInsertion : result.outcome
     }
 
     /// Hint the engine to load the model so the first real polish is faster. A
@@ -198,9 +205,8 @@ public struct TranscriptPolisher: Sendable {
             try? await Task.sleep(nanoseconds: timeoutNanoseconds)
             resolver.resolve(.timedOut)
         }
-        // An abandon (a re-press during finalize) gives up promptly with the raw text;
-        // `.failed` surfaces as the `.unchanged` (kept-raw) outcome.
-        inFlightAbandon.arm { resolver.resolve(.failed) }
+        // An abandon (a re-press during finalize) gives up promptly with the raw text.
+        inFlightAbandon.arm { resolver.resolve(.abandoned) }
 
         let result = await resolver.value()
 

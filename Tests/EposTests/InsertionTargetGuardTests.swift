@@ -176,6 +176,51 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
+    func testEvaluationExplainsCaretMismatchWithoutRawFieldText() {
+        let context = InsertionTargetContext(prefix: "hello ", suffix: " world")
+        let evaluation = InsertionTargetGuard.evaluate(
+            expected: "cot",
+            observed: .positionedValue(
+                "hello cot world",
+                context: context,
+                selectedRange: InsertionTargetTextRange(location: 0, length: 0)
+            )
+        )
+
+        XCTAssertEqual(evaluation.decision, .abort)
+        XCTAssertEqual(evaluation.reason, "caretMismatch")
+        XCTAssertEqual(evaluation.expectedChars, 3)
+        XCTAssertEqual(evaluation.observedChars, "hello cot world".utf16.count)
+        XCTAssertTrue(evaluation.contextAvailable)
+        XCTAssertEqual(evaluation.baselinePrefixChars, "hello ".utf16.count)
+        XCTAssertEqual(evaluation.baselineSuffixChars, " world".utf16.count)
+        XCTAssertTrue(evaluation.caretAvailable)
+        XCTAssertEqual(evaluation.caretMatches, false)
+        XCTAssertEqual(evaluation.textMatches, true)
+        XCTAssertNil(evaluation.suffixMatches)
+        XCTAssertTrue(evaluation.logFields.contains("decision=abort"))
+        XCTAssertTrue(evaluation.logFields.contains("reason=caretMismatch"))
+        XCTAssertFalse(evaluation.logFields.contains("hello cot world"))
+    }
+
+    func testEvaluationExplainsSuffixMismatchWithoutRawFieldText() {
+        let evaluation = InsertionTargetGuard.evaluate(
+            expected: "type teh",
+            observed: .value("type the")
+        )
+
+        XCTAssertEqual(evaluation.decision, .stopAppendOnly)
+        XCTAssertEqual(evaluation.reason, "suffixMismatch")
+        XCTAssertEqual(evaluation.expectedChars, "type teh".utf16.count)
+        XCTAssertEqual(evaluation.observedChars, "type the".utf16.count)
+        XCTAssertFalse(evaluation.contextAvailable)
+        XCTAssertFalse(evaluation.caretAvailable)
+        XCTAssertEqual(evaluation.suffixMatches, false)
+        XCTAssertTrue(evaluation.logFields.contains("decision=stopAppendOnly"))
+        XCTAssertTrue(evaluation.logFields.contains("suffixMatches=false"))
+        XCTAssertFalse(evaluation.logFields.contains("type the"))
+    }
+
     // MARK: - Session integration with a fake observer
 
     func testSessionAbortsAndStopsTypingWhenFocusChanges() {

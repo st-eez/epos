@@ -2,8 +2,8 @@ import XCTest
 @testable import Epos
 
 /// Policy tests for `TranscriptPolisher.polish`, driven by a fake engine so the
-/// seven decision paths (disabled / unavailable / throws / timeout / guard-fail
-/// / success / empty) are exercised hermetically — no FoundationModels, no network. The real
+/// decision paths (disabled / unavailable / throws / timeout / guard-fail /
+/// success / empty) are exercised hermetically — no FoundationModels, no network. The real
 /// model call and the live insertion it feeds are not unit-testable (they need
 /// the installed signed app), so only the policy around the engine is covered.
 final class TranscriptPolisherTests: XCTestCase {
@@ -36,7 +36,18 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await polisher.polish("raw transcript")
 
         XCTAssertEqual(result.text, "raw transcript")
-        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(result.outcome, .engineFailed)
+        XCTAssertEqual(engine.polishCallCount, 1)
+    }
+
+    func testPolishReturnsRawWhenEngineReturnsSameText() async {
+        let engine = FakePolishEngine(result: "raw transcript")
+        let polisher = TranscriptPolisher(enabled: true, engine: engine)
+
+        let result = await polisher.polish("raw transcript")
+
+        XCTAssertEqual(result.text, "raw transcript")
+        XCTAssertEqual(result.outcome, .sameText)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -72,7 +83,7 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await pending
 
         XCTAssertEqual(result.text, "raw transcript")
-        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(result.outcome, .abandoned)
         XCTAssertEqual(engine.polishCallCount, 1)
         // Returned on abandon, far short of the 2s decode (and the 10s timeout).
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1.5)
@@ -100,7 +111,7 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await polisher.polish("raw transcript")
 
         XCTAssertEqual(result.text, "raw transcript")
-        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(result.outcome, .abandoned)
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1.5)
     }
 
@@ -114,7 +125,7 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await polisher.polish(raw)
 
         XCTAssertEqual(result.text, raw)
-        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(result.outcome, .guardRejected)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -142,7 +153,7 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await polisher.polish("   ")
 
         XCTAssertEqual(result.text, "   ")
-        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(result.outcome, .sameText)
         XCTAssertEqual(engine.polishCallCount, 0)
     }
 
@@ -207,7 +218,7 @@ final class TranscriptPolisherTests: XCTestCase {
 
         let result = await polisher.polish("raw transcript")
 
-        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(result.outcome, .engineFailed)
     }
 
     func testPolishRejectsModelWordSubstitutionAndKeepsRaw() async {
@@ -221,7 +232,7 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await polisher.polish("open ethos cluster")
 
         XCTAssertEqual(result.text, "open ethos cluster")
-        XCTAssertEqual(result.outcome, .unchanged)
+        XCTAssertEqual(result.outcome, .guardRejected)
     }
 
     func testGuardComparesCanonicalizedRawSoOneSidedCanonicalizationAccepts() async {
@@ -262,7 +273,7 @@ final class TranscriptPolisherTests: XCTestCase {
 
     func testEffectivePolishOutcomeDowngradesAppliedWhenNothingTyped() {
         let applied = PolishResult(text: "polished", outcome: .applied, rawCharacterCount: 8)
-        XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: false), .unchanged)
+        XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: false), .suppressedByInsertion)
         XCTAssertEqual(TranscriptPolisher.effectivePolishOutcome(applied, applied: true), .applied)
 
         let timedOut = PolishResult(text: "raw", outcome: .timedOut, rawCharacterCount: 3)

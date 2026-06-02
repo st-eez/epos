@@ -39,6 +39,7 @@ public final class AppCoordinator: ObservableObject {
     private let polishEngine: any PolishEngine
     private let permissions: PermissionsGate
     private let assets: AssetManager
+    private let recordingIDGenerator: @Sendable () -> String
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
     /// editor mutates the same instance (the app hands the editor `coordinator.corrections`).
     public let corrections = CorrectionStore()
@@ -50,6 +51,7 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
     private var textInsertionSession: ProgressiveTranscriptInsertionSession?
+    private var currentRecordingID: String?
     /// Set when a press arrives during the finalize/polish window (state != .idle),
     /// where `startRecording` would otherwise silently drop it. The press also abandons
     /// the in-flight polish (via `activePolisher`) to collapse the window, then is
@@ -74,6 +76,7 @@ public final class AppCoordinator: ObservableObject {
         settings: Settings = Settings.load(),
         polishEngine: any PolishEngine = FoundationModelsPolishEngine(),
         diagnostics: DiagnosticLogSink = .shared,
+        recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
@@ -81,6 +84,7 @@ public final class AppCoordinator: ObservableObject {
         self.textInsertion = textInsertion
         self.polishEngine = polishEngine
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
+        self.recordingIDGenerator = recordingIDGenerator
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -199,6 +203,9 @@ public final class AppCoordinator: ObservableObject {
             return
         }
         state = .recording
+        let recordingID = recordingIDGenerator()
+        currentRecordingID = recordingID
+        RecordingLogContext.activate(recordingID)
         finalizationPhase = .finalizingSpeech
         finalText = ""
         partial = ""
@@ -242,6 +249,8 @@ public final class AppCoordinator: ObservableObject {
             guard state == .recording else {
                 cancelTextInsertionSession()
                 await resetToIdle()
+                log.info("recording done (finalChars=0 cancelledBeforeAudioStart=true)")
+                completeRecordingLogScope()
                 return
             }
             audio.onBuffer = { buffer in transcriber.accept(buffer) }
@@ -252,7 +261,8 @@ public final class AppCoordinator: ObservableObject {
                 }
             }
             if shouldSaveAudioSamples {
-                audio.onRawBuffer = { buffer in dogfood.write(buffer) }
+                let recordingID = currentRecordingID
+                audio.onRawBuffer = { buffer in dogfood.write(buffer, recordingID: recordingID) }
             } else {
                 audio.onRawBuffer = nil
             }
@@ -262,6 +272,8 @@ public final class AppCoordinator: ObservableObject {
             dogfood.stop(keeping: false)
             cancelTextInsertionSession()
             await resetToIdle()
+            log.info("recording done (finalChars=0 failed=true)")
+            completeRecordingLogScope()
             return
         }
 
@@ -317,6 +329,7 @@ public final class AppCoordinator: ObservableObject {
         let finalChars = finalText.count
         await resetToIdle()
         log.info("recording done (finalChars=\(finalChars))")
+        completeRecordingLogScope()
     }
 
     func handlePartialTranscript(_ text: String) {
@@ -372,8 +385,16 @@ public final class AppCoordinator: ObservableObject {
             log.info("polish timed out (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
         case .tooLong:
             log.info("polish skipped: input too long (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
-        case .unchanged:
-            log.info("polish no-op or fallback (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+        case .sameText:
+            log.info("polish skipped: model returned same text (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+        case .guardRejected:
+            log.info("polish rejected: retention guard (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+        case .engineFailed:
+            log.info("polish fallback: engine failed (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+        case .abandoned:
+            log.info("polish abandoned: new recording requested (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+        case .suppressedByInsertion:
+            log.info("polish suppressed: insertion append-only (rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))")
         case .applied:
             log.info("polish applied (rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))")
         }
@@ -410,7 +431,13 @@ public final class AppCoordinator: ObservableObject {
         transcriptTiming.finish()
         finalizationPhase = .finalizingSpeech
         state = .idle
+    }
+
+    private func completeRecordingLogScope() {
+        let finishedRecordingID = currentRecordingID
+        currentRecordingID = nil
         replayPendingStartIfNeeded()
+        RecordingLogContext.clear(finishedRecordingID)
     }
 
     /// Retry, at the `.finalizing → .idle` transition, a start that arrived during the

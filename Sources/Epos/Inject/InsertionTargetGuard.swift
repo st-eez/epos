@@ -107,34 +107,7 @@ public enum InsertionTargetGuard {
         expected: String,
         observed: InsertionTargetObservation
     ) -> InsertionGuardDecision {
-        switch observed {
-        case .focusChanged:
-            return .abort
-        case .notRead:
-            return .proceed
-        case .emptyExposed:
-            // A text-exposing field that now reads empty diverged from what we
-            // typed; deleting would eat content that isn't ours. With nothing
-            // expected there is nothing to delete, so appending stays safe.
-            return expected.isEmpty ? .proceed : .stopAppendOnly
-        case .value(let onScreen):
-            // An empty expectation has nothing to delete and nothing to match
-            // against; appending is always safe.
-            guard !expected.isEmpty else { return .proceed }
-            return onScreen.hasSuffix(expected) ? .proceed : .stopAppendOnly
-        case .positionedValue(let onScreen, let context, let selectedRange):
-            // With a baseline span, require that stronger proof. Falling back to a
-            // suffix check can be fooled when the field's trailing text happens to
-            // end with `expected`, letting a delete run at the wrong caret.
-            guard !expected.isEmpty else { return .proceed }
-            if context.matches(value: onScreen, expected: expected, selectedRange: selectedRange) {
-                return .proceed
-            }
-            if selectedRange != nil, !context.caretMatches(expected: expected, selectedRange: selectedRange) {
-                return .abort
-            }
-            return .stopAppendOnly
-        }
+        evaluate(expected: expected, observed: observed).decision
     }
 }
 
