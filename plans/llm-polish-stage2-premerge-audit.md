@@ -223,3 +223,36 @@ All five guard holes live in one file: `Sources/Epos/Speech/TranscriptPolisherGu
 2. **Immediate follow-up:** rank 6 (swallowed re-press); rank 7 (measure wall-clock first,
    then detach the engine if needed).
 3. **At leisure:** ranks 8–11 (log accuracy, dead code, two doc fixes).
+
+---
+
+## Post-audit follow-ups — insertion guard (found in dogfood, 2026-06-02)
+
+Surfaced after the audit, while dictating on the installed app. Not polish-specific
+(the append-only path runs regardless of `polishEnabled`).
+
+- **FIXED (`2206cf5`) — append-only latch silently dropped the dictation tail.** Once
+  the insertion guard latched append-only, the append branch only typed a tail when the
+  new target byte-prefix-matched `committedText`. The recognizer re-cases/punctuates the
+  prefix it already emitted ("ok …" → "OK …."), so the authoritative final stopped
+  prefix-matching, insertion collapsed to "", and `committedText` (advanced only by
+  appends since `2b785ce`) froze — dropping the rest of the dictation. Diagnostic log
+  showed `insertedChars=0 totalChars=31` on every reconcile while `displayChars` climbed
+  to 100. Fix: raw finals are now loss-proof (append past `committedText`'s LENGTH);
+  partials + the polished rewrite stay conservative. Regression tests in
+  `InsertionTargetGuardTests.swift`.
+
+- **OPEN — Bug A: the append-only latch likely fires spuriously.** The latch trigger is
+  the pre-delete value read finding `!onScreen.hasSuffix(committedText)`. Per `2b785ce`'s
+  own message the usual cause is the AX value read racing ahead of the async-applied
+  keystrokes (on-screen a few chars *behind* what we typed = lag, not divergence). If so,
+  the session should never have left normal mode (where a clean delete+retype fixes the
+  re-casing with no seam glitch). NOT fixed this pass: tightening the latch risks the
+  blind delete it exists to prevent. Do the instrumentation below first.
+
+- **OPEN — instrument the latch before touching it.** At the `.stopAppendOnly` decision,
+  log expected-length vs on-screen-length (lengths only — privacy-safe, no transcript
+  text) and the divergence reason (`.value` mismatch vs `.emptyExposed`). The next repro
+  then distinguishes AX lag from genuine divergence, which is the evidence needed before
+  changing the latch heuristic. Confirm production latched on `.value`-mismatch (not
+  `.emptyExposed`) before considering a reason-gated narrowing of the loss-proof append.
