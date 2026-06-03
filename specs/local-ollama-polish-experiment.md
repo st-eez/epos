@@ -48,6 +48,7 @@ Lever files live under `specs/ollama-polish-levers/`; use
 | Final period guard | `specs/ollama-polish-levers/L3-final-period-guard.md` | implemented+verified | Existing terminal periods are guard-protected; Ollama production default is now the conservative prompt |
 | Ground-truth 20 corrections | `specs/ollama-polish-levers/L4-ground-truth20-corrections.md` | implemented+verified | Seeded 20 human-confirmed transcripts exposed safe canonicalizer wins; exact ordinal guard allowance helps relaxed but conservative remains production default |
 | Ground-truth 35 canonicalizer expansion | `specs/ollama-polish-levers/L5-ground-truth35-canonicalizer.md` | implemented+verified | Expanded manifest to 35 confirmed rows; added narrow canonicalizer rules that dropped production output WER from 0.062 to 0.035 |
+| Residual error triage | `specs/ollama-polish-levers/L6-residual-error-triage.md` | implemented+verified | Generated a residual-only report over the 35-row eval; 11 rows remain, mostly prompt/model candidates rather than deterministic canonicalizer fixes |
 
 ## Read First
 
