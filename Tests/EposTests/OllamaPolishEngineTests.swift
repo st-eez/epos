@@ -2,7 +2,7 @@ import XCTest
 @testable import Epos
 
 final class OllamaPolishEngineTests: XCTestCase {
-    func testUsesQwen17BByDefaultAndUnloadsAfterPolish() async throws {
+    func testUsesQwen17BAndConservativePromptByDefaultAndUnloadsAfterPolish() async throws {
         let client = FakeOllamaPolishClient(cleaned: "Hello world.")
         let engine = OllamaPolishEngine(client: client, prewarmEnabled: false)
         let session = engine.makeSession(knownTerms: ["CMUX"])
@@ -18,7 +18,24 @@ final class OllamaPolishEngineTests: XCTestCase {
         XCTAssertEqual(requests[0].options.contextTokenLimit, 2_048)
         XCTAssertTrue(requests[0].instructions.contains("Known project terms"))
         XCTAssertTrue(requests[0].instructions.contains("CMUX"))
-        XCTAssertTrue(requests[0].instructions.contains("Do not fix suspected recognition errors"))
+        XCTAssertTrue(requests[0].instructions.contains("Preserve existing sentence-ending punctuation exactly"))
+        XCTAssertTrue(requests[0].instructions.contains("Do not fix suspected speech-recognition mistakes"))
+    }
+
+    func testStrictPromptStyleRemainsSelectableForEvalComparisons() async throws {
+        let client = FakeOllamaPolishClient(cleaned: "Hello world.")
+        let engine = OllamaPolishEngine(
+            client: client,
+            promptStyle: .strict,
+            prewarmEnabled: false
+        )
+        let session = engine.makeSession(knownTerms: [])
+
+        _ = try await session.polish("hello world")
+
+        let instructions = try XCTUnwrap(client.requests.first?.instructions)
+        XCTAssertTrue(instructions.contains("Do not fix suspected recognition errors"))
+        XCTAssertFalse(instructions.contains("Preserve existing sentence-ending punctuation exactly"))
     }
 
     func testPrewarmUsesShortKeepAliveThenPolishUnloads() async throws {
@@ -65,6 +82,26 @@ final class OllamaPolishEngineTests: XCTestCase {
         XCTAssertTrue(instructions.contains("you know"))
         XCTAssertTrue(instructions.contains("cmux"))
         XCTAssertFalse(instructions.contains("Do not fix suspected recognition errors"))
+    }
+
+    func testConservativePromptStylePreservesPunctuationAndInitialCase() async throws {
+        let client = FakeOllamaPolishClient(cleaned: "Follow up what the territory is.")
+        let engine = OllamaPolishEngine(
+            client: client,
+            promptStyle: .conservative,
+            prewarmEnabled: false
+        )
+        let session = engine.makeSession(knownTerms: ["CMUX"])
+
+        _ = try await session.polish("Follow up what the territory is.")
+
+        let instructions = try XCTUnwrap(client.requests.first?.instructions)
+        XCTAssertTrue(instructions.contains("Preserve existing sentence-ending punctuation exactly"))
+        XCTAssertTrue(instructions.contains("the cleaned field must end with that same character"))
+        XCTAssertTrue(instructions.contains("Do not lowercase the first word of the transcript"))
+        XCTAssertTrue(instructions.contains("Do not fix suspected speech-recognition mistakes"))
+        XCTAssertTrue(instructions.contains("CMUX"))
+        XCTAssertFalse(instructions.contains("Fix obvious speech-recognition mistakes"))
     }
 
     func testRawCandidateEvalBypassesPolisherButReportsStrictGuardDecision() async {

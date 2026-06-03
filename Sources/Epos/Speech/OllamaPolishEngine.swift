@@ -27,7 +27,7 @@ public struct OllamaPolishEngine: PolishEngine {
         self.init(
             model: model,
             client: OllamaHTTPPolishClient(baseURL: baseURL),
-            promptStyle: .strict,
+            promptStyle: OllamaPolishPromptStyle.productionDefault,
             options: options,
             prewarmEnabled: prewarmEnabled,
             prewarmKeepAlive: prewarmKeepAlive,
@@ -58,7 +58,7 @@ public struct OllamaPolishEngine: PolishEngine {
     init(
         model: String = Self.defaultModel,
         client: any OllamaPolishClient,
-        promptStyle: OllamaPolishPromptStyle = .strict,
+        promptStyle: OllamaPolishPromptStyle = .productionDefault,
         options: OllamaPolishOptions = .default,
         prewarmEnabled: Bool = true,
         prewarmKeepAlive: String = "30s",

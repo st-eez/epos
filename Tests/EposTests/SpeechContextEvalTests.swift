@@ -33,7 +33,8 @@ final class SpeechContextEvalTests: XCTestCase {
         let selectedRecordings = try SavedRecordingEvalSupport.selectedRecordings(
             in: recordingsDirectory,
             limit: environment["EPOS_EVAL_LIMIT"].flatMap(Int.init),
-            latest: SavedRecordingEvalSupport.isTruthy(environment["EPOS_EVAL_LATEST"])
+            latest: SavedRecordingEvalSupport.isTruthy(environment["EPOS_EVAL_LATEST"]),
+            environment: environment
         )
         try XCTSkipIf(selectedRecordings.isEmpty, "No .wav recordings found at \(recordingsDirectory.path)")
 

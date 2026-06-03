@@ -17,8 +17,10 @@ import XCTest
 ///   for `EPOS_RUN_OLLAMA_POLISH_EVAL`, or `.build/evals/ollama-raw-candidate-eval.jsonl`
 ///   for `EPOS_RUN_OLLAMA_RAW_CANDIDATE_EVAL`
 /// - `EPOS_POLISH_EVAL_PREWARM_MS`: defaults to 1500, use 0 for cold-start stress
-/// - Prompt styles are always compared: strict is the production-safe prompt,
-///   relaxed is eval-only shadow mode for measuring the model's broader capability.
+/// - Prompt styles are compared by default: conservative is the production
+///   prompt, strict is the original FoundationModels-compatible prompt, and
+///   relaxed is eval-only shadow mode for measuring broader model capability.
+/// - `EPOS_OLLAMA_EVAL_PROMPT_STYLES`: optional comma-separated prompt styles.
 /// - `EPOS_RUN_OLLAMA_RAW_CANDIDATE_EVAL=1`: bypasses `TranscriptPolisher` and
 ///   logs raw relaxed candidates plus the strict guard decision as diagnostics.
 final class OllamaPolishEvalTests: XCTestCase {
@@ -59,32 +61,11 @@ final class OllamaPolishEvalTests: XCTestCase {
         let transcripts = Array(Self.transcripts.prefix(limit ?? Self.transcripts.count))
         let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(environment: environment)
 
-        let variants = [
-            OllamaPolishEvalVariant(
-                name: "\(model)-strict-cold",
-                promptStyle: .strict,
-                prewarmEnabled: false,
-                prewarmWait: 0
-            ),
-            OllamaPolishEvalVariant(
-                name: "\(model)-strict-prewarm",
-                promptStyle: .strict,
-                prewarmEnabled: true,
-                prewarmWait: prewarmDelay
-            ),
-            OllamaPolishEvalVariant(
-                name: "\(model)-relaxed-cold",
-                promptStyle: .relaxed,
-                prewarmEnabled: false,
-                prewarmWait: 0
-            ),
-            OllamaPolishEvalVariant(
-                name: "\(model)-relaxed-prewarm",
-                promptStyle: .relaxed,
-                prewarmEnabled: true,
-                prewarmWait: prewarmDelay
-            ),
-        ]
+        let variants = Self.variants(
+            model: model,
+            styles: Self.configuredPromptStyles(environment: environment),
+            prewarmDelay: prewarmDelay
+        )
 
         var rows: [OllamaPolishEvalRow] = []
         for variant in variants {
@@ -245,6 +226,41 @@ final class OllamaPolishEvalTests: XCTestCase {
         lines.append("")
         lines.append("output: \(outputURL.path)")
         return lines.joined(separator: "\n")
+    }
+
+    private static func configuredPromptStyles(environment: [String: String]) -> [OllamaPolishPromptStyle] {
+        let rawStyles = environment["EPOS_OLLAMA_EVAL_PROMPT_STYLES"]?
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
+            .filter { !$0.isEmpty }
+        let styles = rawStyles?.compactMap(OllamaPolishPromptStyle.init(rawValue:))
+        if let styles, !styles.isEmpty {
+            return styles
+        }
+        return [.strict, .conservative, .relaxed]
+    }
+
+    private static func variants(
+        model: String,
+        styles: [OllamaPolishPromptStyle],
+        prewarmDelay: UInt64
+    ) -> [OllamaPolishEvalVariant] {
+        styles.flatMap { style in
+            [
+                OllamaPolishEvalVariant(
+                    name: "\(model)-\(style.rawValue)-cold",
+                    promptStyle: style,
+                    prewarmEnabled: false,
+                    prewarmWait: 0
+                ),
+                OllamaPolishEvalVariant(
+                    name: "\(model)-\(style.rawValue)-prewarm",
+                    promptStyle: style,
+                    prewarmEnabled: true,
+                    prewarmWait: prewarmDelay
+                ),
+            ]
+        }
     }
 
     private static func rawCandidateReport(rows: [OllamaRawCandidateEvalRow], outputURL: URL) -> String {

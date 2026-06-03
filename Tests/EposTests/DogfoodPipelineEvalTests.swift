@@ -18,11 +18,15 @@ import XCTest
 ///
 /// Useful knobs:
 /// - `EPOS_EVAL_RECORDINGS_DIR`: defaults to `~/Library/Caches/Epos/recordings`
+/// - `EPOS_EVAL_RECORDING_FILES`: comma- or newline-separated recording filenames
+///   or absolute paths for targeted eval slices. Overrides latest/limit ordering.
 /// - `EPOS_EVAL_LIMIT`: number of recordings to replay
 /// - `EPOS_EVAL_LATEST=1`: newest-first selection instead of oldest-first
 /// - `EPOS_EVAL_OUTPUT`: defaults to `.build/evals/dogfood-pipeline-eval.jsonl`
 /// - `EPOS_EVAL_SHADOW_RELAXED_OLLAMA=1`: also log a direct, eval-only relaxed
 ///   Qwen candidate plus the strict guard decision, without changing production fields.
+/// - `EPOS_OLLAMA_PROMPT_STYLE`: eval-only prompt style override for the
+///   configured Ollama engine; defaults to the production prompt style.
 final class DogfoodPipelineEvalTests: XCTestCase {
     func testSavedRecordingsThroughProductionPolishPipeline() async throws {
         let environment = ProcessInfo.processInfo.environment
@@ -32,6 +36,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
 
         let engine = try await Self.makeConfiguredPolishEngine(environment: environment)
         let shadowRelaxedEngine = try await Self.makeRelaxedOllamaRawCandidateEngine(environment: environment)
+        let polishPromptStyle = Self.configuredPolishPromptStyleName(environment: environment)
 
         let settings = Settings.load()
         let locale = settings.locale
@@ -43,7 +48,8 @@ final class DogfoodPipelineEvalTests: XCTestCase {
         let selectedRecordings = try SavedRecordingEvalSupport.selectedRecordings(
             in: recordingsDirectory,
             limit: environment["EPOS_EVAL_LIMIT"].flatMap(Int.init),
-            latest: SavedRecordingEvalSupport.isTruthy(environment["EPOS_EVAL_LATEST"])
+            latest: SavedRecordingEvalSupport.isTruthy(environment["EPOS_EVAL_LATEST"]),
+            environment: environment
         )
         try XCTSkipIf(selectedRecordings.isEmpty, "No .wav recordings found at \(recordingsDirectory.path)")
 
@@ -114,6 +120,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 output: result.text,
                 outcome: String(describing: result.outcome),
                 engineOutcome: result.engineOutcome?.rawValue,
+                polishPromptStyle: polishPromptStyle,
                 prewarmWaitSeconds: prewarmWaitSeconds,
                 rawChangedByCanonicalizer: canonicalizedRaw != transcription.text,
                 outputChangedFromRaw: result.text != transcription.text,
@@ -153,6 +160,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
         print(summary.report(
             recordingCount: selectedRecordings.count,
             knownTermCount: knownTerms.count,
+            polishPromptStyle: polishPromptStyle,
             outputURL: outputURL,
             rows: rows
         ))
@@ -169,7 +177,10 @@ extension DogfoodPipelineEvalTests {
             try XCTSkipUnless(engine.isAvailable, "FoundationModels model unavailable in this context")
             return engine
         case .ollama(let model):
-            let engine = OllamaPolishEngine(model: model)
+            let engine = OllamaPolishEngine(
+                model: model,
+                promptStyle: configuredOllamaPromptStyle(environment: environment)
+            )
             guard await engine.isModelInstalled() else {
                 throw XCTSkip("Ollama model \(model) unavailable; run `ollama pull \(model)`")
             }
@@ -196,6 +207,23 @@ extension DogfoodPipelineEvalTests {
         let trimmed = configured.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? OllamaPolishEngine.defaultModel : trimmed
     }
+
+    private static func configuredOllamaPromptStyle(environment: [String: String]) -> OllamaPolishPromptStyle {
+        guard let configured = environment["EPOS_OLLAMA_PROMPT_STYLE"] else {
+            return .productionDefault
+        }
+        let trimmed = configured.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return OllamaPolishPromptStyle(rawValue: trimmed) ?? .productionDefault
+    }
+
+    private static func configuredPolishPromptStyleName(environment: [String: String]) -> String? {
+        switch PolishEngineFactory.configuredEngine(environment: environment) {
+        case .foundationModels:
+            return nil
+        case .ollama:
+            return configuredOllamaPromptStyle(environment: environment).rawValue
+        }
+    }
 }
 
 private struct DogfoodPipelineEvalRow: Codable {
@@ -209,6 +237,7 @@ private struct DogfoodPipelineEvalRow: Codable {
     let output: String
     let outcome: String
     let engineOutcome: String?
+    let polishPromptStyle: String?
     let prewarmWaitSeconds: Double
     let rawChangedByCanonicalizer: Bool
     let outputChangedFromRaw: Bool
@@ -294,6 +323,7 @@ private struct DogfoodPipelineEvalSummary {
     func report(
         recordingCount: Int,
         knownTermCount: Int,
+        polishPromptStyle: String?,
         outputURL: URL,
         rows: [DogfoodPipelineEvalRow]
     ) -> String {
@@ -332,6 +362,9 @@ private struct DogfoodPipelineEvalSummary {
         lines.append("")
         lines.append("recordings: \(recordingCount)")
         lines.append("known terms: \(knownTermCount)")
+        if let polishPromptStyle {
+            lines.append("polish prompt style: \(polishPromptStyle)")
+        }
         lines.append("canonicalizer changed raw: \(canonicalizerChanged)")
         lines.append("polish changed canonicalized raw: \(changedFromCanonicalizedRaw)")
         lines.append("retained filler raw/output: \(retainedFillerRaw)/\(retainedFillerOutput)")

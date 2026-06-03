@@ -125,6 +125,16 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("see fig. 3 now", "see fig 3 now", true),
             // A restored trailing period does not change meaning. Keep.
             ("ship it", "ship it.", true),
+            // But an existing final period must not disappear: dogfood showed Qwen
+            // repeatedly making this low-value edit, and prompt wording did not fully
+            // stop it. Reject so the raw punctuation survives.
+            ("And.", "And", false),
+            ("Not sure you should ask.", "Not sure you should ask", false),
+            (
+                "Is there something clever we're missing? How do we get more accurate? And.",
+                "Is there something clever we're missing? How do we get more accurate? And",
+                false
+            ),
             // Zero-content: a conversion introducing no new characters is fine; an
             // unrelated symbol rewrite is not.
             ("...", ".", true),

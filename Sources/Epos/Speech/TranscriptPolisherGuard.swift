@@ -4,16 +4,18 @@ import Foundation
 /// `TranscriptPolisher`. It keeps the model's polished text only when the same
 /// content-token sequence survives — allowing only filler removal and the
 /// hyphen-merge of an already-spoken compound — preserving every dictated symbol
-/// and sentence-punctuation glyph (`? ! : ; — – / -- $ …`) exactly, allowing a
-/// comma to drop ONLY when stranded beside a removed filler (never added, never
-/// dropped beside a kept word), holding all-caps acronyms case-sensitive so they
-/// cannot fold to/from a lowercase homograph, and neither collapsing nor inventing
-/// a sentence boundary. Everything else (mishearing "fixes", word substitution,
-/// spoken-symbol conversion) is rejected: the guard cannot tell a legitimate one
-/// from a corruption, so it keeps the user's raw words. Symbol conversion and
-/// known-term correction are owned by `TranscriptCanonicalizer`, which runs on
-/// both the raw and polished text, so its deterministic results match on both
-/// sides and never reach this guard as a difference.
+/// and sentence-punctuation glyph (`? ! : ; — – / -- $ …`) exactly, preserving
+/// an existing final period while still allowing the model to restore one when
+/// the raw text had none, allowing a comma to drop ONLY when stranded beside a
+/// removed filler (never added, never dropped beside a kept word), holding
+/// all-caps acronyms case-sensitive so they cannot fold to/from a lowercase
+/// homograph, and neither collapsing nor inventing a sentence boundary.
+/// Everything else (mishearing "fixes", word substitution, spoken-symbol
+/// conversion) is rejected: the guard cannot tell a legitimate one from a
+/// corruption, so it keeps the user's raw words. Symbol conversion and known-term
+/// correction are owned by `TranscriptCanonicalizer`, which runs on both the raw
+/// and polished text, so its deterministic results match on both sides and never
+/// reach this guard as a difference.
 ///
 /// The standard is asymmetric: a false reject is harmless (the raw words are
 /// kept), a false accept types altered meaning into the user's app, so every
@@ -114,6 +116,13 @@ extension TranscriptPolisher {
                 reason: .commaUsageChanged,
                 polished: polished,
                 diff: commaDiffSummary(raw: raw, polished: polished)
+            )
+        }
+        guard finalPeriodUsageIsJustified(raw: raw, polished: polished) else {
+            return rejectedPolish(
+                reason: .sentenceBoundaryChanged,
+                polished: polished,
+                diff: sentenceBoundaryDiffSummary(raw: raw, polished: polished)
             )
         }
         guard preservesRawSentenceBoundaries(
@@ -560,6 +569,13 @@ extension TranscriptPolisher {
             }
         }
         return true
+    }
+
+    private static func finalPeriodUsageIsJustified(raw: String, polished: String) -> Bool {
+        let rawTrimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard rawTrimmed.last == "." else { return true }
+        let polishedTrimmed = polished.trimmingCharacters(in: .whitespacesAndNewlines)
+        return polishedTrimmed.last == "."
     }
 
     /// All comma policy, positional and PER-GAP. The matched content tokens partition

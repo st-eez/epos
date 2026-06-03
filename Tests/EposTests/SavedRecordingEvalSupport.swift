@@ -37,8 +37,16 @@ enum SavedRecordingEvalSupport {
     static func selectedRecordings(
         in recordingsDirectory: URL,
         limit: Int?,
-        latest: Bool
+        latest: Bool,
+        environment: [String: String] = [:]
     ) throws -> [URL] {
+        if let explicitRecordings = try explicitlySelectedRecordings(
+            in: recordingsDirectory,
+            environment: environment
+        ) {
+            return explicitRecordings
+        }
+
         let recordings = try FileManager.default
             .contentsOfDirectory(at: recordingsDirectory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "wav" }
@@ -46,6 +54,29 @@ enum SavedRecordingEvalSupport {
         let ordered = latest ? Array(recordings.reversed()) : recordings
         let selectedCount = limit.map { max(0, $0) } ?? ordered.count
         return Array(ordered.prefix(selectedCount))
+    }
+
+    private static func explicitlySelectedRecordings(
+        in recordingsDirectory: URL,
+        environment: [String: String]
+    ) throws -> [URL]? {
+        guard let configured = environment["EPOS_EVAL_RECORDING_FILES"] else { return nil }
+        let entries = configured
+            .components(separatedBy: CharacterSet(charactersIn: ",\n"))
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !entries.isEmpty else { return nil }
+
+        return try entries.map { entry in
+            let expanded = (entry as NSString).expandingTildeInPath
+            let url = expanded.hasPrefix("/")
+                ? URL(fileURLWithPath: expanded)
+                : recordingsDirectory.appendingPathComponent(expanded)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw SavedRecordingEvalError.recordingNotFound(url.path)
+            }
+            return url
+        }
     }
 
     static func prepareOutput(_ outputURL: URL) throws {
@@ -225,6 +256,7 @@ enum SavedRecordingEvalError: Error, CustomStringConvertible {
     case conversionFailed
     case encodingFailed
     case noCompatibleFormat
+    case recordingNotFound(String)
     case transcriptionFailed(String, String)
 
     var description: String {
@@ -239,6 +271,8 @@ enum SavedRecordingEvalError: Error, CustomStringConvertible {
             return "JSONL encoding failed"
         case .noCompatibleFormat:
             return "SpeechTranscriber has no compatible audio format"
+        case .recordingNotFound(let path):
+            return "recording not found: \(path)"
         case .transcriptionFailed(let file, let message):
             return "transcription failed for \(file): \(message)"
         }
