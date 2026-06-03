@@ -74,7 +74,7 @@ public final class AppCoordinator: ObservableObject {
         audio: AudioCapture = AudioCapture(),
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         settings: Settings = Settings.load(),
-        polishEngine: any PolishEngine = FoundationModelsPolishEngine(),
+        polishEngine: (any PolishEngine)? = nil,
         diagnostics: DiagnosticLogSink = .shared,
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
         autoStart: Bool = true
@@ -82,7 +82,7 @@ public final class AppCoordinator: ObservableObject {
         self.hotkey = hotkey
         self.audio = audio
         self.textInsertion = textInsertion
-        self.polishEngine = polishEngine
+        self.polishEngine = polishEngine ?? PolishEngineFactory.makeDefault()
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.recordingIDGenerator = recordingIDGenerator
         self.settings = settings
