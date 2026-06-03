@@ -3,8 +3,9 @@ import Foundation
 /// The content-retention guard: the pure string→bool decision behind
 /// `TranscriptPolisher`. It keeps the model's polished text only when the same
 /// content-token sequence survives — allowing only filler removal and the
-/// hyphen-merge of an already-spoken compound — preserving every dictated symbol
-/// and sentence-punctuation glyph (`? ! : ; — – / -- $ …`) exactly, preserving
+/// hyphen-merge of an already-spoken compound, and the measured missing `be` in
+/// `seems to getting` — preserving every dictated symbol and sentence-punctuation
+/// glyph (`? ! : ; — – / -- $ …`) exactly, preserving
 /// an existing final period while still allowing the model to restore one when
 /// the raw text had none, allowing a comma to drop ONLY when stranded beside a
 /// removed filler (never added, never dropped beside a kept word), holding
@@ -299,6 +300,17 @@ extension TranscriptPolisher {
                     rawIndex += parts.count; polishedIndex += 1; matchedContent = true
                     continue
                 }
+                if canInsertMissingBeBeforeGetting(
+                    rawTokens: rawTokens,
+                    rawSpans: rawSpans,
+                    raw: rawText,
+                    rawIndex: rawIndex,
+                    polishedSpans: polishedSpans,
+                    polishedIndex: polishedIndex
+                ) {
+                    polishedIndex += 1
+                    continue
+                }
             }
 
             // 2. Drop-on-mismatch: filler removal only. The deletion decision uses
@@ -531,6 +543,59 @@ extension TranscriptPolisher {
             guard gap.allSatisfy(\.isWhitespace) else { return nil }
         }
         return parts
+    }
+
+    private static func canInsertMissingBeBeforeGetting(
+        rawTokens: [String],
+        rawSpans: [TokenSpan],
+        raw: String,
+        rawIndex: Int,
+        polishedSpans: [TokenSpan],
+        polishedIndex: Int
+    ) -> Bool {
+        guard rawTokens.indices.contains(rawIndex),
+              polishedSpans.indices.contains(polishedIndex),
+              rawTokens[rawIndex] == "getting",
+              polishedSpans[polishedIndex].text == "be",
+              rawIndex >= 2,
+              rawTokens[rawIndex - 1] == "to",
+              ["seem", "seems", "seemed"].contains(rawTokens[rawIndex - 2]),
+              gapBetweenRawTokensIsWhitespace(
+                raw: raw,
+                rawSpans: rawSpans,
+                leftIndex: rawIndex - 2,
+                rightIndex: rawIndex - 1
+              ),
+              gapBetweenRawTokensIsWhitespace(
+                raw: raw,
+                rawSpans: rawSpans,
+                leftIndex: rawIndex - 1,
+                rightIndex: rawIndex
+              ) else {
+            return false
+        }
+
+        let nextPolishedIndex = polishedSpans.index(after: polishedIndex)
+        guard polishedSpans.indices.contains(nextPolishedIndex),
+              polishedSpans[nextPolishedIndex].text == "getting" else {
+            return false
+        }
+        return true
+    }
+
+    private static func gapBetweenRawTokensIsWhitespace(
+        raw: String,
+        rawSpans: [TokenSpan],
+        leftIndex: Int,
+        rightIndex: Int
+    ) -> Bool {
+        guard rawSpans.indices.contains(leftIndex),
+              rawSpans.indices.contains(rightIndex),
+              leftIndex < rightIndex else {
+            return false
+        }
+        let gap = raw[rawSpans[leftIndex].range.upperBound..<rawSpans[rightIndex].range.lowerBound]
+        return gap.allSatisfy(\.isWhitespace)
     }
 
     private static func canDropRawToken(

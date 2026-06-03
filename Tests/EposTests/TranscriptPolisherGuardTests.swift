@@ -297,6 +297,12 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("test 1st thing", "Test second thing.", false),
             ("test 11st thing", "Test eleventh thing.", false),
             ("ship the 22th build", "Ship the twenty-second build.", false),
+            // Exact measured grammar miss: allow inserting "be" only before
+            // "getting" in the "seems to getting" shape.
+            ("It seems to getting batched.", "It seems to be getting batched.", true),
+            ("It seems to bring the wrong file.", "It seems to be bring the wrong file.", false),
+            ("It seems, to getting batched.", "It seems, to be getting batched.", false),
+            ("I want to getting started.", "I want to be getting started.", false),
         ]
 
         for testCase in cases {

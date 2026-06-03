@@ -23,6 +23,9 @@ import XCTest
 /// - `EPOS_OLLAMA_EVAL_PROMPT_STYLES`: optional comma-separated prompt styles.
 /// - `EPOS_RUN_OLLAMA_RAW_CANDIDATE_EVAL=1`: bypasses `TranscriptPolisher` and
 ///   logs raw relaxed candidates plus the strict guard decision as diagnostics.
+/// - `EPOS_RUN_OLLAMA_RESIDUAL_BAKEOFF=1`: runs selected residual dogfood rows
+///   through prompt/model variants and scores candidate plus strict-gate output
+///   against human ground truth.
 final class OllamaPolishEvalTests: XCTestCase {
     private static let transcripts = [
         "It seems like you're saying that the polish is not working.",
@@ -202,6 +205,118 @@ final class OllamaPolishEvalTests: XCTestCase {
         print(Self.rawCandidateReport(rows: rows, outputURL: outputURL))
     }
 
+    func testResidualRowsPromptModelBakeoff() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard SavedRecordingEvalSupport.isTruthy(environment["EPOS_RUN_OLLAMA_RESIDUAL_BAKEOFF"]) else {
+            throw XCTSkip("Set EPOS_RUN_OLLAMA_RESIDUAL_BAKEOFF=1 to run the residual Ollama bakeoff")
+        }
+
+        var installedModels: [String] = []
+        for model in Self.configuredModels(environment: environment) {
+            let availabilityEngine = OllamaPolishEngine(model: model, prewarmEnabled: false)
+            if await availabilityEngine.isModelInstalled() {
+                installedModels.append(model)
+            } else {
+                print("Skipping unavailable Ollama model: \(model)")
+            }
+        }
+        try XCTSkipIf(installedModels.isEmpty, "No configured Ollama models are installed")
+
+        let outputURL = SavedRecordingEvalSupport.outputURL(
+            environment: environment,
+            defaultPath: ".build/evals/ollama-residual-bakeoff.jsonl"
+        )
+        try SavedRecordingEvalSupport.prepareOutput(outputURL)
+
+        let sourceURL = Self.residualSourceURL(environment: environment)
+        let residualRows = try Self.loadResidualSourceRows(
+            from: sourceURL,
+            minOutputWER: Self.residualMinimumOutputWER(environment: environment),
+            limit: environment["EPOS_EVAL_LIMIT"].flatMap(Int.init)
+        )
+        try XCTSkipIf(residualRows.isEmpty, "No residual rows found in \(sourceURL.path)")
+
+        let canonicalizer = TranscriptCanonicalizer.load()
+        let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
+        let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(environment: environment)
+        let promptStyles = Self.configuredPromptStyles(environment: environment)
+
+        var rows: [OllamaResidualBakeoffRow] = []
+        for model in installedModels {
+            let variants = Self.variants(model: model, styles: promptStyles, prewarmDelay: prewarmDelay)
+            for variant in variants {
+                for sourceRow in residualRows {
+                    guard let humanIntendedTranscript = sourceRow.humanIntendedTranscript,
+                          let sourceOutputScore = sourceRow.outputTranscriptScore else {
+                        continue
+                    }
+
+                    let engine = OllamaPolishEngine(
+                        model: model,
+                        promptStyle: variant.promptStyle,
+                        prewarmEnabled: variant.prewarmEnabled
+                    )
+                    let session = engine.makeSession(knownTerms: knownTerms)
+                    let prewarmWaitSeconds = await SavedRecordingEvalSupport.waitForPolishPrewarmSettle(
+                        delayNanoseconds: variant.prewarmWait
+                    )
+                    let canonicalizedRaw = canonicalizer.canonicalize(sourceRow.rawTranscript)
+                    let deterministicOutput = TranscriptDeterministicCleaner.clean(canonicalizedRaw)
+                    let candidate = await OllamaRawCandidateEvalSupport.evaluate(
+                        raw: sourceRow.rawTranscript,
+                        canonicalizedRaw: canonicalizedRaw,
+                        deterministicOutput: deterministicOutput,
+                        session: session,
+                        canonicalize: { canonicalizer.canonicalize($0) }
+                    )
+                    let strictGateOutput = candidate.strictGateOutput ?? canonicalizedRaw
+                    let row = OllamaResidualBakeoffRow(
+                        variant: variant.name,
+                        model: model,
+                        promptStyle: variant.promptStyle.rawValue,
+                        prewarmEnabled: variant.prewarmEnabled,
+                        prewarmWaitSeconds: prewarmWaitSeconds,
+                        sourceFile: sourceRow.file,
+                        humanIntendedTranscript: humanIntendedTranscript,
+                        raw: sourceRow.rawTranscript,
+                        canonicalizedRaw: canonicalizedRaw,
+                        sourceOutput: sourceRow.output,
+                        sourceOutcome: sourceRow.outcome,
+                        sourceOutputTranscriptScore: sourceOutputScore,
+                        rawTranscriptScore: PolishEvalScoring.wordErrorScore(
+                            reference: humanIntendedTranscript,
+                            hypothesis: sourceRow.rawTranscript
+                        ),
+                        canonicalizedRawTranscriptScore: PolishEvalScoring.wordErrorScore(
+                            reference: humanIntendedTranscript,
+                            hypothesis: canonicalizedRaw
+                        ),
+                        candidateTranscriptScore: candidate.candidate.map {
+                            PolishEvalScoring.wordErrorScore(reference: humanIntendedTranscript, hypothesis: $0)
+                        },
+                        canonicalizedCandidateTranscriptScore: candidate.canonicalizedCandidate.map {
+                            PolishEvalScoring.wordErrorScore(reference: humanIntendedTranscript, hypothesis: $0)
+                        },
+                        strictGateOutput: strictGateOutput,
+                        strictGateOutputTranscriptScore: PolishEvalScoring.wordErrorScore(
+                            reference: humanIntendedTranscript,
+                            hypothesis: strictGateOutput
+                        ),
+                        strictGateOutputChangedFromCanonicalizedRaw: strictGateOutput != canonicalizedRaw,
+                        strictGateOutputChangedFromSourceOutput: strictGateOutput != sourceRow.output,
+                        retainedFillerInRaw: PolishEvalScoring.retainsFiller(sourceRow.rawTranscript),
+                        retainedFillerInStrictGateOutput: PolishEvalScoring.retainsFiller(strictGateOutput),
+                        candidate: candidate
+                    )
+                    rows.append(row)
+                    try SavedRecordingEvalSupport.appendJSONL(row, to: outputURL)
+                }
+            }
+        }
+
+        print(Self.residualBakeoffReport(rows: rows, sourceURL: sourceURL, outputURL: outputURL))
+    }
+
     private static func report(rows: [OllamaPolishEvalRow], outputURL: URL) -> String {
         var lines = ["", "Ollama polish eval"]
         for variant in stableUnique(rows.map(\.variant)) {
@@ -228,6 +343,63 @@ final class OllamaPolishEvalTests: XCTestCase {
         return lines.joined(separator: "\n")
     }
 
+    private static func residualBakeoffReport(
+        rows: [OllamaResidualBakeoffRow],
+        sourceURL: URL,
+        outputURL: URL
+    ) -> String {
+        var lines = ["", "Ollama residual bakeoff"]
+        lines.append("source: \(sourceURL.path)")
+        for variant in stableUnique(rows.map(\.variant)) {
+            let variantRows = rows.filter { $0.variant == variant }
+            lines.append("")
+            lines.append("[\(variant)] rows=\(variantRows.count)")
+            lines.append("  candidate outcomes: \(Self.countSummary(variantRows.map(\.candidate.candidateOutcome)))")
+            lines.append("  strict gate outcomes: \(Self.countSummary(variantRows.compactMap(\.candidate.strictGateOutcome)))")
+            lines.append("  strict guard rejections: \(Self.countSummary(variantRows.compactMap(\.candidate.strictGuardRejectionReason)))")
+            lines.append(
+                "  mean WER raw/can/source/candidate/gate: " +
+                    "\(Self.meanWER(variantRows) { $0.rawTranscriptScore })/" +
+                    "\(Self.meanWER(variantRows) { $0.canonicalizedRawTranscriptScore })/" +
+                    "\(Self.meanWER(variantRows) { $0.sourceOutputTranscriptScore })/" +
+                    "\(Self.meanWER(variantRows) { $0.canonicalizedCandidateTranscriptScore })/" +
+                    "\(Self.meanWER(variantRows) { $0.strictGateOutputTranscriptScore })"
+            )
+            lines.append(
+                "  candidate vs canonicalized raw: " +
+                    "\(Self.werDeltaSummary(variantRows) { $0.canonicalizedCandidateTranscriptScore })"
+            )
+            lines.append(
+                "  strict gate vs canonicalized raw: " +
+                    "\(Self.werDeltaSummary(variantRows) { $0.strictGateOutputTranscriptScore })"
+            )
+            lines.append("  strict gate changed source output: \(variantRows.filter(\.strictGateOutputChangedFromSourceOutput).count)")
+            lines.append("  retained filler raw/gate: \(variantRows.filter(\.retainedFillerInRaw).count)/\(variantRows.filter(\.retainedFillerInStrictGateOutput).count)")
+            lines.append("  mean elapsed: \(Self.formatSeconds(Self.meanResidualCandidateElapsed(variantRows)))s")
+            for row in variantRows {
+                lines.append(
+                    "  - file=\(row.sourceFile) candidate=<\(row.candidate.candidateOutcome)> " +
+                        "strict-gate=<\(row.candidate.strictGateOutcome ?? "not-evaluated")> " +
+                        "WER can/candidate/gate=" +
+                        "\(Self.formatScore(row.canonicalizedRawTranscriptScore.wordErrorRate))/" +
+                        "\(Self.formatOptionalScore(row.canonicalizedCandidateTranscriptScore?.wordErrorRate))/" +
+                        "\(Self.formatScore(row.strictGateOutputTranscriptScore.wordErrorRate))"
+                )
+                if let candidate = row.candidate.candidate {
+                    lines.append("    candidate: \(candidate)")
+                }
+                lines.append("    gate output: \(row.strictGateOutput)")
+                if let reason = row.candidate.strictGuardRejectionReason,
+                   let diff = row.candidate.strictGuardRejectionDiff {
+                    lines.append("    strict rejection: \(reason) \(diff)")
+                }
+            }
+        }
+        lines.append("")
+        lines.append("output: \(outputURL.path)")
+        return lines.joined(separator: "\n")
+    }
+
     private static func configuredPromptStyles(environment: [String: String]) -> [OllamaPolishPromptStyle] {
         let rawStyles = environment["EPOS_OLLAMA_EVAL_PROMPT_STYLES"]?
             .split(separator: ",")
@@ -238,6 +410,64 @@ final class OllamaPolishEvalTests: XCTestCase {
             return styles
         }
         return [.strict, .conservative, .relaxed]
+    }
+
+    private static func configuredModels(environment: [String: String]) -> [String] {
+        if let configuredModels = environment["EPOS_OLLAMA_EVAL_MODELS"] {
+            let models = configuredModels
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+            if !models.isEmpty {
+                return models
+            }
+        }
+        let configuredModel = environment["EPOS_OLLAMA_MODEL"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return [configuredModel].compactMap { model in
+            guard let model, !model.isEmpty else { return OllamaPolishEngine.defaultModel }
+            return model
+        }
+    }
+
+    private static func residualSourceURL(environment: [String: String]) -> URL {
+        fileURL(path: environment["EPOS_OLLAMA_RESIDUAL_SOURCE"] ?? ".build/evals/dogfood-pipeline-eval.jsonl")
+    }
+
+    private static func residualMinimumOutputWER(environment: [String: String]) -> Double {
+        environment["EPOS_OLLAMA_RESIDUAL_MIN_OUTPUT_WER"].flatMap(Double.init) ?? 0
+    }
+
+    private static func loadResidualSourceRows(
+        from sourceURL: URL,
+        minOutputWER: Double,
+        limit: Int?
+    ) throws -> [DogfoodPipelineEvalRow] {
+        guard FileManager.default.fileExists(atPath: sourceURL.path) else {
+            throw XCTSkip("Residual source JSONL not found: \(sourceURL.path)")
+        }
+
+        let decoder = JSONDecoder()
+        let contents = try String(contentsOf: sourceURL, encoding: .utf8)
+        var residualRows: [DogfoodPipelineEvalRow] = []
+        for (index, line) in contents.split(separator: "\n", omittingEmptySubsequences: true).enumerated() {
+            do {
+                let row = try decoder.decode(DogfoodPipelineEvalRow.self, from: Data(line.utf8))
+                guard row.humanIntendedTranscript != nil,
+                      let outputScore = row.outputTranscriptScore,
+                      outputScore.wordErrorRate > minOutputWER else {
+                    continue
+                }
+                residualRows.append(row)
+            } catch {
+                throw OllamaResidualBakeoffError(
+                    description: "\(sourceURL.path):\(index + 1): dogfood row decode failed: \(error)"
+                )
+            }
+        }
+
+        let selectedCount = limit.map { max(0, $0) } ?? residualRows.count
+        return Array(residualRows.prefix(selectedCount))
     }
 
     private static func variants(
@@ -326,8 +556,63 @@ final class OllamaPolishEvalTests: XCTestCase {
         return rows.reduce(0) { $0 + $1.candidate.elapsedSeconds } / Double(rows.count)
     }
 
+    private static func meanResidualCandidateElapsed(_ rows: [OllamaResidualBakeoffRow]) -> Double {
+        guard !rows.isEmpty else { return 0 }
+        return rows.reduce(0) { $0 + $1.candidate.elapsedSeconds } / Double(rows.count)
+    }
+
+    private static func meanWER(
+        _ rows: [OllamaResidualBakeoffRow],
+        _ score: (OllamaResidualBakeoffRow) -> TranscriptWordErrorScore?
+    ) -> String {
+        let scores = rows.compactMap { score($0)?.wordErrorRate }
+        guard !scores.isEmpty else { return "n/a" }
+        return formatScore(scores.reduce(0, +) / Double(scores.count))
+    }
+
+    private static func werDeltaSummary(
+        _ rows: [OllamaResidualBakeoffRow],
+        _ score: (OllamaResidualBakeoffRow) -> TranscriptWordErrorScore?
+    ) -> String {
+        var counts: [String: Int] = [:]
+        for row in rows {
+            guard let score = score(row) else {
+                counts["unavailable", default: 0] += 1
+                continue
+            }
+            let baseline = row.canonicalizedRawTranscriptScore.wordErrorRate
+            if score.wordErrorRate < baseline {
+                counts["better", default: 0] += 1
+            } else if score.wordErrorRate > baseline {
+                counts["worse", default: 0] += 1
+            } else {
+                counts["same", default: 0] += 1
+            }
+        }
+        return Self.countSummary(
+            counts.flatMap { key, count in Array(repeating: key, count: count) }
+        )
+    }
+
     private static func formatSeconds(_ seconds: Double) -> String {
         String(format: "%.3f", seconds)
+    }
+
+    private static func formatScore(_ score: Double) -> String {
+        String(format: "%.3f", score)
+    }
+
+    private static func formatOptionalScore(_ score: Double?) -> String {
+        score.map(formatScore) ?? "n/a"
+    }
+
+    private static func fileURL(path: String) -> URL {
+        let expanded = (path as NSString).expandingTildeInPath
+        if expanded.hasPrefix("/") {
+            return URL(fileURLWithPath: expanded)
+        }
+        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            .appendingPathComponent(expanded)
     }
 }
 
@@ -373,4 +658,34 @@ private struct OllamaRawCandidateEvalRow: Codable {
     let deterministicOutput: String
     let retainedFillerInRaw: Bool
     let candidate: OllamaRawCandidateEvalResult
+}
+
+private struct OllamaResidualBakeoffRow: Codable {
+    let variant: String
+    let model: String
+    let promptStyle: String
+    let prewarmEnabled: Bool
+    let prewarmWaitSeconds: Double
+    let sourceFile: String
+    let humanIntendedTranscript: String
+    let raw: String
+    let canonicalizedRaw: String
+    let sourceOutput: String
+    let sourceOutcome: String
+    let sourceOutputTranscriptScore: TranscriptWordErrorScore
+    let rawTranscriptScore: TranscriptWordErrorScore
+    let canonicalizedRawTranscriptScore: TranscriptWordErrorScore
+    let candidateTranscriptScore: TranscriptWordErrorScore?
+    let canonicalizedCandidateTranscriptScore: TranscriptWordErrorScore?
+    let strictGateOutput: String
+    let strictGateOutputTranscriptScore: TranscriptWordErrorScore
+    let strictGateOutputChangedFromCanonicalizedRaw: Bool
+    let strictGateOutputChangedFromSourceOutput: Bool
+    let retainedFillerInRaw: Bool
+    let retainedFillerInStrictGateOutput: Bool
+    let candidate: OllamaRawCandidateEvalResult
+}
+
+private struct OllamaResidualBakeoffError: Error, CustomStringConvertible {
+    let description: String
 }
