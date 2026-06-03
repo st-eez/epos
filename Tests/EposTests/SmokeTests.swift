@@ -40,9 +40,32 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(cleaned, "open CMUX and edit AGENTS.md then run swift lint")
         XCTAssertEqual(canonicalizer.canonicalize("LOL polish slash cleanup"), "LLM polish / cleanup")
         XCTAssertEqual(canonicalizer.canonicalize("next step in the code basis"), "next step in the codebase")
+        XCTAssertEqual(canonicalizer.canonicalize("unslop the fight the code base"), "unslopify the codebase")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Plot has been vibe coding this branch"),
+            "Claude has been vibe coding this branch"
+        )
         XCTAssertEqual(
             canonicalizer.canonicalize("work around using these foundational models"),
             "work around using these Foundation Models"
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("different than Maine and focus"),
+            "different than main and focus"
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("causing regressions in the sweet"),
+            "causing regressions in the suite"
+        )
+        XCTAssertEqual(canonicalizer.canonicalize("vacation in Maine"), "vacation in Maine")
+        XCTAssertEqual(canonicalizer.canonicalize("the dessert is sweet"), "the dessert is sweet")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("different than release. Later vacation in Maine."),
+            "different than release. Later vacation in Maine."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("regressions in the checkout were fixed; dessert is sweet"),
+            "regressions in the checkout were fixed; dessert is sweet"
         )
     }
 
