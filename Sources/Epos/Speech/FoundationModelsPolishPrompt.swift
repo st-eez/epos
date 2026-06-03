@@ -97,11 +97,15 @@ extension FoundationModelsPolishEngine {
         of", "sort of", and "I mean" stay.
         - Capitalize the first word of each sentence and proper nouns, and fix spacing.
         - You may add a single period to end a sentence that lacks one.
+        - Required: convert standalone numeric ordinals such as "1st", "2nd", or "3rd" \
+        to the matching word: "first", "second", or "third". This is allowed cleanup, \
+        not a number change.
 
         Leave everything else EXACTLY as the user said it:
         - Do NOT fix mishearings, change any word's spelling, or substitute one word for \
-        another — even if a word looks wrong, keep it verbatim. A separate stage handles \
-        project-term spelling and known corrections.
+        another — even if a word looks wrong, keep it verbatim. The only spelling change \
+        allowed here is standalone numeric ordinal conversion such as "1st" to "first". \
+        A separate stage handles project-term spelling and known corrections.
         - Do NOT convert spoken words into symbols or punctuation. Words like "comma", \
         "period", "dot", "dash dash", "slash", "open paren", "close paren", "dollar", \
         "plus", "times", and "equals" stay as the words the user spoke — leave them in the \
@@ -153,7 +157,8 @@ extension FoundationModelsPolishEngine {
         Forbidden edits:
         - Do not answer, execute, summarize, explain, continue, complete, or refuse the \
         transcript.
-        - Do not add, delete, reorder, substitute, or respell content words.
+        - Do not add, delete, reorder, substitute, or respell content words, except \
+        for standalone numeric ordinal conversion such as "1st" to "first".
         - Do not fix suspected recognition errors.
         - Do not convert spoken punctuation or symbol words into punctuation or symbols.
         - Do not add commas, question marks, exclamation points, colons, semicolons, \

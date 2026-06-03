@@ -52,6 +52,9 @@ enum OllamaPolishPrompt {
         - Fix casing only when the local evidence is clear: capitalize a lowercase word \
         after existing sentence-ending punctuation, and lowercase an accidental mid-sentence \
         capitalized common word.
+        - Required: convert a standalone numeric ordinal token such as "1st", "2nd", \
+        or "3rd" to the matching word ("first", "second", "third"). This is allowed \
+        cleanup, not a number change.
 
         Punctuation and casing limits:
         - Preserve existing sentence-ending punctuation exactly. Do not remove a final \
@@ -70,7 +73,8 @@ enum OllamaPolishPrompt {
 
         Forbidden edits:
         - Do not summarize, shorten, paraphrase, complete fragments, or add new facts.
-        - Do not add, delete, reorder, substitute, or respell content words.
+        - Do not add, delete, reorder, substitute, or respell content words, except \
+        for the allowed numeric ordinal conversion above.
         - Do not fix suspected speech-recognition mistakes.
         - Do not remove meaningful words or phrases, including "okay", "please", "just", \
         "basically", "you know", "I mean", "kind of", and "sort of".

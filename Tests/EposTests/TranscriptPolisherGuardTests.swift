@@ -123,6 +123,10 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             // Abbreviation/version dot removed (next token not capitalized, so it
             // was never a sentence boundary). Keep.
             ("see fig. 3 now", "see fig 3 now", true),
+            // A standalone recognizer ordinal formatting artifact preserves content
+            // when converted to the matching spoken word.
+            ("test 1st thing", "Test first thing.", true),
+            ("ship the 21st build", "Ship the twenty-first build.", true),
             // A restored trailing period does not change meaning. Keep.
             ("ship it", "ship it.", true),
             // But an existing final period must not disappear: dogfood showed Qwen
@@ -287,6 +291,12 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("we never agreed", "we agreed", false),
             // Regression: a number change is a content change. Reject.
             ("retry after 15 seconds", "retry after 50 seconds", false),
+            // Numeric ordinal normalization is one-way and exact: word-to-number
+            // rewrites or wrong ordinal words still reject.
+            ("test first thing", "Test 1st thing.", false),
+            ("test 1st thing", "Test second thing.", false),
+            ("test 11st thing", "Test eleventh thing.", false),
+            ("ship the 22th build", "Ship the twenty-second build.", false),
         ]
 
         for testCase in cases {
@@ -301,7 +311,7 @@ final class TranscriptPolisherGuardTests: XCTestCase {
     func testRetentionEvaluationReportsFailureStageAndDiff() throws {
         let evaluation = TranscriptPolisher.polishRetentionEvaluation(
             raw: "test 1st thing",
-            polished: "Test first thing."
+            polished: "Test second thing."
         )
 
         XCTAssertFalse(evaluation.retainsContent)

@@ -287,6 +287,11 @@ extension TranscriptPolisher {
                     rawIndex += 1; polishedIndex += 1; matchedContent = true
                     continue
                 }
+                if ordinalWord(forNumericOrdinal: rawSpans[rawIndex].original) == polished {
+                    matches.append(TokenMatch(rawIndex: rawIndex, polishedIndex: polishedIndex))
+                    rawIndex += 1; polishedIndex += 1; matchedContent = true
+                    continue
+                }
                 if let parts = hyphenMergeParts(polished, raw: rawText, rawSpans: rawSpans, at: rawIndex) {
                     for offset in 0..<parts.count {
                         matches.append(TokenMatch(rawIndex: rawIndex + offset, polishedIndex: polishedIndex))
@@ -408,18 +413,61 @@ extension TranscriptPolisher {
     }
 
     private static func isNumericOrdinal(_ token: String) -> Bool {
+        numericOrdinalValue(token) != nil
+    }
+
+    private static func ordinalWord(forNumericOrdinal token: String) -> String? {
+        guard let number = numericOrdinalValue(token) else { return nil }
+
+        return ordinalWordByNumber[number]
+    }
+
+    private static func numericOrdinalValue(_ token: String) -> Int? {
         let lowercased = token.lowercased()
         guard ["st", "nd", "rd", "th"].contains(where: { lowercased.hasSuffix($0) }) else {
-            return false
+            return nil
         }
+
         let suffixStart = lowercased.index(lowercased.endIndex, offsetBy: -2)
         let digits = lowercased[..<suffixStart]
-        return !digits.isEmpty && digits.allSatisfy(\.isNumber)
+        guard
+            !digits.isEmpty,
+            digits.allSatisfy(\.isNumber),
+            let number = Int(digits),
+            ordinalWordByNumber.keys.contains(number)
+        else {
+            return nil
+        }
+
+        let suffix = String(lowercased[suffixStart...])
+        return suffix == expectedOrdinalSuffix(for: number) ? number : nil
+    }
+
+    private static func expectedOrdinalSuffix(for number: Int) -> String {
+        let lastTwoDigits = number % 100
+        if (11...13).contains(lastTwoDigits) { return "th" }
+
+        switch number % 10 {
+        case 1: return "st"
+        case 2: return "nd"
+        case 3: return "rd"
+        default: return "th"
+        }
     }
 
     private static func isOrdinalWord(_ token: String) -> Bool {
         ordinalWords.contains(normalizeToken(token))
     }
+
+    private static let ordinalWordByNumber: [Int: String] = [
+        1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", 6: "sixth", 7: "seventh",
+        8: "eighth", 9: "ninth", 10: "tenth", 11: "eleventh", 12: "twelfth", 13: "thirteenth",
+        14: "fourteenth", 15: "fifteenth", 16: "sixteenth", 17: "seventeenth", 18: "eighteenth",
+        19: "nineteenth", 20: "twentieth", 21: "twenty-first", 22: "twenty-second",
+        23: "twenty-third", 24: "twenty-fourth", 25: "twenty-fifth", 26: "twenty-sixth",
+        27: "twenty-seventh", 28: "twenty-eighth", 29: "twenty-ninth", 30: "thirtieth",
+        31: "thirty-first"
+    ]
 
     private static let ordinalWords: Set<String> = [
         "first", "second", "third", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",

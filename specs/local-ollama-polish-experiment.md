@@ -46,6 +46,7 @@ Lever files live under `specs/ollama-polish-levers/`; use
 | Baseline measurement | `specs/ollama-polish-levers/L1-baseline-measurement.md` | implemented+verified | Full static, raw-candidate, resource, and 111-recording dogfood baseline completed; next lever is prompt shape |
 | Prompt shape | `specs/ollama-polish-levers/L2-prompt-shape.md` | implemented+verified | Conservative prompt reduced target19 churn and guard rejections, but one final-period drop remained |
 | Final period guard | `specs/ollama-polish-levers/L3-final-period-guard.md` | implemented+verified | Existing terminal periods are guard-protected; Ollama production default is now the conservative prompt |
+| Ground-truth 20 corrections | `specs/ollama-polish-levers/L4-ground-truth20-corrections.md` | implemented+verified | Seeded 20 human-confirmed transcripts exposed safe canonicalizer wins; exact ordinal guard allowance helps relaxed but conservative remains production default |
 
 ## Read First
 

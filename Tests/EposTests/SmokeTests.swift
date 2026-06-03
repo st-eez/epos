@@ -38,6 +38,12 @@ final class SmokeTests: XCTestCase {
         let cleaned = canonicalizer.canonicalize(raw)
 
         XCTAssertEqual(cleaned, "open CMUX and edit AGENTS.md then run swift lint")
+        XCTAssertEqual(canonicalizer.canonicalize("LOL polish slash cleanup"), "LLM polish / cleanup")
+        XCTAssertEqual(canonicalizer.canonicalize("next step in the code basis"), "next step in the codebase")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("work around using these foundational models"),
+            "work around using these Foundation Models"
+        )
     }
 
     func testCanonicalizerFixesClaudeMarkdownAliases() {

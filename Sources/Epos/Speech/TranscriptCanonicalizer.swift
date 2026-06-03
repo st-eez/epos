@@ -63,6 +63,9 @@ public struct TranscriptCanonicalizer: Sendable {
             ]
         ),
         Rule(canonical: "Stath", aliases: ["steph", "staff"]),
+        Rule(canonical: "LLM polish", aliases: ["LOL polish"]),
+        Rule(canonical: "Foundation Models", aliases: ["foundation models", "foundational models"]),
+        Rule(canonical: "codebase", aliases: ["code basis"]),
         Rule(canonical: "/", aliases: ["slash"]),
         Rule(
             canonical: "CMUX",
