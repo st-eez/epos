@@ -1,17 +1,40 @@
 import Foundation
 
+enum SpeechContextApplicationMode: String, Codable {
+    case setContextBeforeStart
+    case initializer
+}
+
 struct SpeechContextEvalVariant {
     let name: String
     let contextualStrings: [String]
+    let applicationMode: SpeechContextApplicationMode
+    let includeAlternatives: Bool
+
+    init(
+        name: String,
+        contextualStrings: [String],
+        applicationMode: SpeechContextApplicationMode = .setContextBeforeStart,
+        includeAlternatives: Bool = false
+    ) {
+        self.name = name
+        self.contextualStrings = contextualStrings
+        self.applicationMode = applicationMode
+        self.includeAlternatives = includeAlternatives
+    }
 }
 
 struct SpeechContextVariantResult {
     let variant: String
     let contextTermCount: Int
     let contextualStrings: [String]
+    let applicationMode: SpeechContextApplicationMode
+    let includeAlternatives: Bool
+    let contextReadback: [String]
     let text: String
     let canonicalizedText: String
     let vocabularyHits: [String]
+    let alternatives: [String]
     let elapsedSeconds: Double
 }
 
@@ -22,12 +45,17 @@ struct SpeechContextEvalRow: Codable {
     let baselineVariant: String
     let variant: String
     let contextTermCount: Int
+    let applicationMode: SpeechContextApplicationMode
+    let includeAlternatives: Bool
+    let contextReadbackCount: Int
+    let contextReadbackMatches: Bool
     let baselineText: String
     let variantText: String
     let baselineCanonicalized: String
     let variantCanonicalized: String
     let baselineVocabularyHits: [String]
     let variantVocabularyHits: [String]
+    let variantAlternatives: [String]
     let baselineElapsedSeconds: Double
     let variantElapsedSeconds: Double
 
@@ -35,6 +63,8 @@ struct SpeechContextEvalRow: Codable {
     var canonicalizedChanged: Bool { baselineCanonicalized != variantCanonicalized }
     var vocabularyHitDelta: Int { variantVocabularyHits.count - baselineVocabularyHits.count }
     var elapsedDeltaSeconds: Double { variantElapsedSeconds - baselineElapsedSeconds }
+    var hasAlternatives: Bool { !variantAlternatives.isEmpty }
+    var hasDifferentAlternative: Bool { variantAlternatives.contains { $0 != variantText } }
 }
 
 struct SpeechContextEvalSummary {
@@ -74,6 +104,10 @@ struct SpeechContextEvalSummary {
         )
         lines.append("  base: \(row.baselineText)")
         lines.append("  ctx:  \(row.variantText)")
+        lines.append(
+            "  context: \(row.applicationMode.rawValue) terms=\(row.contextTermCount) " +
+                "readback=\(row.contextReadbackCount) alternatives=\(row.variantAlternatives.count)"
+        )
         if row.canonicalizedChanged {
             lines.append("  base can: \(row.baselineCanonicalized)")
             lines.append("  ctx can:  \(row.variantCanonicalized)")
@@ -81,6 +115,9 @@ struct SpeechContextEvalSummary {
         if row.vocabularyHitDelta != 0 {
             lines.append("  base hits: \(row.baselineVocabularyHits.joined(separator: ", "))")
             lines.append("  ctx hits:  \(row.variantVocabularyHits.joined(separator: ", "))")
+        }
+        if row.hasAlternatives {
+            lines.append("  alternatives: \(row.variantAlternatives.joined(separator: " | "))")
         }
     }
 
@@ -90,6 +127,9 @@ struct SpeechContextEvalSummary {
         if row.canonicalizedChanged { tags.append("CANON-CHANGED") }
         if row.vocabularyHitDelta > 0 { tags.append("VOCAB-GAIN") }
         if row.vocabularyHitDelta < 0 { tags.append("VOCAB-LOSS") }
+        if !row.contextReadbackMatches { tags.append("READBACK-MISMATCH") }
+        if row.hasAlternatives { tags.append("ALTERNATIVES") }
+        if row.hasDifferentAlternative { tags.append("ALT-DIFF") }
         return tags
     }
 
@@ -108,6 +148,9 @@ struct SpeechContextEvalSummary {
         var canonicalizedChanged = 0
         var vocabularyHitGains = 0
         var vocabularyHitLosses = 0
+        var contextReadbackMismatches = 0
+        var alternativesRows = 0
+        var differentAlternativeRows = 0
         var elapsedDeltaTotal = 0.0
 
         mutating func add(_ row: SpeechContextEvalRow) {
@@ -118,6 +161,9 @@ struct SpeechContextEvalSummary {
             if row.canonicalizedChanged { canonicalizedChanged += 1 }
             if row.vocabularyHitDelta > 0 { vocabularyHitGains += 1 }
             if row.vocabularyHitDelta < 0 { vocabularyHitLosses += 1 }
+            if !row.contextReadbackMatches { contextReadbackMismatches += 1 }
+            if row.hasAlternatives { alternativesRows += 1 }
+            if row.hasDifferentAlternative { differentAlternativeRows += 1 }
         }
 
         func report(variant: String) -> String {
@@ -125,6 +171,8 @@ struct SpeechContextEvalSummary {
             return "\(variant): context terms=\(contextTermCount) " +
                 "raw changed=\(rawChanged) canonicalized changed=\(canonicalizedChanged) " +
                 "vocabulary hit gains/losses=\(vocabularyHitGains)/\(vocabularyHitLosses) " +
+                "readback mismatches=\(contextReadbackMismatches) " +
+                "alternatives/different=\(alternativesRows)/\(differentAlternativeRows) " +
                 "mean latency delta=\(String(format: "%+.3f", meanDelta))s"
         }
     }

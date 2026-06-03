@@ -34,17 +34,25 @@ confirmed firing in logs). Output was byte-identical on every recording. The
 light-hint API does not move the needle here.
 
 Replayed the full 111 saved-recording corpus again with the expanded
-`SpeechContextEvalTests` harness:
+`SpeechContextEvalTests` harness, including context readback, alternate
+application setup, and alternatives-enabled positive controls:
 
-| Context variant | Terms | Raw changed | Canonicalized changed | Mean latency delta |
-|---|---:|---:|---:|---:|
-| canonical-only | 11 | 0 | 0 | +0.000s |
-| production alias-inclusive | 42 | 0 | 0 | -0.001s |
-| project-expanded | 67 | 0 | 0 | +0.000s |
+| Context variant | Setup | Terms/readback | Raw changed | Canonicalized changed |
+|---|---|---:|---:|---:|
+| production-setContext | `setContext` before `start` | 42/42 | 0 | 0 |
+| production-initializer | `SpeechAnalyzer(inputSequence:analysisContext:)` | 42/42 | 0 | 0 |
+| production-alternatives | `setContext` + alternatives | 42/42 | 0 | 0 |
+| project-expanded-setContext | `setContext` before `start` | 67/67 | 0 | 0 |
+| positive-control-alternatives | targeted terms + alternatives | 21/21 | 0 | 0 |
 
-Output was byte-identical on every recording. The live path keeps the hint wired
-because it costs little and may help future SDKs or future utterances, but
-correctness must not depend on it.
+Output was byte-identical on every recording. Context readback matched for every
+variant, so this was not a silent wiring failure. Alternatives-enabled variants
+returned different internal alternatives on all 111 recordings, including the
+targeted term-control recordings (`CMOX`, `Siemux`, `cloud.md`, `project.yamo`,
+`read me`), but those alternatives did not move the final transcript or surface a
+better top candidate. The live path keeps the hint wired because it costs little
+and may help future SDKs or future utterances, but correctness must not depend on
+it.
 
 ### 3. Custom LM on `DictationTranscriber` is real, but loses on net accuracy
 
@@ -109,5 +117,6 @@ methodology:
   G2P API exists, so phonemes are a hand-built bounded matrix.
 
 The kept eval `Tests/EposTests/SpeechContextEvalTests.swift` (gated
-`EPOS_RUN_CONTEXT_EVAL=1`) exercises the production `Transcriber.start(contextualStrings:)`
-hook across no-context, canonical-only, production, and project-expanded variants.
+`EPOS_RUN_CONTEXT_EVAL=1`) exercises the context hook across no-context,
+production, initializer, alternatives-enabled, project-expanded, and targeted
+positive-control variants.

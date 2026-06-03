@@ -1,11 +1,20 @@
 import AVFoundation
 import Foundation
-import Epos
+@testable import Epos
 
 enum SavedRecordingEvalSupport {
     struct Transcription {
         let text: String
         let failureMessages: [String]
+        let alternatives: [String]
+        let contextReadback: [String]
+
+        init(text: String, failureMessages: [String], alternatives: [String] = [], contextReadback: [String] = []) {
+            self.text = text
+            self.failureMessages = failureMessages
+            self.alternatives = alternatives
+            self.contextReadback = contextReadback
+        }
     }
 
     static func isTruthy(_ value: String?) -> Bool {
@@ -134,6 +143,16 @@ enum SavedRecordingEvalSupport {
         targetFormat: AVAudioFormat,
         into transcriber: Transcriber
     ) throws {
+        try feed(recording: recording, targetFormat: targetFormat) { buffer in
+            transcriber.accept(buffer)
+        }
+    }
+
+    static func feed(
+        recording: URL,
+        targetFormat: AVAudioFormat,
+        accept: (AVAudioPCMBuffer) -> Void
+    ) throws {
         let file = try AVAudioFile(forReading: recording)
         let inputFormat = file.processingFormat
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
@@ -171,7 +190,7 @@ enum SavedRecordingEvalSupport {
                 throw conversionError ?? SavedRecordingEvalError.conversionFailed
             }
             guard outputBuffer.frameLength > 0 else { continue }
-            transcriber.accept(outputBuffer)
+            accept(outputBuffer)
         }
     }
 

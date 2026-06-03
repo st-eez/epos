@@ -49,24 +49,45 @@ final class SpeechContextEvalTests: XCTestCase {
             var results: [SpeechContextVariantResult] = []
             for variant in variants {
                 let started = Date()
-                let transcription = try await SavedRecordingEvalSupport.transcribe(
+                let transcription = try await SavedRecordingEvalSupport.transcribeForContextEval(
                     recording: recording,
                     locale: locale,
-                    contextualStrings: variant.contextualStrings
+                    contextualStrings: variant.contextualStrings,
+                    applicationMode: variant.applicationMode,
+                    includeAlternatives: variant.includeAlternatives
                 )
                 results.append(SpeechContextVariantResult(
                     variant: variant.name,
                     contextTermCount: variant.contextualStrings.count,
                     contextualStrings: variant.contextualStrings,
+                    applicationMode: variant.applicationMode,
+                    includeAlternatives: variant.includeAlternatives,
+                    contextReadback: transcription.contextReadback,
                     text: transcription.text,
                     canonicalizedText: canonicalizer.canonicalize(transcription.text),
                     vocabularyHits: Self.vocabularyHits(in: transcription.text, terms: variant.contextualStrings),
+                    alternatives: transcription.alternatives,
                     elapsedSeconds: Date().timeIntervalSince(started)
                 ))
             }
 
             let baseline = try XCTUnwrap(results.first)
             for result in results.dropFirst() {
+                let contextReadbackMatches = Self.contextReadbackMatches(
+                    expected: result.contextualStrings,
+                    actual: result.contextReadback
+                )
+                XCTAssertTrue(
+                    contextReadbackMatches,
+                    "\(recording.lastPathComponent) \(result.variant) context readback did not match requested terms"
+                )
+                if result.includeAlternatives {
+                    XCTAssertFalse(
+                        result.alternatives.isEmpty,
+                        "\(recording.lastPathComponent) \(result.variant) expected alternative transcriptions"
+                    )
+                }
+
                 let row = SpeechContextEvalRow(
                     file: recording.lastPathComponent,
                     localeIdentifier: locale.identifier,
@@ -74,12 +95,17 @@ final class SpeechContextEvalTests: XCTestCase {
                     baselineVariant: baselineVariant.name,
                     variant: result.variant,
                     contextTermCount: result.contextTermCount,
+                    applicationMode: result.applicationMode,
+                    includeAlternatives: result.includeAlternatives,
+                    contextReadbackCount: result.contextReadback.count,
+                    contextReadbackMatches: contextReadbackMatches,
                     baselineText: baseline.text,
                     variantText: result.text,
                     baselineCanonicalized: baseline.canonicalizedText,
                     variantCanonicalized: result.canonicalizedText,
                     baselineVocabularyHits: Self.vocabularyHits(in: baseline.text, terms: result.contextualStrings),
                     variantVocabularyHits: result.vocabularyHits,
+                    variantAlternatives: result.alternatives,
                     baselineElapsedSeconds: baseline.elapsedSeconds,
                     variantElapsedSeconds: result.elapsedSeconds
                 )
@@ -98,15 +124,28 @@ final class SpeechContextEvalTests: XCTestCase {
     }
 
     private static func contextVariants(canonicalizer: TranscriptCanonicalizer) -> [SpeechContextEvalVariant] {
-        let canonicalOnly = boundedContext(["Epos"] + canonicalizer.canonicalVocabularyStrings)
         let production = boundedContext(["Epos"] + canonicalizer.speechContextualStrings)
         return [
             SpeechContextEvalVariant(name: "none", contextualStrings: []),
-            SpeechContextEvalVariant(name: "canonical-only", contextualStrings: canonicalOnly),
-            SpeechContextEvalVariant(name: "production", contextualStrings: production),
+            SpeechContextEvalVariant(name: "production-setContext", contextualStrings: production),
             SpeechContextEvalVariant(
-                name: "project-expanded",
+                name: "production-initializer",
+                contextualStrings: production,
+                applicationMode: .initializer
+            ),
+            SpeechContextEvalVariant(
+                name: "production-alternatives",
+                contextualStrings: production,
+                includeAlternatives: true
+            ),
+            SpeechContextEvalVariant(
+                name: "project-expanded-setContext",
                 contextualStrings: boundedContext(production + projectContextTerms)
+            ),
+            SpeechContextEvalVariant(
+                name: "positive-control-alternatives",
+                contextualStrings: boundedContext(positiveControlContextTerms),
+                includeAlternatives: true
             )
         ]
     }
@@ -129,6 +168,10 @@ final class SpeechContextEvalTests: XCTestCase {
     private static func vocabularyHits(in text: String, terms: [String]) -> [String] {
         let lowercasedText = text.lowercased()
         return terms.filter { lowercasedText.contains($0.lowercased()) }
+    }
+
+    private static func contextReadbackMatches(expected: [String], actual: [String]) -> Bool {
+        expected.map { $0.lowercased() } == actual.map { $0.lowercased() }
     }
 
     private static let projectContextTerms = [
@@ -157,5 +200,29 @@ final class SpeechContextEvalTests: XCTestCase {
         "push-to-talk",
         "canonicalizer",
         "prewarm"
+    ]
+
+    private static let positiveControlContextTerms = [
+        "Epos",
+        "CMUX",
+        "CMOX",
+        "Siemux",
+        "see mux",
+        "CLAUDE.md",
+        "cloud.md",
+        "cloud dot md",
+        "project.yml",
+        "project.yamo",
+        "project dot yml",
+        "AGENTS.md",
+        "agent's file",
+        "README.md",
+        "read me",
+        "Stath",
+        "Stas",
+        "NetSuite",
+        "FoundationModels",
+        "Foundation Models",
+        "SpeechTranscriber"
     ]
 }
