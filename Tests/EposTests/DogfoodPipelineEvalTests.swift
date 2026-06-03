@@ -11,9 +11,10 @@ import XCTest
 ///       -> TranscriptCanonicalizer -> TranscriptPolisher -> guard outcome
 ///
 /// Skipped unless `EPOS_RUN_DOGFOOD_EVAL=1`, since it needs real saved audio and
-/// the on-device FoundationModels polish model:
+/// the configured local polish model:
 ///
 ///   EPOS_RUN_DOGFOOD_EVAL=1 EPOS_EVAL_LATEST=1 EPOS_EVAL_LIMIT=10 swift test --filter DogfoodPipelineEvalTests
+///   EPOS_POLISH_ENGINE=ollama EPOS_RUN_DOGFOOD_EVAL=1 EPOS_EVAL_LATEST=1 EPOS_EVAL_LIMIT=10 swift test --filter DogfoodPipelineEvalTests
 ///
 /// Useful knobs:
 /// - `EPOS_EVAL_RECORDINGS_DIR`: defaults to `~/Library/Caches/Epos/recordings`
@@ -27,8 +28,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
             throw XCTSkip("Set EPOS_RUN_DOGFOOD_EVAL=1 to run the saved-recording dogfood pipeline eval")
         }
 
-        let engine = FoundationModelsPolishEngine()
-        try XCTSkipUnless(engine.isAvailable, "FoundationModels model unavailable in this context")
+        let engine = try await Self.makeConfiguredPolishEngine(environment: environment)
 
         let settings = Settings.load()
         let locale = settings.locale
@@ -113,6 +113,23 @@ final class DogfoodPipelineEvalTests: XCTestCase {
             outputURL: outputURL,
             rows: rows
         ))
+    }
+}
+
+extension DogfoodPipelineEvalTests {
+    private static func makeConfiguredPolishEngine(environment: [String: String]) async throws -> any PolishEngine {
+        switch PolishEngineFactory.configuredEngine(environment: environment) {
+        case .foundationModels:
+            let engine = FoundationModelsPolishEngine()
+            try XCTSkipUnless(engine.isAvailable, "FoundationModels model unavailable in this context")
+            return engine
+        case .ollama(let model):
+            let engine = OllamaPolishEngine(model: model)
+            guard await engine.isModelInstalled() else {
+                throw XCTSkip("Ollama model \(model) unavailable; run `ollama pull \(model)`")
+            }
+            return engine
+        }
     }
 }
 

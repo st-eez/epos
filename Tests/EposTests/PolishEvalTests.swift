@@ -1,8 +1,8 @@
 import XCTest
 @testable import Epos
 
-/// Offline quality eval for the LLM polish stage. Runs the REAL production path
-/// (`FoundationModelsPolishEngine` + `TranscriptPolisher` guard + the
+/// Offline quality eval for the LLM polish stage. Runs the configured production
+/// polish engine (`PolishEngineFactory` + `TranscriptPolisher` guard + the
 /// canonicalizer, both sides) over a text corpus — the recognizer's wav→text step
 /// is covered separately by `SpeechContextEvalTests`, so this evals the polish
 /// layer directly. The corpus is the transcripts of the saved real clips plus a
@@ -12,6 +12,7 @@ import XCTest
 /// Skipped unless `EPOS_RUN_POLISH_EVAL=1`, since it runs the on-device model:
 ///
 ///   EPOS_RUN_POLISH_EVAL=1 swift test --filter PolishEvalTests
+///   EPOS_POLISH_ENGINE=ollama EPOS_RUN_POLISH_EVAL=1 swift test --filter PolishEvalTests
 ///
 /// Prints a per-row raw→outcome→output table plus a summary, and writes
 /// `.build/evals/polish-eval.jsonl` with guard rejection candidate text and diffs.
@@ -52,17 +53,15 @@ final class PolishEvalTests: XCTestCase {
     ]
 
     func testProductionPolishOverCorpus() async throws {
-        guard ProcessInfo.processInfo.environment["EPOS_RUN_POLISH_EVAL"] == "1" else {
+        let environment = ProcessInfo.processInfo.environment
+        guard environment["EPOS_RUN_POLISH_EVAL"] == "1" else {
             throw XCTSkip("Set EPOS_RUN_POLISH_EVAL=1 to run the on-device polish eval")
         }
-        let engine = FoundationModelsPolishEngine()
-        try XCTSkipUnless(engine.isAvailable, "FoundationModels model unavailable in this context")
+        let engine = try await Self.makeConfiguredPolishEngine(environment: environment)
 
         let canonicalizer = TranscriptCanonicalizer.load()
         let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
-        let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(
-            environment: ProcessInfo.processInfo.environment
-        )
+        let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(environment: environment)
 
         var rows: [PolishEvalRow] = []
         for (label, corpus) in [("real", Self.realClipTranscripts), ("stress", Self.stressTranscripts)] {
@@ -104,6 +103,21 @@ final class PolishEvalTests: XCTestCase {
 
         print(Self.report(rows))
         try Self.writeJSONL(rows)
+    }
+
+    private static func makeConfiguredPolishEngine(environment: [String: String]) async throws -> any PolishEngine {
+        switch PolishEngineFactory.configuredEngine(environment: environment) {
+        case .foundationModels:
+            let engine = FoundationModelsPolishEngine()
+            try XCTSkipUnless(engine.isAvailable, "FoundationModels model unavailable in this context")
+            return engine
+        case .ollama(let model):
+            let engine = OllamaPolishEngine(model: model)
+            guard await engine.isModelInstalled() else {
+                throw XCTSkip("Ollama model \(model) unavailable; run `ollama pull \(model)`")
+            }
+            return engine
+        }
     }
 
     private static func report(_ rows: [PolishEvalRow]) -> String {
