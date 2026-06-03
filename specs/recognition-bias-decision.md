@@ -33,11 +33,18 @@ Replayed 6 real recordings with vs without `setContext` (9 canonical terms; path
 confirmed firing in logs). Output was byte-identical on every recording. The
 light-hint API does not move the needle here.
 
-Replayed the full 111 saved-recording corpus again with the production
-alias-inclusive context list. Output was still byte-identical on every recording:
-raw changed 0, canonicalized changed 0, vocabulary hit gains 0. The live path
-keeps the hint wired because it costs little and may help future SDKs or future
-utterances, but correctness must not depend on it.
+Replayed the full 111 saved-recording corpus again with the expanded
+`SpeechContextEvalTests` harness:
+
+| Context variant | Terms | Raw changed | Canonicalized changed | Mean latency delta |
+|---|---:|---:|---:|---:|
+| canonical-only | 11 | 0 | 0 | +0.000s |
+| production alias-inclusive | 42 | 0 | 0 | -0.001s |
+| project-expanded | 67 | 0 | 0 | +0.000s |
+
+Output was byte-identical on every recording. The live path keeps the hint wired
+because it costs little and may help future SDKs or future utterances, but
+correctness must not depend on it.
 
 ### 3. Custom LM on `DictationTranscriber` is real, but loses on net accuracy
 
@@ -103,4 +110,4 @@ methodology:
 
 The kept eval `Tests/EposTests/SpeechContextEvalTests.swift` (gated
 `EPOS_RUN_CONTEXT_EVAL=1`) exercises the production `Transcriber.start(contextualStrings:)`
-hook and is the starting point for such a harness.
+hook across no-context, canonical-only, production, and project-expanded variants.
