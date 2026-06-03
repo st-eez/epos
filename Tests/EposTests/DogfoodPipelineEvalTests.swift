@@ -21,8 +21,8 @@ import XCTest
 /// - `EPOS_EVAL_LIMIT`: number of recordings to replay
 /// - `EPOS_EVAL_LATEST=1`: newest-first selection instead of oldest-first
 /// - `EPOS_EVAL_OUTPUT`: defaults to `.build/evals/dogfood-pipeline-eval.jsonl`
-/// - `EPOS_EVAL_SHADOW_RELAXED_OLLAMA=1`: also log an eval-only relaxed Qwen
-///   candidate without changing the production strict output fields.
+/// - `EPOS_EVAL_SHADOW_RELAXED_OLLAMA=1`: also log a direct, eval-only relaxed
+///   Qwen candidate plus the strict guard decision, without changing production fields.
 final class DogfoodPipelineEvalTests: XCTestCase {
     func testSavedRecordingsThroughProductionPolishPipeline() async throws {
         let environment = ProcessInfo.processInfo.environment
@@ -31,7 +31,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
         }
 
         let engine = try await Self.makeConfiguredPolishEngine(environment: environment)
-        let shadowRelaxedEngine = try await Self.makeRelaxedOllamaShadowEngine(environment: environment)
+        let shadowRelaxedEngine = try await Self.makeRelaxedOllamaRawCandidateEngine(environment: environment)
 
         let settings = Settings.load()
         let locale = settings.locale
@@ -62,16 +62,8 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 knownTerms: knownTerms,
                 canonicalize: { canonicalizer.canonicalize($0) }
             )
-            let shadowRelaxedPolisher = shadowRelaxedEngine.map { engine in
-                TranscriptPolisher(
-                    enabled: true,
-                    engine: engine,
-                    knownTerms: knownTerms,
-                    canonicalize: { canonicalizer.canonicalize($0) }
-                )
-            }
+            let shadowRelaxedSession = shadowRelaxedEngine?.makeSession(knownTerms: knownTerms)
             polisher.prewarm()
-            shadowRelaxedPolisher?.prewarm()
 
             let transcribeStarted = Date()
             let transcription = try await SavedRecordingEvalSupport.transcribe(
@@ -89,13 +81,27 @@ final class DogfoodPipelineEvalTests: XCTestCase {
             let polishStarted = Date()
             let result = await polisher.polish(transcription.text)
             let polishSeconds = Date().timeIntervalSince(polishStarted)
-            let shadowRelaxedStarted = Date()
-            let shadowRelaxedResult = await shadowRelaxedPolisher?.polish(transcription.text)
-            let shadowRelaxedPolishSeconds = shadowRelaxedResult.map { _ in
-                Date().timeIntervalSince(shadowRelaxedStarted)
+            let shadowRelaxedRawCandidate: OllamaRawCandidateEvalResult?
+            if let shadowRelaxedSession {
+                shadowRelaxedRawCandidate = await OllamaRawCandidateEvalSupport.evaluate(
+                    raw: transcription.text,
+                    canonicalizedRaw: canonicalizedRaw,
+                    deterministicOutput: TranscriptDeterministicCleaner.clean(canonicalizedRaw),
+                    session: shadowRelaxedSession,
+                    canonicalize: { canonicalizer.canonicalize($0) }
+                )
+            } else {
+                shadowRelaxedRawCandidate = nil
             }
-            let shadowRelaxedCandidateOrOutput = shadowRelaxedResult?.guardRejection?.candidateText
-                ?? shadowRelaxedResult?.text
+            let shadowRelaxedCandidateOrOutput = shadowRelaxedRawCandidate?.candidate
+                ?? shadowRelaxedRawCandidate?.strictGateOutput
+            let shadowRelaxedRejectedCandidate = shadowRelaxedRawCandidate?.strictGuardRejectionReason == nil
+                ? nil
+                : shadowRelaxedRawCandidate?.candidate
+            let shadowRelaxedRejectedCandidateCharacterCount =
+                shadowRelaxedRawCandidate?.strictGuardRejectionReason == nil
+                    ? nil
+                    : shadowRelaxedRawCandidate?.candidateCharacterCount
 
             let row = DogfoodPipelineEvalRow(
                 file: recording.lastPathComponent,
@@ -120,23 +126,24 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 guardRejectionCandidate: result.guardRejection?.candidateText,
                 guardRejectionCandidateCharacterCount: result.guardRejection?.candidateCharacterCount,
                 guardRejectionDiff: result.guardRejection?.diff,
-                shadowRelaxedOutput: shadowRelaxedResult?.text,
-                shadowRelaxedOutcome: shadowRelaxedResult.map { String(describing: $0.outcome) },
-                shadowRelaxedEngineOutcome: shadowRelaxedResult?.engineOutcome?.rawValue,
-                shadowRelaxedPolishSeconds: shadowRelaxedPolishSeconds,
-                shadowRelaxedOutputChangedFromProduction: shadowRelaxedResult.map { $0.text != result.text },
-                shadowRelaxedOutputChangedFromCanonicalizedRaw: shadowRelaxedResult.map {
-                    $0.text != canonicalizedRaw
+                shadowRelaxedOutput: shadowRelaxedRawCandidate?.strictGateOutput,
+                shadowRelaxedOutcome: shadowRelaxedRawCandidate?.strictGateOutcome,
+                shadowRelaxedEngineOutcome: shadowRelaxedRawCandidate?.candidateOutcome,
+                shadowRelaxedPolishSeconds: shadowRelaxedRawCandidate?.elapsedSeconds,
+                shadowRelaxedOutputChangedFromProduction: shadowRelaxedRawCandidate?.strictGateOutput.map {
+                    $0 != result.text
+                },
+                shadowRelaxedOutputChangedFromCanonicalizedRaw: shadowRelaxedRawCandidate?.strictGateOutput.map {
+                    $0 != canonicalizedRaw
                 },
                 shadowRelaxedCandidateOrOutputChangedFromProduction: shadowRelaxedCandidateOrOutput.map {
                     $0 != result.text
                 },
-                shadowRelaxedGuardRejectionReason: shadowRelaxedResult?.guardRejection?.reason.rawValue,
-                shadowRelaxedGuardRejectionCandidate: shadowRelaxedResult?.guardRejection?.candidateText,
-                shadowRelaxedGuardRejectionCandidateCharacterCount: shadowRelaxedResult?
-                    .guardRejection?
-                    .candidateCharacterCount,
-                shadowRelaxedGuardRejectionDiff: shadowRelaxedResult?.guardRejection?.diff
+                shadowRelaxedGuardRejectionReason: shadowRelaxedRawCandidate?.strictGuardRejectionReason,
+                shadowRelaxedGuardRejectionCandidate: shadowRelaxedRejectedCandidate,
+                shadowRelaxedGuardRejectionCandidateCharacterCount: shadowRelaxedRejectedCandidateCharacterCount,
+                shadowRelaxedGuardRejectionDiff: shadowRelaxedRawCandidate?.strictGuardRejectionDiff,
+                shadowRelaxedRawCandidate: shadowRelaxedRawCandidate
             )
             rows.append(row)
             summary.add(row)
@@ -170,7 +177,9 @@ extension DogfoodPipelineEvalTests {
         }
     }
 
-    private static func makeRelaxedOllamaShadowEngine(environment: [String: String]) async throws -> (any PolishEngine)? {
+    private static func makeRelaxedOllamaRawCandidateEngine(
+        environment: [String: String]
+    ) async throws -> (any PolishEngine)? {
         guard SavedRecordingEvalSupport.isTruthy(environment[shadowRelaxedEnvironmentKey]) else { return nil }
         let model = configuredShadowOllamaModel(environment: environment)
         let engine = OllamaPolishEngine(model: model, promptStyle: .relaxed)
@@ -223,6 +232,7 @@ private struct DogfoodPipelineEvalRow: Codable {
     let shadowRelaxedGuardRejectionCandidate: String?
     let shadowRelaxedGuardRejectionCandidateCharacterCount: Int?
     let shadowRelaxedGuardRejectionDiff: String?
+    let shadowRelaxedRawCandidate: OllamaRawCandidateEvalResult?
 }
 
 private struct DogfoodPipelineEvalSummary {
@@ -240,6 +250,7 @@ private struct DogfoodPipelineEvalSummary {
     private var shadowRelaxedOutcomes: [String: Int] = [:]
     private var shadowRelaxedEngineOutcomes: [String: Int] = [:]
     private var shadowRelaxedGuardRejections: [String: Int] = [:]
+    private var shadowRelaxedRawCandidateChangedFromProduction = 0
 
     mutating func add(_ row: DogfoodPipelineEvalRow) {
         if row.rawChangedByCanonicalizer {
@@ -274,6 +285,10 @@ private struct DogfoodPipelineEvalSummary {
         if let reason = row.shadowRelaxedGuardRejectionReason {
             shadowRelaxedGuardRejections[reason, default: 0] += 1
         }
+        if let candidate = row.shadowRelaxedRawCandidate?.candidate,
+           candidate != row.output {
+            shadowRelaxedRawCandidateChangedFromProduction += 1
+        }
     }
 
     func report(
@@ -297,10 +312,17 @@ private struct DogfoodPipelineEvalSummary {
                 lines.append("  rejection: \(reason) \(diff)")
             }
             if let shadowOutput = row.shadowRelaxedOutput {
-                lines.append("  relaxed out: \(shadowOutput)")
+                lines.append("  relaxed strict-gate out: \(shadowOutput)")
+            }
+            if let rawCandidate = row.shadowRelaxedRawCandidate?.candidate {
+                lines.append("  relaxed raw candidate: \(rawCandidate)")
+            }
+            if let canonicalizedCandidate = row.shadowRelaxedRawCandidate?.canonicalizedCandidate,
+               canonicalizedCandidate != row.shadowRelaxedRawCandidate?.candidate {
+                lines.append("  relaxed canonicalized candidate: \(canonicalizedCandidate)")
             }
             if let shadowCandidate = row.shadowRelaxedGuardRejectionCandidate {
-                lines.append("  relaxed candidate: \(shadowCandidate)")
+                lines.append("  relaxed rejected candidate: \(shadowCandidate)")
             }
             if let reason = row.shadowRelaxedGuardRejectionReason,
                let diff = row.shadowRelaxedGuardRejectionDiff {
@@ -319,6 +341,7 @@ private struct DogfoodPipelineEvalSummary {
         if shadowRelaxedRows > 0 {
             lines.append("shadow relaxed rows: \(shadowRelaxedRows)")
             lines.append("shadow relaxed output changed production: \(shadowRelaxedOutputChangedFromProduction)")
+            lines.append("shadow relaxed raw candidate changed production: \(shadowRelaxedRawCandidateChangedFromProduction)")
             lines.append("shadow relaxed candidate/output changed production: \(shadowRelaxedCandidateOrOutputChangedFromProduction)")
             lines.append("shadow relaxed output changed canonicalized raw: \(shadowRelaxedOutputChangedFromCanonicalizedRaw)")
             lines.append("shadow relaxed outcomes: \(Self.outcomeSummary(shadowRelaxedOutcomes))")

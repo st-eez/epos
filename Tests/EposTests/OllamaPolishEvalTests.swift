@@ -14,9 +14,13 @@ import XCTest
 /// - `EPOS_OLLAMA_MODEL`: defaults to `qwen3:1.7b`
 /// - `EPOS_EVAL_LIMIT`: number of transcripts to replay
 /// - `EPOS_EVAL_OUTPUT`: defaults to `.build/evals/ollama-polish-eval.jsonl`
+///   for `EPOS_RUN_OLLAMA_POLISH_EVAL`, or `.build/evals/ollama-raw-candidate-eval.jsonl`
+///   for `EPOS_RUN_OLLAMA_RAW_CANDIDATE_EVAL`
 /// - `EPOS_POLISH_EVAL_PREWARM_MS`: defaults to 1500, use 0 for cold-start stress
 /// - Prompt styles are always compared: strict is the production-safe prompt,
 ///   relaxed is eval-only shadow mode for measuring the model's broader capability.
+/// - `EPOS_RUN_OLLAMA_RAW_CANDIDATE_EVAL=1`: bypasses `TranscriptPolisher` and
+///   logs raw relaxed candidates plus the strict guard decision as diagnostics.
 final class OllamaPolishEvalTests: XCTestCase {
     private static let transcripts = [
         "It seems like you're saying that the polish is not working.",
@@ -137,6 +141,86 @@ final class OllamaPolishEvalTests: XCTestCase {
         print(Self.report(rows: rows, outputURL: outputURL))
     }
 
+    func testRelaxedRawCandidatesBypassPolisherOverCorpus() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard SavedRecordingEvalSupport.isTruthy(environment["EPOS_RUN_OLLAMA_RAW_CANDIDATE_EVAL"]) else {
+            throw XCTSkip("Set EPOS_RUN_OLLAMA_RAW_CANDIDATE_EVAL=1 to run the raw candidate eval")
+        }
+
+        let model = environment["EPOS_OLLAMA_MODEL"] ?? OllamaPolishEngine.defaultModel
+        let availabilityEngine = OllamaPolishEngine(model: model, prewarmEnabled: false)
+        guard await availabilityEngine.isModelInstalled() else {
+            throw XCTSkip("Ollama model \(model) unavailable; run `ollama pull \(model)`")
+        }
+
+        let outputURL = SavedRecordingEvalSupport.outputURL(
+            environment: environment,
+            defaultPath: ".build/evals/ollama-raw-candidate-eval.jsonl"
+        )
+        try SavedRecordingEvalSupport.prepareOutput(outputURL)
+
+        let canonicalizer = TranscriptCanonicalizer.load()
+        let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
+        let limit = environment["EPOS_EVAL_LIMIT"].flatMap(Int.init)
+        let transcripts = Array(Self.transcripts.prefix(limit ?? Self.transcripts.count))
+        let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(environment: environment)
+
+        let variants = [
+            OllamaPolishEvalVariant(
+                name: "\(model)-relaxed-raw-cold",
+                promptStyle: .relaxed,
+                prewarmEnabled: false,
+                prewarmWait: 0
+            ),
+            OllamaPolishEvalVariant(
+                name: "\(model)-relaxed-raw-prewarm",
+                promptStyle: .relaxed,
+                prewarmEnabled: true,
+                prewarmWait: prewarmDelay
+            ),
+        ]
+
+        var rows: [OllamaRawCandidateEvalRow] = []
+        for variant in variants {
+            for raw in transcripts {
+                let engine = OllamaPolishEngine(
+                    model: model,
+                    promptStyle: variant.promptStyle,
+                    prewarmEnabled: variant.prewarmEnabled
+                )
+                let session = engine.makeSession(knownTerms: knownTerms)
+                let prewarmWaitSeconds = await SavedRecordingEvalSupport.waitForPolishPrewarmSettle(
+                    delayNanoseconds: variant.prewarmWait
+                )
+                let canonicalizedRaw = canonicalizer.canonicalize(raw)
+                let deterministicOutput = TranscriptDeterministicCleaner.clean(canonicalizedRaw)
+                let candidate = await OllamaRawCandidateEvalSupport.evaluate(
+                    raw: raw,
+                    canonicalizedRaw: canonicalizedRaw,
+                    deterministicOutput: deterministicOutput,
+                    session: session,
+                    canonicalize: { canonicalizer.canonicalize($0) }
+                )
+                let row = OllamaRawCandidateEvalRow(
+                    variant: variant.name,
+                    model: model,
+                    promptStyle: variant.promptStyle.rawValue,
+                    prewarmEnabled: variant.prewarmEnabled,
+                    prewarmWaitSeconds: prewarmWaitSeconds,
+                    raw: raw,
+                    canonicalizedRaw: canonicalizedRaw,
+                    deterministicOutput: deterministicOutput,
+                    retainedFillerInRaw: PolishEvalScoring.retainsFiller(raw),
+                    candidate: candidate
+                )
+                rows.append(row)
+                try SavedRecordingEvalSupport.appendJSONL(row, to: outputURL)
+            }
+        }
+
+        print(Self.rawCandidateReport(rows: rows, outputURL: outputURL))
+    }
+
     private static func report(rows: [OllamaPolishEvalRow], outputURL: URL) -> String {
         var lines = ["", "Ollama polish eval"]
         for variant in stableUnique(rows.map(\.variant)) {
@@ -163,6 +247,45 @@ final class OllamaPolishEvalTests: XCTestCase {
         return lines.joined(separator: "\n")
     }
 
+    private static func rawCandidateReport(rows: [OllamaRawCandidateEvalRow], outputURL: URL) -> String {
+        var lines = ["", "Ollama raw relaxed candidate eval"]
+        for variant in stableUnique(rows.map(\.variant)) {
+            let variantRows = rows.filter { $0.variant == variant }
+            lines.append("")
+            lines.append("[\(variant)] rows=\(variantRows.count)")
+            lines.append("  candidate outcomes: \(Self.countSummary(variantRows.map(\.candidate.candidateOutcome)))")
+            lines.append("  strict gate outcomes: \(Self.countSummary(variantRows.compactMap(\.candidate.strictGateOutcome)))")
+            lines.append("  strict guard rejections: \(Self.countSummary(variantRows.compactMap(\.candidate.strictGuardRejectionReason)))")
+            lines.append("  raw candidate changed canonicalized raw: \(variantRows.filter { $0.candidate.candidateChangedFromCanonicalizedRaw == true }.count)")
+            lines.append("  strict gate output changed canonicalized raw: \(variantRows.filter { $0.candidate.strictGateOutputChangedFromCanonicalizedRaw == true }.count)")
+            lines.append("  retained filler raw/candidate: \(variantRows.filter(\.retainedFillerInRaw).count)/\(variantRows.filter { $0.candidate.retainedFillerInCandidate == true }.count)")
+            lines.append("  mean elapsed: \(Self.formatSeconds(Self.meanCandidateElapsed(variantRows)))s")
+            for row in variantRows {
+                lines.append("  - candidate=<\(row.candidate.candidateOutcome)> strict-gate=<\(row.candidate.strictGateOutcome ?? "not-evaluated")> elapsed=\(Self.formatSeconds(row.candidate.elapsedSeconds))s raw: \(row.raw)")
+                if let candidate = row.candidate.candidate {
+                    lines.append("    candidate: \(candidate)")
+                }
+                if let canonicalizedCandidate = row.candidate.canonicalizedCandidate,
+                   canonicalizedCandidate != row.candidate.candidate {
+                    lines.append("    canonicalized candidate: \(canonicalizedCandidate)")
+                }
+                if let output = row.candidate.strictGateOutput {
+                    lines.append("    strict gate output: \(output)")
+                }
+                if let reason = row.candidate.strictGuardRejectionReason,
+                   let diff = row.candidate.strictGuardRejectionDiff {
+                    lines.append("    strict rejection: \(reason) \(diff)")
+                }
+                if let error = row.candidate.errorDescription {
+                    lines.append("    error: \(error)")
+                }
+            }
+        }
+        lines.append("")
+        lines.append("output: \(outputURL.path)")
+        return lines.joined(separator: "\n")
+    }
+
     private static func countSummary(_ values: [String]) -> String {
         guard !values.isEmpty else { return "none" }
         return values
@@ -180,6 +303,11 @@ final class OllamaPolishEvalTests: XCTestCase {
     private static func meanElapsed(_ rows: [OllamaPolishEvalRow]) -> Double {
         guard !rows.isEmpty else { return 0 }
         return rows.reduce(0) { $0 + $1.elapsedSeconds } / Double(rows.count)
+    }
+
+    private static func meanCandidateElapsed(_ rows: [OllamaRawCandidateEvalRow]) -> Double {
+        guard !rows.isEmpty else { return 0 }
+        return rows.reduce(0) { $0 + $1.candidate.elapsedSeconds } / Double(rows.count)
     }
 
     private static func formatSeconds(_ seconds: Double) -> String {
@@ -216,4 +344,17 @@ private struct OllamaPolishEvalRow: Codable {
     let guardRejectionReason: String?
     let guardRejectionCandidate: String?
     let guardRejectionDiff: String?
+}
+
+private struct OllamaRawCandidateEvalRow: Codable {
+    let variant: String
+    let model: String
+    let promptStyle: String
+    let prewarmEnabled: Bool
+    let prewarmWaitSeconds: Double
+    let raw: String
+    let canonicalizedRaw: String
+    let deterministicOutput: String
+    let retainedFillerInRaw: Bool
+    let candidate: OllamaRawCandidateEvalResult
 }

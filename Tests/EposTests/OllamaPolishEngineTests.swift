@@ -66,9 +66,38 @@ final class OllamaPolishEngineTests: XCTestCase {
         XCTAssertTrue(instructions.contains("cmux"))
         XCTAssertFalse(instructions.contains("Do not fix suspected recognition errors"))
     }
+
+    func testRawCandidateEvalBypassesPolisherButReportsStrictGuardDecision() async {
+        let raw = "send the report to dana comma then ping the team"
+        let canonicalizedRaw = raw
+        let deterministicOutput = TranscriptDeterministicCleaner.clean(canonicalizedRaw)
+        let result = await OllamaRawCandidateEvalSupport.evaluate(
+            raw: raw,
+            canonicalizedRaw: canonicalizedRaw,
+            deterministicOutput: deterministicOutput,
+            session: RawCandidateFakePolishSession(candidate: "send the report to dana, then ping the team"),
+            canonicalize: { $0 }
+        )
+
+        XCTAssertEqual(result.candidateOutcome, "success")
+        XCTAssertEqual(result.candidate, "send the report to dana, then ping the team")
+        XCTAssertEqual(result.canonicalizedCandidate, "send the report to dana, then ping the team")
+        XCTAssertEqual(result.strictGuardRetainsContent, false)
+        XCTAssertEqual(result.strictGateOutcome, "guardRejected")
+        XCTAssertEqual(result.strictGateOutput, raw)
+        XCTAssertEqual(result.strictGuardRejectionReason, PolishGuardRejectionReason.contentTokensChanged.rawValue)
+    }
 }
 
 private struct FakeOllamaError: Error {}
+
+private struct RawCandidateFakePolishSession: PolishSession {
+    let candidate: String
+
+    func polish(_ raw: String) async throws -> String {
+        candidate
+    }
+}
 
 private final class FakeOllamaPolishClient: OllamaPolishClient, @unchecked Sendable {
     private let lock = NSLock()
