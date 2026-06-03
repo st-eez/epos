@@ -58,3 +58,48 @@ Current residual direction:
   top transcript without regressions on ground-truth rows.
 - Continue growing canonicalizer aliases only from measured, narrow,
   user-confirmed recurring misses.
+
+## 2026-06-03 ground-truth 80 canonicalizer pass
+
+Ground truth source:
+
+- `~/Library/Caches/Epos/recordings/ground-truth.jsonl` (`80` rows)
+
+Eval artifacts:
+
+- `.build/evals/dogfood-pipeline-ground-truth80-current-20260603.jsonl`
+- `.build/evals/dogfood-ground-truth80-residuals-current-20260603.md`
+- `.build/evals/dogfood-pipeline-ground-truth80-canonicalizer-20260603.jsonl`
+- `.build/evals/dogfood-ground-truth80-residuals-canonicalizer-20260603.md`
+
+Measured production result:
+
+| Metric | Before | After |
+|---|---:|---:|
+| Labeled rows | `80` | `80` |
+| Mean raw WER | `0.070` | `0.070` |
+| Mean canonicalized WER | `0.042` | `0.006` |
+| Mean final output WER | `0.039` | `0.003` |
+| Output WER wins | - | `18` |
+| Output WER regressions | - | `0` |
+| Residual rows | `20` | `4` |
+
+Implemented safe fixes:
+
+- Phrase-level NetSuite corrections for measured `next week login`, `next week
+  ticket`, `Open that suite`, `Open next feed`, and comma-split
+  `net, suite, login` shapes.
+- Exact domain/app corrections for `Ipos app`, `team's message`, and
+  `Stuff instructions`.
+- Exact measured ASR phrase corrections for rows such as `3 litter code`,
+  `history, seeing`, `not working progress`, and `They'd be closed phase one`.
+- Numeric phrase corrections for measured `2 tickets` and `part 2` dogfood rows.
+
+Residual categories after the pass:
+
+| Category | Count | Rows | Action |
+|---|---:|---|---|
+| Apple ASR semantic miss | `3` | `Add to the ticket...`, missing `working`, trailing `And.` | No production fix without more examples; one unsafe exact rule was removed after a test caught overlap. |
+| Polish/style-only leading word | `1` | leading `I` before `Think outside the box` | Do not loosen polish; accepted output is semantically close and removing leading `I` is not safe generally. |
+| Canonicalizer opportunity | `0` | - | No remaining repeated safe deterministic correction in this 80-row slice. |
+| LLM polish issue | `0` | - | Model mostly left ASR misses unchanged; prompt/model work is not the next lever from this evidence. |

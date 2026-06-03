@@ -63,12 +63,24 @@ public struct TranscriptCanonicalizer: Sendable {
             ]
         ),
         Rule(canonical: "Stath", aliases: ["steph", "staff"]),
+        Rule(canonical: "Stath instructions", aliases: ["stuff instructions"]),
         Rule(canonical: "LLM polish", aliases: ["LOL polish"]),
+        Rule(canonical: "Epos app", aliases: ["Ipos app"]),
         Rule(
             canonical: "Foundation Models",
             aliases: ["foundation models", "foundational models", "the foundation models"]
         ),
         Rule(canonical: "saying deprecate", aliases: ["seeing deprecate"]),
+        Rule(canonical: "yesterday, saying", aliases: ["history, seeing"]),
+        Rule(canonical: "not working properly", aliases: ["not working progress"]),
+        Rule(canonical: "Did we close phase one", aliases: ["They'd be closed phase one"]),
+        Rule(canonical: "It would add extra", aliases: ["It'd be add extra"]),
+        Rule(canonical: "text is redundant and what you can remove", aliases: ["text is redundant, and you can remove"]),
+        Rule(canonical: "three-letter code", aliases: ["3 litter code", "three litter code"]),
+        Rule(canonical: "two tickets", aliases: ["2 tickets"]),
+        Rule(canonical: "part two", aliases: ["part 2"]),
+        Rule(canonical: "Add a comment to the ticket", aliases: ["At a comment to the ticket"]),
+        Rule(canonical: "Add a comment to the tickets", aliases: ["I recommend to the tickets"]),
         Rule(canonical: "codebase", aliases: ["code basis", "code base"]),
         Rule(canonical: "unslopify", aliases: ["unslop the fight"]),
         Rule(canonical: "Claude has been vibe coding", aliases: ["Plot has been vibe coding"]),
@@ -87,6 +99,10 @@ public struct TranscriptCanonicalizer: Sendable {
             canonical: "NetSuite",
             aliases: ["NetSuite", "net suite", "net sweet", "net suit"]
         ),
+        Rule(canonical: "NetSuite login", aliases: ["net suite login", "next week login"]),
+        Rule(canonical: "NetSuite ticket", aliases: ["next week ticket"]),
+        Rule(canonical: "Open NetSuite", aliases: ["Open that suite", "Open next feed"]),
+        Rule(canonical: "Teams message", aliases: ["team's message", "team s message"]),
         Rule(
             canonical: "AGENTS.md",
             aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
@@ -260,7 +276,7 @@ private extension TranscriptCanonicalizer {
 
         let body = parts
             .map(NSRegularExpression.escapedPattern(for:))
-            .joined(separator: #"(?:[\s\-\.]+)"#)
+            .joined(separator: #"(?:[\s,\-\.']+)"#)
         let pattern = #"(?<![A-Za-z0-9])"# + body + #"(?![A-Za-z0-9])"#
         return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }

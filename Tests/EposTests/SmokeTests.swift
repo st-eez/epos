@@ -58,6 +58,40 @@ final class SmokeTests: XCTestCase {
             "So you're saying deprecate Foundation Models altogether?"
         )
         XCTAssertEqual(
+            canonicalizer.canonicalize("Stuff instructions, please."),
+            "Stath instructions, please."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Claude, I want to add something to our Ipos app."),
+            "Claude, I want to add something to our Epos app."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("They'd be closed phase one of the ticket."),
+            "Did we close phase one of the ticket."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("this history, seeing people never continue"),
+            "this yesterday, saying people never continue"
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("it's kind of not working progress"),
+            "it's kind of not working properly"
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("meaning the new fields for state, cities, and 3 litter code"),
+            "meaning the new fields for state, cities, and three-letter code"
+        )
+        XCTAssertEqual(canonicalizer.canonicalize("Make 2 tickets for this."), "Make two tickets for this.")
+        XCTAssertEqual(canonicalizer.canonicalize("part 2 where we map customers"), "part two where we map customers")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("At a comment to the ticket, so we can pick this up later."),
+            "Add a comment to the ticket, so we can pick this up later."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("I recommend to the tickets so we can pick this up later."),
+            "Add a comment to the tickets so we can pick this up later."
+        )
+        XCTAssertEqual(
             canonicalizer.canonicalize("different than Maine and focus"),
             "different than main and focus"
         )
@@ -92,12 +126,25 @@ final class SmokeTests: XCTestCase {
         // Two-word decomposition, the capitalized form the recognizer emits, the
         // homophone, and the already-correct no-space form all fold to "NetSuite".
         XCTAssertEqual(canonicalizer.canonicalize("open net suite today"), "open NetSuite today")
+        XCTAssertEqual(canonicalizer.canonicalize("Is your net, suite, login set up?"), "Is your NetSuite login set up?")
+        XCTAssertEqual(canonicalizer.canonicalize("Is your next week login set up?"), "Is your NetSuite login set up?")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Didn't you make a next week ticket about this?"),
+            "Didn't you make a NetSuite ticket about this?"
+        )
+        XCTAssertEqual(canonicalizer.canonicalize("Open that suite and check tickets."), "Open NetSuite and check tickets.")
+        XCTAssertEqual(canonicalizer.canonicalize("Open next feed and check tickets."), "Open NetSuite and check tickets.")
         XCTAssertEqual(canonicalizer.canonicalize("Net Suite"), "NetSuite")
         XCTAssertEqual(canonicalizer.canonicalize("our net sweet account"), "our NetSuite account")
         XCTAssertEqual(canonicalizer.canonicalize("netsuite"), "NetSuite")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Open up CMUX and send a team's message to staff."),
+            "Open up CMUX and send a Teams message to Stath."
+        )
 
         // Substring guard: a longer word that merely contains "netsuite" is untouched.
         XCTAssertEqual(canonicalizer.canonicalize("visit netsuitehq dot com"), "visit netsuitehq dot com")
+        XCTAssertEqual(canonicalizer.canonicalize("Talk about that suite later."), "Talk about that suite later.")
     }
 
     func testCanonicalizerFixesCurrentDefaultCustomEntries() {
