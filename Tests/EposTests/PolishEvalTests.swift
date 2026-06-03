@@ -60,17 +60,24 @@ final class PolishEvalTests: XCTestCase {
 
         let canonicalizer = TranscriptCanonicalizer.load()
         let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
-        let polisher = TranscriptPolisher(
-            enabled: true,
-            engine: engine,
-            knownTerms: knownTerms,
-            canonicalize: { canonicalizer.canonicalize($0) }
+        let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(
+            environment: ProcessInfo.processInfo.environment
         )
 
         var rows: [PolishEvalRow] = []
         for (label, corpus) in [("real", Self.realClipTranscripts), ("stress", Self.stressTranscripts)] {
             for raw in corpus {
                 let canonicalizedRaw = canonicalizer.canonicalize(raw)
+                let polisher = TranscriptPolisher(
+                    enabled: true,
+                    engine: engine,
+                    knownTerms: knownTerms,
+                    canonicalize: { canonicalizer.canonicalize($0) }
+                )
+                polisher.prewarm()
+                let prewarmWaitSeconds = await SavedRecordingEvalSupport.waitForPolishPrewarmSettle(
+                    delayNanoseconds: prewarmDelay
+                )
                 let result = await polisher.polish(raw)
                 rows.append(PolishEvalRow(
                     set: label,
@@ -78,6 +85,8 @@ final class PolishEvalTests: XCTestCase {
                     canonicalizedRaw: canonicalizedRaw,
                     output: result.text,
                     outcome: String(describing: result.outcome),
+                    engineOutcome: result.engineOutcome?.rawValue,
+                    prewarmWaitSeconds: prewarmWaitSeconds,
                     rawChangedByCanonicalizer: canonicalizedRaw != raw,
                     outputChangedFromRaw: result.text != raw,
                     outputChangedFromCanonicalizedRaw: result.text != canonicalizedRaw,
@@ -100,7 +109,7 @@ final class PolishEvalTests: XCTestCase {
     private static func report(_ rows: [PolishEvalRow]) -> String {
         var lines = ["", "════════ Polish eval ════════"]
         for row in rows {
-            var tags = ["<\(row.outcome)>"]
+            var tags = ["<\(row.outcome)>", "engine=<\(row.engineOutcome ?? "not-attempted")>"]
             if row.rawChangedByCanonicalizer { tags.append("CANON") }
             if row.outputChangedFromCanonicalizedRaw { tags.append("POLISHED") }
             if row.retainedFillerInOutput { tags.append("FILLER-LEFT") }
@@ -122,13 +131,16 @@ final class PolishEvalTests: XCTestCase {
         let polishChanged = rows.filter(\.outputChangedFromCanonicalizedRaw).count
         let retainedFillerRaw = rows.filter(\.retainedFillerInRaw).count
         let retainedFillerOutput = rows.filter(\.retainedFillerInOutput).count
+        let totalPrewarmWait = rows.reduce(0) { $0 + $1.prewarmWaitSeconds }
         lines.append("")
         lines.append("rows: \(rows.count)  applied: \(applied)")
         lines.append("canonicalizer changed raw: \(canonicalizerChanged)")
         lines.append("polish changed canonicalized raw: \(polishChanged)")
         lines.append("retained filler raw/output: \(retainedFillerRaw)/\(retainedFillerOutput)")
         lines.append("outcomes: \(outcomeSummary(rows))")
+        lines.append("engine outcomes: \(engineOutcomeSummary(rows))")
         lines.append("guard rejections: \(guardRejectionSummary(rows))")
+        lines.append("prewarm wait total: \(String(format: "%.3f", totalPrewarmWait))s")
         lines.append("(inspect every row for meaning changes — that is the safety bar; retainedFiller is the quality miss count)")
         return lines.joined(separator: "\n")
     }
@@ -136,6 +148,16 @@ final class PolishEvalTests: XCTestCase {
     private static func outcomeSummary(_ rows: [PolishEvalRow]) -> String {
         rows
             .reduce(into: [String: Int]()) { counts, row in counts[row.outcome, default: 0] += 1 }
+            .sorted { $0.key < $1.key }
+            .map { "\($0.key)=\($0.value)" }
+            .joined(separator: ", ")
+    }
+
+    private static func engineOutcomeSummary(_ rows: [PolishEvalRow]) -> String {
+        let counts = rows.reduce(into: [String: Int]()) { counts, row in
+            counts[row.engineOutcome ?? "not-attempted", default: 0] += 1
+        }
+        return counts
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: ", ")
@@ -170,6 +192,8 @@ private struct PolishEvalRow: Codable {
     let canonicalizedRaw: String
     let output: String
     let outcome: String
+    let engineOutcome: String?
+    let prewarmWaitSeconds: Double
     let rawChangedByCanonicalizer: Bool
     let outputChangedFromRaw: Bool
     let outputChangedFromCanonicalizedRaw: Bool

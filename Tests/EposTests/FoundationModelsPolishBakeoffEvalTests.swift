@@ -9,6 +9,10 @@ import XCTest
 /// Skipped unless explicitly enabled:
 ///
 ///   EPOS_RUN_FM_POLISH_BAKEOFF=1 swift test --filter FoundationModelsPolishBakeoffEvalTests
+///
+/// By default each row waits 1.5s after `prewarm()` before `polish()`, matching
+/// production's "prewarm during recording" shape better than a cold immediate call.
+/// Use `EPOS_POLISH_EVAL_PREWARM_MS=0` to intentionally stress cold-start behavior.
 final class FoundationModelsPolishBakeoffEvalTests: XCTestCase {
     private static let transcripts = [
         "It seems like you're saying that the polish is not working.",
@@ -42,6 +46,7 @@ final class FoundationModelsPolishBakeoffEvalTests: XCTestCase {
         let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
         let limit = environment["EPOS_EVAL_LIMIT"].flatMap(Int.init)
         let transcripts = Array(Self.transcripts.prefix(limit ?? Self.transcripts.count))
+        let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(environment: environment)
         let variants = [
             FoundationModelsPolishBakeoffVariant(
                 name: "production-known-terms",
@@ -73,6 +78,9 @@ final class FoundationModelsPolishBakeoffEvalTests: XCTestCase {
                     canonicalize: { canonicalizer.canonicalize($0) }
                 )
                 polisher.prewarm()
+                let prewarmWaitSeconds = await SavedRecordingEvalSupport.waitForPolishPrewarmSettle(
+                    delayNanoseconds: prewarmDelay
+                )
 
                 let started = Date()
                 let result = await polisher.polish(raw)
@@ -86,6 +94,8 @@ final class FoundationModelsPolishBakeoffEvalTests: XCTestCase {
                     deterministicOutput: deterministicOutput,
                     output: result.text,
                     outcome: String(describing: result.outcome),
+                    engineOutcome: result.engineOutcome?.rawValue,
+                    prewarmWaitSeconds: prewarmWaitSeconds,
                     elapsedSeconds: elapsedSeconds,
                     rawCharacterCount: result.rawCharacterCount,
                     outputCharacterCount: result.text.count,
@@ -112,11 +122,14 @@ final class FoundationModelsPolishBakeoffEvalTests: XCTestCase {
             lines.append("")
             lines.append("[\(variant)] rows=\(variantRows.count)")
             lines.append("  outcomes: \(Self.countSummary(variantRows.map(\.outcome)))")
+            lines.append("  engine outcomes: \(Self.countSummary(variantRows.map { $0.engineOutcome ?? "not-attempted" }))")
             lines.append("  guard rejections: \(Self.countSummary(variantRows.compactMap(\.guardRejectionReason)))")
             lines.append("  retained filler raw/output: \(variantRows.filter(\.retainedFillerInRaw).count)/\(variantRows.filter(\.retainedFillerInOutput).count)")
             lines.append("  changed from deterministic: \(variantRows.filter(\.outputChangedFromDeterministic).count)")
+            lines.append("  prewarm wait total: \(String(format: "%.3f", variantRows.reduce(0) { $0 + $1.prewarmWaitSeconds }))s")
             for row in variantRows {
-                lines.append("  - <\(row.outcome)> raw: \(row.raw)")
+                let engineOutcome = row.engineOutcome ?? "not-attempted"
+                lines.append("  - <\(row.outcome)> engine=<\(engineOutcome)> raw: \(row.raw)")
                 lines.append("    out: \(row.output)")
                 if let candidate = row.guardRejectionCandidate {
                     lines.append("    candidate: \(candidate)")
@@ -153,6 +166,8 @@ private struct FoundationModelsPolishBakeoffRow: Codable {
     let deterministicOutput: String
     let output: String
     let outcome: String
+    let engineOutcome: String?
+    let prewarmWaitSeconds: Double
     let elapsedSeconds: Double
     let rawCharacterCount: Int
     let outputCharacterCount: Int

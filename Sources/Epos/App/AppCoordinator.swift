@@ -333,6 +333,7 @@ public final class AppCoordinator: ObservableObject {
                 rawText: result.text,
                 polishedCount: result.text.count,
                 rawCount: result.rawCharacterCount,
+                engineOutcome: result.engineOutcome,
                 guardRejection: result.guardRejection,
                 elapsedMs: millisecondsElapsed(since: polishStartedAt)
             )
@@ -395,41 +396,52 @@ public final class AppCoordinator: ObservableObject {
         rawText: String,
         polishedCount: Int,
         rawCount: Int,
+        engineOutcome: PolishEngineOutcome? = nil,
         guardRejection: PolishGuardRejection? = nil,
         elapsedMs: Int
     ) {
+        let engineDetail = engineOutcome.map { " engineOutcome=\($0.rawValue)" } ?? ""
         switch outcome {
         case .disabled:
             log.info("polish off (elapsedMs=\(elapsedMs))")
         case .unavailable:
             log.info("polish skipped: model unavailable (elapsedMs=\(elapsedMs))")
         case .timedOut:
-            log.info("polish timed out (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+            log.info("polish timed out (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
         case .tooLong:
-            log.info("polish skipped: input too long (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+            log.info("polish skipped: input too long (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
         case .sameText:
-            log.info("polish skipped: model returned same text (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+            log.info("polish skipped: model returned same text (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
         case .guardRejected:
             let detail = guardRejection?.logDescription ?? "reason=unknown"
             log.info(
                 "polish rejected: retention guard " +
-                    "(rawText=\(String(reflecting: rawText)) \(detail) rawChars=\(rawCount) elapsedMs=\(elapsedMs))"
+                    "(rawText=\(String(reflecting: rawText)) \(detail) rawChars=\(rawCount) elapsedMs=\(elapsedMs))" +
+                    engineDetail
             )
         case .deterministicCleanup:
             let rejectionDetail = guardRejection.map { " guardRejected=\($0.logDescription)" } ?? ""
             log.info(
                 "polish deterministic cleanup applied " +
                     "(rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
-                    rejectionDetail
+                    rejectionDetail +
+                    engineDetail
             )
         case .engineFailed:
-            log.info("polish fallback: engine failed (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+            log.info("polish fallback: engine failed (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
         case .abandoned:
-            log.info("polish abandoned: new recording requested (rawChars=\(rawCount) elapsedMs=\(elapsedMs))")
+            log.info("polish abandoned: new recording requested (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
         case .suppressedByInsertion:
-            log.info("polish suppressed: insertion append-only (rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))")
+            log.info(
+                "polish suppressed: insertion append-only " +
+                    "(rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
+                    engineDetail
+            )
         case .applied:
-            log.info("polish applied (rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))")
+            log.info(
+                "polish applied (rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
+                    engineDetail
+            )
         }
     }
 

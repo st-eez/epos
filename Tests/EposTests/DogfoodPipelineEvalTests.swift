@@ -47,6 +47,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
         let canonicalizer = TranscriptCanonicalizer.load()
         let speechContextualStrings = ["Epos"] + canonicalizer.speechContextualStrings
         let knownTerms = ["Epos"] + canonicalizer.canonicalVocabularyStrings
+        let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(environment: environment)
         try SavedRecordingEvalSupport.prepareOutput(outputURL)
 
         var summary = DogfoodPipelineEvalSummary()
@@ -67,6 +68,10 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 contextualStrings: speechContextualStrings
             )
             let transcribeSeconds = Date().timeIntervalSince(transcribeStarted)
+            let prewarmWaitSeconds = await SavedRecordingEvalSupport.waitForPolishPrewarmSettle(
+                delayNanoseconds: prewarmDelay,
+                alreadyElapsedSeconds: transcribeSeconds
+            )
 
             let canonicalizedRaw = canonicalizer.canonicalize(transcription.text)
             let polishStarted = Date()
@@ -83,6 +88,8 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 canonicalizedRaw: canonicalizedRaw,
                 output: result.text,
                 outcome: String(describing: result.outcome),
+                engineOutcome: result.engineOutcome?.rawValue,
+                prewarmWaitSeconds: prewarmWaitSeconds,
                 rawChangedByCanonicalizer: canonicalizedRaw != transcription.text,
                 outputChangedFromRaw: result.text != transcription.text,
                 outputChangedFromCanonicalizedRaw: result.text != canonicalizedRaw,
@@ -119,6 +126,8 @@ private struct DogfoodPipelineEvalRow: Codable {
     let canonicalizedRaw: String
     let output: String
     let outcome: String
+    let engineOutcome: String?
+    let prewarmWaitSeconds: Double
     let rawChangedByCanonicalizer: Bool
     let outputChangedFromRaw: Bool
     let outputChangedFromCanonicalizedRaw: Bool
@@ -138,6 +147,8 @@ private struct DogfoodPipelineEvalSummary {
     private var retainedFillerRaw = 0
     private var retainedFillerOutput = 0
     private var outcomes: [String: Int] = [:]
+    private var engineOutcomes: [String: Int] = [:]
+    private var totalPrewarmWaitSeconds = 0.0
 
     mutating func add(_ row: DogfoodPipelineEvalRow) {
         if row.rawChangedByCanonicalizer {
@@ -153,6 +164,8 @@ private struct DogfoodPipelineEvalSummary {
             retainedFillerOutput += 1
         }
         outcomes[row.outcome, default: 0] += 1
+        engineOutcomes[row.engineOutcome ?? "not-attempted", default: 0] += 1
+        totalPrewarmWaitSeconds += row.prewarmWaitSeconds
     }
 
     func report(
@@ -183,12 +196,14 @@ private struct DogfoodPipelineEvalSummary {
         lines.append("polish changed canonicalized raw: \(changedFromCanonicalizedRaw)")
         lines.append("retained filler raw/output: \(retainedFillerRaw)/\(retainedFillerOutput)")
         lines.append("outcomes: \(Self.outcomeSummary(outcomes))")
+        lines.append("engine outcomes: \(Self.outcomeSummary(engineOutcomes))")
+        lines.append("prewarm wait total: \(Self.formatSeconds(totalPrewarmWaitSeconds))s")
         lines.append("output: \(outputURL.path)")
         return lines.joined(separator: "\n")
     }
 
     private static func rowHeader(_ row: DogfoodPipelineEvalRow) -> String {
-        var tags = ["<\(row.outcome)>"]
+        var tags = ["<\(row.outcome)>", "engine=<\(row.engineOutcome ?? "not-attempted")>"]
         if row.rawChangedByCanonicalizer { tags.append("CANON") }
         if row.outputChangedFromCanonicalizedRaw { tags.append("POLISHED") }
         if row.retainedFillerInOutput { tags.append("FILLER-LEFT") }

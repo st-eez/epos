@@ -60,6 +60,25 @@ enum SavedRecordingEvalSupport {
         try handle.write(contentsOf: Data((line + "\n").utf8))
     }
 
+    static func polishPrewarmSettleNanoseconds(environment: [String: String]) -> UInt64 {
+        let milliseconds = environment["EPOS_POLISH_EVAL_PREWARM_MS"].flatMap(UInt64.init) ?? 1_500
+        return milliseconds * 1_000_000
+    }
+
+    @discardableResult
+    static func waitForPolishPrewarmSettle(
+        delayNanoseconds: UInt64,
+        alreadyElapsedSeconds: Double = 0
+    ) async -> Double {
+        let requestedSeconds = Double(delayNanoseconds) / 1_000_000_000
+        let remainingSeconds = max(0, requestedSeconds - alreadyElapsedSeconds)
+        let remainingNanoseconds = UInt64(remainingSeconds * 1_000_000_000)
+        if remainingNanoseconds > 0 {
+            try? await Task.sleep(nanoseconds: remainingNanoseconds)
+        }
+        return remainingSeconds
+    }
+
     static func durationSeconds(recording: URL) throws -> Double {
         let file = try AVAudioFile(forReading: recording)
         return Double(file.length) / file.processingFormat.sampleRate

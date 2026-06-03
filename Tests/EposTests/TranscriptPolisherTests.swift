@@ -63,6 +63,23 @@ final class TranscriptPolisherTests: XCTestCase {
 
         XCTAssertEqual(result.text, "raw transcript")
         XCTAssertEqual(result.outcome, .timedOut)
+        XCTAssertEqual(result.engineOutcome, .timedOut)
+        XCTAssertEqual(engine.polishCallCount, 1)
+    }
+
+    func testDeterministicCleanupKeepsEngineTimeoutObservable() async {
+        let engine = FakePolishEngine(result: "polished output", delayNanoseconds: 1_000_000_000)
+        let polisher = TranscriptPolisher(
+            enabled: true,
+            engine: engine,
+            timeoutNanoseconds: 50_000_000
+        )
+
+        let result = await polisher.polish("um ship it")
+
+        XCTAssertEqual(result.text, "ship it")
+        XCTAssertEqual(result.outcome, .deterministicCleanup)
+        XCTAssertEqual(result.engineOutcome, .timedOut)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -84,6 +101,7 @@ final class TranscriptPolisherTests: XCTestCase {
 
         XCTAssertEqual(result.text, "raw transcript")
         XCTAssertEqual(result.outcome, .abandoned)
+        XCTAssertEqual(result.engineOutcome, .abandoned)
         XCTAssertEqual(engine.polishCallCount, 1)
         // Returned on abandon, far short of the 2s decode (and the 10s timeout).
         XCTAssertLessThan(Date().timeIntervalSince(startedAt), 1.5)
@@ -255,6 +273,7 @@ final class TranscriptPolisherTests: XCTestCase {
         XCTAssertEqual(engine.sessionCount, 1)
         XCTAssertEqual(engine.polishCallCount, 1)
         XCTAssertEqual(result.text, "Polished.")
+        XCTAssertEqual(result.engineOutcome, .success)
     }
 
     func testKnownTermsArePassedToEngine() async {
@@ -264,6 +283,7 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await polisher.polish("open CMUX")
 
         XCTAssertEqual(result.text, "Open CMUX.")
+        XCTAssertEqual(result.engineOutcome, .success)
         XCTAssertEqual(engine.polishKnownTerms, [["Epos", "CMUX"]])
     }
 
@@ -277,6 +297,7 @@ final class TranscriptPolisherTests: XCTestCase {
 
         XCTAssertEqual(result.text, "a very long raw transcript")
         XCTAssertEqual(result.outcome, .tooLong)
+        XCTAssertEqual(result.engineOutcome, .tooLong)
         XCTAssertEqual(engine.polishCallCount, 1)
     }
 
@@ -289,6 +310,7 @@ final class TranscriptPolisherTests: XCTestCase {
         let result = await polisher.polish("raw transcript")
 
         XCTAssertEqual(result.outcome, .engineFailed)
+        XCTAssertEqual(result.engineOutcome, .failed)
     }
 
     func testPolishRejectsModelWordSubstitutionAndKeepsRaw() async {
@@ -303,6 +325,7 @@ final class TranscriptPolisherTests: XCTestCase {
 
         XCTAssertEqual(result.text, "open ethos cluster")
         XCTAssertEqual(result.outcome, .guardRejected)
+        XCTAssertEqual(result.engineOutcome, .success)
     }
 
     func testGuardComparesCanonicalizedRawSoOneSidedCanonicalizationAccepts() async {
