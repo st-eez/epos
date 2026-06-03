@@ -15,6 +15,8 @@ import XCTest
 /// - `EPOS_EVAL_LIMIT`: number of transcripts to replay
 /// - `EPOS_EVAL_OUTPUT`: defaults to `.build/evals/ollama-polish-eval.jsonl`
 /// - `EPOS_POLISH_EVAL_PREWARM_MS`: defaults to 1500, use 0 for cold-start stress
+/// - Prompt styles are always compared: strict is the production-safe prompt,
+///   relaxed is eval-only shadow mode for measuring the model's broader capability.
 final class OllamaPolishEvalTests: XCTestCase {
     private static let transcripts = [
         "It seems like you're saying that the polish is not working.",
@@ -54,14 +56,40 @@ final class OllamaPolishEvalTests: XCTestCase {
         let prewarmDelay = SavedRecordingEvalSupport.polishPrewarmSettleNanoseconds(environment: environment)
 
         let variants = [
-            OllamaPolishEvalVariant(name: "\(model)-cold", prewarmEnabled: false, prewarmWait: 0),
-            OllamaPolishEvalVariant(name: "\(model)-prewarm", prewarmEnabled: true, prewarmWait: prewarmDelay),
+            OllamaPolishEvalVariant(
+                name: "\(model)-strict-cold",
+                promptStyle: .strict,
+                prewarmEnabled: false,
+                prewarmWait: 0
+            ),
+            OllamaPolishEvalVariant(
+                name: "\(model)-strict-prewarm",
+                promptStyle: .strict,
+                prewarmEnabled: true,
+                prewarmWait: prewarmDelay
+            ),
+            OllamaPolishEvalVariant(
+                name: "\(model)-relaxed-cold",
+                promptStyle: .relaxed,
+                prewarmEnabled: false,
+                prewarmWait: 0
+            ),
+            OllamaPolishEvalVariant(
+                name: "\(model)-relaxed-prewarm",
+                promptStyle: .relaxed,
+                prewarmEnabled: true,
+                prewarmWait: prewarmDelay
+            ),
         ]
 
         var rows: [OllamaPolishEvalRow] = []
         for variant in variants {
             for raw in transcripts {
-                let engine = OllamaPolishEngine(model: model, prewarmEnabled: variant.prewarmEnabled)
+                let engine = OllamaPolishEngine(
+                    model: model,
+                    promptStyle: variant.promptStyle,
+                    prewarmEnabled: variant.prewarmEnabled
+                )
                 let canonicalizedRaw = canonicalizer.canonicalize(raw)
                 let deterministicOutput = TranscriptDeterministicCleaner.clean(canonicalizedRaw)
                 let polisher = TranscriptPolisher(
@@ -81,6 +109,7 @@ final class OllamaPolishEvalTests: XCTestCase {
                 let row = OllamaPolishEvalRow(
                     variant: variant.name,
                     model: model,
+                    promptStyle: variant.promptStyle.rawValue,
                     prewarmEnabled: variant.prewarmEnabled,
                     raw: raw,
                     canonicalizedRaw: canonicalizedRaw,
@@ -160,6 +189,7 @@ final class OllamaPolishEvalTests: XCTestCase {
 
 private struct OllamaPolishEvalVariant {
     let name: String
+    let promptStyle: OllamaPolishPromptStyle
     let prewarmEnabled: Bool
     let prewarmWait: UInt64
 }
@@ -167,6 +197,7 @@ private struct OllamaPolishEvalVariant {
 private struct OllamaPolishEvalRow: Codable {
     let variant: String
     let model: String
+    let promptStyle: String
     let prewarmEnabled: Bool
     let raw: String
     let canonicalizedRaw: String

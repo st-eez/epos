@@ -18,6 +18,7 @@ final class OllamaPolishEngineTests: XCTestCase {
         XCTAssertEqual(requests[0].options.contextTokenLimit, 2_048)
         XCTAssertTrue(requests[0].instructions.contains("Known project terms"))
         XCTAssertTrue(requests[0].instructions.contains("CMUX"))
+        XCTAssertTrue(requests[0].instructions.contains("Do not fix suspected recognition errors"))
     }
 
     func testPrewarmUsesShortKeepAliveThenPolishUnloads() async throws {
@@ -45,6 +46,25 @@ final class OllamaPolishEngineTests: XCTestCase {
         XCTAssertEqual(result.text, "ship it")
         XCTAssertEqual(result.outcome, .deterministicCleanup)
         XCTAssertEqual(result.engineOutcome, .failed)
+    }
+
+    func testRelaxedPromptStyleAllowsShadowCandidatesBeyondStrictGuard() async throws {
+        let client = FakeOllamaPolishClient(cleaned: "Can we review cmux?")
+        let engine = OllamaPolishEngine(
+            client: client,
+            promptStyle: .relaxed,
+            prewarmEnabled: false
+        )
+        let session = engine.makeSession(knownTerms: ["cmux"])
+
+        _ = try await session.polish("can we review see mux question mark")
+
+        let instructions = try XCTUnwrap(client.requests.first?.instructions)
+        XCTAssertTrue(instructions.contains("Fix obvious speech-recognition mistakes"))
+        XCTAssertTrue(instructions.contains("Convert clearly dictated punctuation and symbols"))
+        XCTAssertTrue(instructions.contains("you know"))
+        XCTAssertTrue(instructions.contains("cmux"))
+        XCTAssertFalse(instructions.contains("Do not fix suspected recognition errors"))
     }
 }
 

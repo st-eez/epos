@@ -10,7 +10,7 @@ public struct OllamaPolishEngine: PolishEngine {
 
     let model: String
     private let client: any OllamaPolishClient
-    private let promptStyle: FoundationModelsPolishPromptStyle
+    private let promptStyle: OllamaPolishPromptStyle
     private let options: OllamaPolishOptions
     private let prewarmEnabled: Bool
     private let prewarmKeepAlive: String
@@ -27,7 +27,27 @@ public struct OllamaPolishEngine: PolishEngine {
         self.init(
             model: model,
             client: OllamaHTTPPolishClient(baseURL: baseURL),
-            promptStyle: .exampleFreeStrict,
+            promptStyle: .strict,
+            options: options,
+            prewarmEnabled: prewarmEnabled,
+            prewarmKeepAlive: prewarmKeepAlive,
+            polishKeepAlive: polishKeepAlive
+        )
+    }
+
+    init(
+        model: String = Self.defaultModel,
+        baseURL: URL = Self.defaultBaseURL,
+        promptStyle: OllamaPolishPromptStyle,
+        options: OllamaPolishOptions = .default,
+        prewarmEnabled: Bool = true,
+        prewarmKeepAlive: String = "30s",
+        polishKeepAlive: String = "0"
+    ) {
+        self.init(
+            model: model,
+            client: OllamaHTTPPolishClient(baseURL: baseURL),
+            promptStyle: promptStyle,
             options: options,
             prewarmEnabled: prewarmEnabled,
             prewarmKeepAlive: prewarmKeepAlive,
@@ -38,7 +58,7 @@ public struct OllamaPolishEngine: PolishEngine {
     init(
         model: String = Self.defaultModel,
         client: any OllamaPolishClient,
-        promptStyle: FoundationModelsPolishPromptStyle = .exampleFreeStrict,
+        promptStyle: OllamaPolishPromptStyle = .strict,
         options: OllamaPolishOptions = .default,
         prewarmEnabled: Bool = true,
         prewarmKeepAlive: String = "30s",
@@ -59,7 +79,7 @@ public struct OllamaPolishEngine: PolishEngine {
     public var isAvailable: Bool { true }
 
     public func makeSession(knownTerms: [String]) -> any PolishSession {
-        let instructions = FoundationModelsPolishEngine.makeInstructions(
+        let instructions = OllamaPolishPrompt.makeInstructions(
             knownTerms: knownTerms,
             promptStyle: promptStyle
         )
