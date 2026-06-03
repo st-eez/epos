@@ -34,6 +34,26 @@ enum SavedRecordingEvalSupport {
         fileURL(path: environment["EPOS_EVAL_OUTPUT"] ?? defaultPath, isDirectory: false)
     }
 
+    static func groundTruthManifest(
+        in recordingsDirectory: URL,
+        environment: [String: String]
+    ) throws -> HumanIntendedTranscriptManifest {
+        if let configured = environment["EPOS_EVAL_GROUND_TRUTH"]?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !configured.isEmpty {
+            let url = fileURL(path: configured, isDirectory: false)
+            guard FileManager.default.fileExists(atPath: url.path) else {
+                throw SavedRecordingEvalError.groundTruthManifestNotFound(url.path)
+            }
+            return try HumanIntendedTranscriptManifest.load(from: url)
+        }
+
+        let defaultURL = recordingsDirectory.appendingPathComponent("ground-truth.jsonl")
+        guard FileManager.default.fileExists(atPath: defaultURL.path) else {
+            return HumanIntendedTranscriptManifest(sourceURL: nil, transcriptsByFile: [:])
+        }
+        return try HumanIntendedTranscriptManifest.load(from: defaultURL)
+    }
+
     static func selectedRecordings(
         in recordingsDirectory: URL,
         limit: Int?,
@@ -68,10 +88,7 @@ enum SavedRecordingEvalSupport {
         guard !entries.isEmpty else { return nil }
 
         return try entries.map { entry in
-            let expanded = (entry as NSString).expandingTildeInPath
-            let url = expanded.hasPrefix("/")
-                ? URL(fileURLWithPath: expanded)
-                : recordingsDirectory.appendingPathComponent(expanded)
+            let url = recordingRelativeURL(path: entry, recordingsDirectory: recordingsDirectory)
             guard FileManager.default.fileExists(atPath: url.path) else {
                 throw SavedRecordingEvalError.recordingNotFound(url.path)
             }
@@ -228,12 +245,12 @@ enum SavedRecordingEvalSupport {
     private static func fileURL(path: String, isDirectory: Bool) -> URL {
         URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: isDirectory)
     }
-}
 
-enum PolishEvalScoring {
-    static func retainsFiller(_ text: String) -> Bool {
-        let words = text.lowercased().split { !$0.isLetter }.map(String.init)
-        return !PolishVocabulary.singleFillers.isDisjoint(with: Set(words))
+    private static func recordingRelativeURL(path: String, recordingsDirectory: URL) -> URL {
+        let expanded = (path as NSString).expandingTildeInPath
+        return expanded.hasPrefix("/")
+            ? URL(fileURLWithPath: expanded)
+            : recordingsDirectory.appendingPathComponent(expanded)
     }
 }
 
@@ -255,6 +272,9 @@ enum SavedRecordingEvalError: Error, CustomStringConvertible {
     case converterUnavailable
     case conversionFailed
     case encodingFailed
+    case duplicateGroundTruthTranscript(String)
+    case groundTruthManifestDecodeFailed(String, Int, String)
+    case groundTruthManifestNotFound(String)
     case noCompatibleFormat
     case recordingNotFound(String)
     case transcriptionFailed(String, String)
@@ -269,6 +289,12 @@ enum SavedRecordingEvalError: Error, CustomStringConvertible {
             return "audio conversion failed"
         case .encodingFailed:
             return "JSONL encoding failed"
+        case .duplicateGroundTruthTranscript(let file):
+            return "duplicate ground-truth transcript for \(file)"
+        case .groundTruthManifestDecodeFailed(let path, let line, let message):
+            return "ground-truth manifest decode failed at \(path):\(line): \(message)"
+        case .groundTruthManifestNotFound(let path):
+            return "ground-truth manifest not found: \(path)"
         case .noCompatibleFormat:
             return "SpeechTranscriber has no compatible audio format"
         case .recordingNotFound(let path):

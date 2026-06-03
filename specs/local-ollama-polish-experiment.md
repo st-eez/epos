@@ -59,6 +59,8 @@ Lever files live under `specs/ollama-polish-levers/`; use
 - Static raw candidate JSONL: `.build/evals/ollama-raw-candidate-*.jsonl`
 - Static polisher JSONL: `.build/evals/ollama-polish-*.jsonl`
 - Dogfood pipeline JSONL: `.build/evals/dogfood-pipeline-ollama-*.jsonl`
+- Human transcript manifest, if used for saved-dogfood WER: `ground-truth.jsonl`
+  beside the `.wav` recordings, or `EPOS_EVAL_GROUND_TRUTH=/path/to/file.jsonl`
 - Final human report, if generated: `.build/evals/local-ollama-polish-summary.md`
 
 Existing `.build/evals` files are orientation only. Rerun the relevant evals

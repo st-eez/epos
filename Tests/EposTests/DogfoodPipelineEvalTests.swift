@@ -23,6 +23,9 @@ import XCTest
 /// - `EPOS_EVAL_LIMIT`: number of recordings to replay
 /// - `EPOS_EVAL_LATEST=1`: newest-first selection instead of oldest-first
 /// - `EPOS_EVAL_OUTPUT`: defaults to `.build/evals/dogfood-pipeline-eval.jsonl`
+/// - `EPOS_EVAL_GROUND_TRUTH`: JSONL manifest with `file` and
+///   `humanIntendedTranscript`; defaults to `ground-truth.jsonl` in the
+///   recordings directory when that file exists.
 /// - `EPOS_EVAL_SHADOW_RELAXED_OLLAMA=1`: also log a direct, eval-only relaxed
 ///   Qwen candidate plus the strict guard decision, without changing production fields.
 /// - `EPOS_OLLAMA_PROMPT_STYLE`: eval-only prompt style override for the
@@ -41,6 +44,10 @@ final class DogfoodPipelineEvalTests: XCTestCase {
         let settings = Settings.load()
         let locale = settings.locale
         let recordingsDirectory = SavedRecordingEvalSupport.recordingsDirectory(environment: environment)
+        let groundTruthManifest = try SavedRecordingEvalSupport.groundTruthManifest(
+            in: recordingsDirectory,
+            environment: environment
+        )
         let outputURL = SavedRecordingEvalSupport.outputURL(
             environment: environment,
             defaultPath: ".build/evals/dogfood-pipeline-eval.jsonl"
@@ -108,6 +115,26 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 shadowRelaxedRawCandidate?.strictGuardRejectionReason == nil
                     ? nil
                     : shadowRelaxedRawCandidate?.candidateCharacterCount
+            let humanIntendedTranscript = groundTruthManifest.transcript(for: recording)
+            let rawTranscriptScore = humanIntendedTranscript.map {
+                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: transcription.text)
+            }
+            let canonicalizedRawTranscriptScore = humanIntendedTranscript.map {
+                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: canonicalizedRaw)
+            }
+            let outputTranscriptScore = humanIntendedTranscript.map {
+                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: result.text)
+            }
+            let shadowRelaxedOutputTranscriptScore = humanIntendedTranscript.flatMap { reference in
+                shadowRelaxedRawCandidate?.strictGateOutput.map {
+                    PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: $0)
+                }
+            }
+            let shadowRelaxedCandidateTranscriptScore = humanIntendedTranscript.flatMap { reference in
+                shadowRelaxedRawCandidate?.candidate.map {
+                    PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: $0)
+                }
+            }
 
             let row = DogfoodPipelineEvalRow(
                 file: recording.lastPathComponent,
@@ -115,9 +142,13 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 audioDurationSeconds: try SavedRecordingEvalSupport.durationSeconds(recording: recording),
                 transcribeSeconds: transcribeSeconds,
                 polishSeconds: polishSeconds,
+                humanIntendedTranscript: humanIntendedTranscript,
                 rawTranscript: transcription.text,
+                rawTranscriptScore: rawTranscriptScore,
                 canonicalizedRaw: canonicalizedRaw,
+                canonicalizedRawTranscriptScore: canonicalizedRawTranscriptScore,
                 output: result.text,
+                outputTranscriptScore: outputTranscriptScore,
                 outcome: String(describing: result.outcome),
                 engineOutcome: result.engineOutcome?.rawValue,
                 polishPromptStyle: polishPromptStyle,
@@ -134,6 +165,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 guardRejectionCandidateCharacterCount: result.guardRejection?.candidateCharacterCount,
                 guardRejectionDiff: result.guardRejection?.diff,
                 shadowRelaxedOutput: shadowRelaxedRawCandidate?.strictGateOutput,
+                shadowRelaxedOutputTranscriptScore: shadowRelaxedOutputTranscriptScore,
                 shadowRelaxedOutcome: shadowRelaxedRawCandidate?.strictGateOutcome,
                 shadowRelaxedEngineOutcome: shadowRelaxedRawCandidate?.candidateOutcome,
                 shadowRelaxedPolishSeconds: shadowRelaxedRawCandidate?.elapsedSeconds,
@@ -150,6 +182,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
                 shadowRelaxedGuardRejectionCandidate: shadowRelaxedRejectedCandidate,
                 shadowRelaxedGuardRejectionCandidateCharacterCount: shadowRelaxedRejectedCandidateCharacterCount,
                 shadowRelaxedGuardRejectionDiff: shadowRelaxedRawCandidate?.strictGuardRejectionDiff,
+                shadowRelaxedCandidateTranscriptScore: shadowRelaxedCandidateTranscriptScore,
                 shadowRelaxedRawCandidate: shadowRelaxedRawCandidate
             )
             rows.append(row)
@@ -161,6 +194,7 @@ final class DogfoodPipelineEvalTests: XCTestCase {
             recordingCount: selectedRecordings.count,
             knownTermCount: knownTerms.count,
             polishPromptStyle: polishPromptStyle,
+            groundTruthSourceURL: groundTruthManifest.sourceURL,
             outputURL: outputURL,
             rows: rows
         ))
@@ -223,189 +257,5 @@ extension DogfoodPipelineEvalTests {
         case .ollama:
             return configuredOllamaPromptStyle(environment: environment).rawValue
         }
-    }
-}
-
-private struct DogfoodPipelineEvalRow: Codable {
-    let file: String
-    let localeIdentifier: String
-    let audioDurationSeconds: Double
-    let transcribeSeconds: Double
-    let polishSeconds: Double
-    let rawTranscript: String
-    let canonicalizedRaw: String
-    let output: String
-    let outcome: String
-    let engineOutcome: String?
-    let polishPromptStyle: String?
-    let prewarmWaitSeconds: Double
-    let rawChangedByCanonicalizer: Bool
-    let outputChangedFromRaw: Bool
-    let outputChangedFromCanonicalizedRaw: Bool
-    let retainedFillerInRaw: Bool
-    let retainedFillerInOutput: Bool
-    let rawCharacterCount: Int
-    let outputCharacterCount: Int
-    let guardRejectionReason: String?
-    let guardRejectionCandidate: String?
-    let guardRejectionCandidateCharacterCount: Int?
-    let guardRejectionDiff: String?
-    let shadowRelaxedOutput: String?
-    let shadowRelaxedOutcome: String?
-    let shadowRelaxedEngineOutcome: String?
-    let shadowRelaxedPolishSeconds: Double?
-    let shadowRelaxedOutputChangedFromProduction: Bool?
-    let shadowRelaxedOutputChangedFromCanonicalizedRaw: Bool?
-    let shadowRelaxedCandidateOrOutputChangedFromProduction: Bool?
-    let shadowRelaxedGuardRejectionReason: String?
-    let shadowRelaxedGuardRejectionCandidate: String?
-    let shadowRelaxedGuardRejectionCandidateCharacterCount: Int?
-    let shadowRelaxedGuardRejectionDiff: String?
-    let shadowRelaxedRawCandidate: OllamaRawCandidateEvalResult?
-}
-
-private struct DogfoodPipelineEvalSummary {
-    private var canonicalizerChanged = 0
-    private var changedFromCanonicalizedRaw = 0
-    private var retainedFillerRaw = 0
-    private var retainedFillerOutput = 0
-    private var outcomes: [String: Int] = [:]
-    private var engineOutcomes: [String: Int] = [:]
-    private var totalPrewarmWaitSeconds = 0.0
-    private var shadowRelaxedRows = 0
-    private var shadowRelaxedOutputChangedFromProduction = 0
-    private var shadowRelaxedCandidateOrOutputChangedFromProduction = 0
-    private var shadowRelaxedOutputChangedFromCanonicalizedRaw = 0
-    private var shadowRelaxedOutcomes: [String: Int] = [:]
-    private var shadowRelaxedEngineOutcomes: [String: Int] = [:]
-    private var shadowRelaxedGuardRejections: [String: Int] = [:]
-    private var shadowRelaxedRawCandidateChangedFromProduction = 0
-
-    mutating func add(_ row: DogfoodPipelineEvalRow) {
-        if row.rawChangedByCanonicalizer {
-            canonicalizerChanged += 1
-        }
-        if row.outputChangedFromCanonicalizedRaw {
-            changedFromCanonicalizedRaw += 1
-        }
-        if row.retainedFillerInRaw {
-            retainedFillerRaw += 1
-        }
-        if row.retainedFillerInOutput {
-            retainedFillerOutput += 1
-        }
-        outcomes[row.outcome, default: 0] += 1
-        engineOutcomes[row.engineOutcome ?? "not-attempted", default: 0] += 1
-        totalPrewarmWaitSeconds += row.prewarmWaitSeconds
-        if let shadowOutcome = row.shadowRelaxedOutcome {
-            shadowRelaxedRows += 1
-            shadowRelaxedOutcomes[shadowOutcome, default: 0] += 1
-            shadowRelaxedEngineOutcomes[row.shadowRelaxedEngineOutcome ?? "not-attempted", default: 0] += 1
-        }
-        if row.shadowRelaxedOutputChangedFromProduction == true {
-            shadowRelaxedOutputChangedFromProduction += 1
-        }
-        if row.shadowRelaxedCandidateOrOutputChangedFromProduction == true {
-            shadowRelaxedCandidateOrOutputChangedFromProduction += 1
-        }
-        if row.shadowRelaxedOutputChangedFromCanonicalizedRaw == true {
-            shadowRelaxedOutputChangedFromCanonicalizedRaw += 1
-        }
-        if let reason = row.shadowRelaxedGuardRejectionReason {
-            shadowRelaxedGuardRejections[reason, default: 0] += 1
-        }
-        if let candidate = row.shadowRelaxedRawCandidate?.candidate,
-           candidate != row.output {
-            shadowRelaxedRawCandidateChangedFromProduction += 1
-        }
-    }
-
-    func report(
-        recordingCount: Int,
-        knownTermCount: Int,
-        polishPromptStyle: String?,
-        outputURL: URL,
-        rows: [DogfoodPipelineEvalRow]
-    ) -> String {
-        var lines = ["", "Dogfood pipeline eval"]
-        for row in rows {
-            lines.append(Self.rowHeader(row))
-            lines.append("  raw: \(row.rawTranscript)")
-            if row.rawChangedByCanonicalizer {
-                lines.append("  can: \(row.canonicalizedRaw)")
-            }
-            lines.append("  out: \(row.output)")
-            if let candidate = row.guardRejectionCandidate {
-                lines.append("  candidate: \(candidate)")
-            }
-            if let reason = row.guardRejectionReason, let diff = row.guardRejectionDiff {
-                lines.append("  rejection: \(reason) \(diff)")
-            }
-            if let shadowOutput = row.shadowRelaxedOutput {
-                lines.append("  relaxed strict-gate out: \(shadowOutput)")
-            }
-            if let rawCandidate = row.shadowRelaxedRawCandidate?.candidate {
-                lines.append("  relaxed raw candidate: \(rawCandidate)")
-            }
-            if let canonicalizedCandidate = row.shadowRelaxedRawCandidate?.canonicalizedCandidate,
-               canonicalizedCandidate != row.shadowRelaxedRawCandidate?.candidate {
-                lines.append("  relaxed canonicalized candidate: \(canonicalizedCandidate)")
-            }
-            if let shadowCandidate = row.shadowRelaxedGuardRejectionCandidate {
-                lines.append("  relaxed rejected candidate: \(shadowCandidate)")
-            }
-            if let reason = row.shadowRelaxedGuardRejectionReason,
-               let diff = row.shadowRelaxedGuardRejectionDiff {
-                lines.append("  relaxed rejection: \(reason) \(diff)")
-            }
-        }
-        lines.append("")
-        lines.append("recordings: \(recordingCount)")
-        lines.append("known terms: \(knownTermCount)")
-        if let polishPromptStyle {
-            lines.append("polish prompt style: \(polishPromptStyle)")
-        }
-        lines.append("canonicalizer changed raw: \(canonicalizerChanged)")
-        lines.append("polish changed canonicalized raw: \(changedFromCanonicalizedRaw)")
-        lines.append("retained filler raw/output: \(retainedFillerRaw)/\(retainedFillerOutput)")
-        lines.append("outcomes: \(Self.outcomeSummary(outcomes))")
-        lines.append("engine outcomes: \(Self.outcomeSummary(engineOutcomes))")
-        lines.append("prewarm wait total: \(Self.formatSeconds(totalPrewarmWaitSeconds))s")
-        if shadowRelaxedRows > 0 {
-            lines.append("shadow relaxed rows: \(shadowRelaxedRows)")
-            lines.append("shadow relaxed output changed production: \(shadowRelaxedOutputChangedFromProduction)")
-            lines.append("shadow relaxed raw candidate changed production: \(shadowRelaxedRawCandidateChangedFromProduction)")
-            lines.append("shadow relaxed candidate/output changed production: \(shadowRelaxedCandidateOrOutputChangedFromProduction)")
-            lines.append("shadow relaxed output changed canonicalized raw: \(shadowRelaxedOutputChangedFromCanonicalizedRaw)")
-            lines.append("shadow relaxed outcomes: \(Self.outcomeSummary(shadowRelaxedOutcomes))")
-            lines.append("shadow relaxed engine outcomes: \(Self.outcomeSummary(shadowRelaxedEngineOutcomes))")
-            lines.append("shadow relaxed guard rejections: \(Self.outcomeSummary(shadowRelaxedGuardRejections))")
-        }
-        lines.append("output: \(outputURL.path)")
-        return lines.joined(separator: "\n")
-    }
-
-    private static func rowHeader(_ row: DogfoodPipelineEvalRow) -> String {
-        var tags = ["<\(row.outcome)>", "engine=<\(row.engineOutcome ?? "not-attempted")>"]
-        if row.rawChangedByCanonicalizer { tags.append("CANON") }
-        if row.outputChangedFromCanonicalizedRaw { tags.append("POLISHED") }
-        if row.retainedFillerInOutput { tags.append("FILLER-LEFT") }
-        if row.shadowRelaxedCandidateOrOutputChangedFromProduction == true { tags.append("RELAXED-DIFF") }
-        let audio = Self.formatSeconds(row.audioDurationSeconds)
-        let transcribe = Self.formatSeconds(row.transcribeSeconds)
-        let polish = Self.formatSeconds(row.polishSeconds)
-        return "[\(row.file)] \(tags.joined(separator: " ")) audio=\(audio)s transcribe=\(transcribe)s polish=\(polish)s"
-    }
-
-    private static func outcomeSummary(_ outcomes: [String: Int]) -> String {
-        outcomes
-            .keys
-            .sorted()
-            .map { "\($0)=\(outcomes[$0, default: 0])" }
-            .joined(separator: ", ")
-    }
-
-    private static func formatSeconds(_ seconds: Double) -> String {
-        String(format: "%.3f", seconds)
     }
 }
