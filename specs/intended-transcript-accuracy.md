@@ -103,3 +103,67 @@ Residual categories after the pass:
 | Polish/style-only leading word | `1` | leading `I` before `Think outside the box` | Do not loosen polish; accepted output is semantically close and removing leading `I` is not safe generally. |
 | Canonicalizer opportunity | `0` | - | No remaining repeated safe deterministic correction in this 80-row slice. |
 | LLM polish issue | `0` | - | Model mostly left ASR misses unchanged; prompt/model work is not the next lever from this evidence. |
+
+## 2026-06-03 holdout 34 generalization pass
+
+Ground truth source:
+
+- `~/Library/Caches/Epos/recordings/ground-truth.jsonl` (`114` rows total)
+- Locked baseline slice: first `80` manifest rows
+- Holdout slice: appended `34` rows (`33` historical unseen rows plus `1`
+  post-commit recording)
+
+Eval artifacts:
+
+- `.build/evals/speech-context-holdout-candidates-20260603.jsonl`
+- `.build/evals/dogfood-pipeline-ground-truth-holdout34-current-20260603.jsonl`
+- `.build/evals/dogfood-ground-truth-holdout34-residuals-current-20260603.md`
+- `.build/evals/dogfood-pipeline-ground-truth-baseline80-current-20260603.jsonl`
+- `.build/evals/dogfood-pipeline-ground-truth114-current-20260603.jsonl`
+- `.build/evals/dogfood-pipeline-ground-truth-holdout34-canonicalizer-20260603.jsonl`
+- `.build/evals/dogfood-ground-truth-holdout34-residuals-canonicalizer-20260603.md`
+- `.build/evals/dogfood-pipeline-ground-truth-baseline80-canonicalizer-20260603.jsonl`
+- `.build/evals/dogfood-pipeline-ground-truth114-canonicalizer-20260603.jsonl`
+
+Measured production result:
+
+| Slice | Raw WER | Canonicalized WER Before | Output WER Before | Canonicalized WER After | Output WER After |
+|---|---:|---:|---:|---:|---:|
+| Baseline80 | `0.070` | `0.006` | `0.003` | `0.006` | `0.003` |
+| Holdout34 | `0.089` | `0.067` | `0.067` | `0.024` | `0.024` |
+| Combined114 | `0.076` | `0.024` | `0.022` | `0.011` | `0.009` |
+
+Holdout row-level result:
+
+| Metric | Value |
+|---|---:|
+| Output WER wins | `8` |
+| Output WER regressions | `0` |
+| Unchanged rows | `26` |
+| Residual rows before | `14` |
+| Residual rows after | `6` |
+
+Implemented safe fixes:
+
+- Proper noun and acronym aliases: `Stas` -> `Stath`, `Semux` -> `CMUX`.
+- File/domain aliases: `project.yamo` -> `project.yml`, raw `cloud.MD`
+  phrase cleanup for `updates to CLAUDE.md`.
+- Narrow phrase aliases for measured dogfood misses: `ping stuff`, `when stuff
+  runs it`, `the read me and the agent's file`, `Use of agents as needed to
+  keep your context window clean`, and `2 things`.
+
+Residual categories after the pass:
+
+| Category | Count | Rows | Action |
+|---|---:|---|---|
+| ASR semantic miss | `3` | `Latif`, `Lords`, `books` | No broad production fix; each can be a real word/name in other contexts. |
+| Missing leading word / tense | `2` | missing `It`, `Drop` vs `Dropped` | Do not add generic leading-word or tense rewrites from one example. |
+| Grammar-only polish | `1` | `enabled to check` vs `enabled, so check` | Do not loosen conservative polish or add grammar canonicalizer rules from one row. |
+
+Direction:
+
+- This holdout pass validates the canonicalizer as the current high-leverage
+  production lever for measured domain misses.
+- It does not validate LLM polish as the next lever: Ollama changed `0` holdout
+  rows, and the remaining residuals are mostly ASR semantic misses or unsafe
+  style/grammar rewrites.

@@ -62,8 +62,28 @@ final class SmokeTests: XCTestCase {
             "Stath instructions, please."
         )
         XCTAssertEqual(
+            canonicalizer.canonicalize("Ask Stas to review the CMUX changes."),
+            "Ask Stath to review the CMUX changes."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Edit CLAUDE.md, then ping stuff."),
+            "Edit CLAUDE.md, then ping Stath."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("CMUX keeps crashing when stuff runs it."),
+            "CMUX keeps crashing when Stath runs it."
+        )
+        XCTAssertEqual(
             canonicalizer.canonicalize("Claude, I want to add something to our Ipos app."),
             "Claude, I want to add something to our Epos app."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Let's check the read me and the agent's file."),
+            "Let's check the README and the AGENTS file."
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Use of agents as needed to keep your context window clean."),
+            "Use subagents as needed to keep your context window clean."
         )
         XCTAssertEqual(
             canonicalizer.canonicalize("They'd be closed phase one of the ticket."),
@@ -82,6 +102,7 @@ final class SmokeTests: XCTestCase {
             "meaning the new fields for state, cities, and three-letter code"
         )
         XCTAssertEqual(canonicalizer.canonicalize("Make 2 tickets for this."), "Make two tickets for this.")
+        XCTAssertEqual(canonicalizer.canonicalize("mixing up the 2 things"), "mixing up the two things")
         XCTAssertEqual(canonicalizer.canonicalize("part 2 where we map customers"), "part two where we map customers")
         XCTAssertEqual(
             canonicalizer.canonicalize("At a comment to the ticket, so we can pick this up later."),
@@ -118,6 +139,10 @@ final class SmokeTests: XCTestCase {
         let cleaned = canonicalizer.canonicalize(raw)
 
         XCTAssertEqual(cleaned, "Check the CLAUDE.md. Check the CLAUDE.md.")
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Do we need to make any updates to the cloud.MD?"),
+            "Do we need to make any updates to CLAUDE.md?"
+        )
     }
 
     func testCanonicalizerNormalizesNetSuiteAliases() {
@@ -160,6 +185,7 @@ final class SmokeTests: XCTestCase {
         let canonicalizer = TranscriptCanonicalizer()
 
         XCTAssertEqual(canonicalizer.canonicalize("open see mux"), "open CMUX")
+        XCTAssertEqual(canonicalizer.canonicalize("open Semux"), "open CMUX")
         XCTAssertEqual(canonicalizer.canonicalize("open c m u x"), "open CMUX")
         XCTAssertEqual(canonicalizer.canonicalize("open c-mux"), "open CMUX")
     }
@@ -169,6 +195,7 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertEqual(canonicalizer.canonicalize("edit project dot yaml"), "edit project.yml")
         XCTAssertEqual(canonicalizer.canonicalize("edit project dot yml"), "edit project.yml")
+        XCTAssertEqual(canonicalizer.canonicalize("update the project.yamo"), "update the project.yml")
         XCTAssertEqual(canonicalizer.canonicalize("edit project.yml"), "edit project.yml")
     }
 

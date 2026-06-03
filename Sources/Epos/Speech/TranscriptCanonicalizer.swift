@@ -62,10 +62,17 @@ public struct TranscriptCanonicalizer: Sendable {
                 "cloud.md"
             ]
         ),
-        Rule(canonical: "Stath", aliases: ["steph", "staff"]),
+        Rule(canonical: "Stath", aliases: ["steph", "staff", "stas"]),
         Rule(canonical: "Stath instructions", aliases: ["stuff instructions"]),
+        Rule(canonical: "ping Stath", aliases: ["ping stuff"]),
+        Rule(canonical: "when Stath runs it", aliases: ["when stuff runs it"]),
         Rule(canonical: "LLM polish", aliases: ["LOL polish"]),
         Rule(canonical: "Epos app", aliases: ["Ipos app"]),
+        Rule(canonical: "the README and the AGENTS file", aliases: ["the read me and the agent's file"]),
+        Rule(
+            canonical: "Use subagents as needed to keep your context window clean",
+            aliases: ["Use of agents as needed to keep your context window clean"]
+        ),
         Rule(
             canonical: "Foundation Models",
             aliases: ["foundation models", "foundational models", "the foundation models"]
@@ -78,6 +85,7 @@ public struct TranscriptCanonicalizer: Sendable {
         Rule(canonical: "text is redundant and what you can remove", aliases: ["text is redundant, and you can remove"]),
         Rule(canonical: "three-letter code", aliases: ["3 litter code", "three litter code"]),
         Rule(canonical: "two tickets", aliases: ["2 tickets"]),
+        Rule(canonical: "two things", aliases: ["2 things"]),
         Rule(canonical: "part two", aliases: ["part 2"]),
         Rule(canonical: "Add a comment to the ticket", aliases: ["At a comment to the ticket"]),
         Rule(canonical: "Add a comment to the tickets", aliases: ["I recommend to the tickets"]),
@@ -90,7 +98,7 @@ public struct TranscriptCanonicalizer: Sendable {
         Rule(canonical: "/", aliases: ["slash"]),
         Rule(
             canonical: "CMUX",
-            aliases: ["CMUX", "simux", "siemux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
+            aliases: ["CMUX", "simux", "siemux", "semux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
         ),
         // "suite"/"sweet" are homophones, so the recognizer renders the spoken brand as
         // a two-word common phrase ("net suite", "Net Sweet"). The "NetSuite" alias is the
@@ -108,7 +116,14 @@ public struct TranscriptCanonicalizer: Sendable {
             aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
         ),
         Rule(canonical: "README.md", aliases: ["README.md", "read me dot md", "readme dot md", "read me md"]),
-        Rule(canonical: "project.yml", aliases: ["project.yml", "project.yaml", "project dot yml", "project dot yaml"]),
+        Rule(
+            canonical: "project.yml",
+            aliases: ["project.yml", "project.yaml", "project.yamo", "project dot yml", "project dot yaml"]
+        ),
+        Rule(
+            canonical: "updates to CLAUDE.md",
+            aliases: ["updates to the CLAUDE.md", "updates to the cloud.MD"]
+        ),
         Rule(canonical: ".env", aliases: ["dot env"]),
         // Developer-token shorthands. Plain alias->canonical, so they ride the same
         // engine as user rules; only the flag-prefix form needs the pre-pass below.

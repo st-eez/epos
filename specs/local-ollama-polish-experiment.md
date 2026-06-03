@@ -52,6 +52,7 @@ Lever files live under `specs/ollama-polish-levers/`; use
 | Residual model bakeoff | `specs/ollama-polish-levers/L7-residual-model-bakeoff.md` | implemented+verified | Added residual-row prompt/model bakeoff; qwen3:4b and prompt variants did not improve strict-gate WER after deterministic cleanup |
 | Residual deterministic cleanup | `specs/ollama-polish-levers/L8-residual-deterministic-cleanup.md` | implemented+verified | Added exact ordinal and missing-`be` cleanup rules; 35-row output WER is now 0.028 with 3 deterministic WER wins and 0 output regressions |
 | Ground-truth 80 canonicalizer expansion | `specs/ollama-polish-levers/L9-ground-truth80-canonicalizer.md` | implemented+verified | Expanded manifest to 80 inferred rows; added narrow domain/exact canonicalizer aliases that dropped output WER from 0.039 to 0.003 with 18 wins and 0 regressions |
+| Holdout generalization pass | `specs/ollama-polish-levers/L10-holdout-generalization.md` | implemented+verified | Added 34 unseen holdout rows; scoped canonicalizer aliases dropped holdout output WER from 0.067 to 0.024 and combined 114-row output WER from 0.022 to 0.009 with no baseline80 regression |
 
 ## Read First
 
