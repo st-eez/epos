@@ -35,6 +35,10 @@ struct SpeechContextVariantResult {
     let canonicalizedText: String
     let vocabularyHits: [String]
     let alternatives: [String]
+    let alternativeTranscripts: [String]
+    let alternativeTranscriptCandidates: [SavedRecordingEvalSupport.AlternativeTranscriptCandidate]
+    let confidenceMean: Double?
+    let confidenceMinimum: Double?
     let elapsedSeconds: Double
 }
 
@@ -42,6 +46,7 @@ struct SpeechContextEvalRow: Codable {
     let file: String
     let localeIdentifier: String
     let audioDurationSeconds: Double
+    let humanIntendedTranscript: String?
     let baselineVariant: String
     let variant: String
     let contextTermCount: Int
@@ -51,11 +56,24 @@ struct SpeechContextEvalRow: Codable {
     let contextReadbackMatches: Bool
     let baselineText: String
     let variantText: String
+    let baselineTranscriptScore: TranscriptWordErrorScore?
+    let variantTranscriptScore: TranscriptWordErrorScore?
     let baselineCanonicalized: String
     let variantCanonicalized: String
+    let baselineCanonicalizedTranscriptScore: TranscriptWordErrorScore?
+    let variantCanonicalizedTranscriptScore: TranscriptWordErrorScore?
     let baselineVocabularyHits: [String]
     let variantVocabularyHits: [String]
     let variantAlternatives: [String]
+    let variantAlternativeTranscriptCandidates: [String]
+    let variantConfidenceMean: Double?
+    let variantConfidenceMinimum: Double?
+    let bestAlternativeTranscript: String?
+    let bestAlternativeTranscriptScore: TranscriptWordErrorScore?
+    let bestAlternativeTranscriptConfidenceMean: Double?
+    let bestCanonicalizedAlternativeTranscript: String?
+    let bestCanonicalizedAlternativeTranscriptScore: TranscriptWordErrorScore?
+    let bestCanonicalizedAlternativeTranscriptConfidenceMean: Double?
     let baselineElapsedSeconds: Double
     let variantElapsedSeconds: Double
 
@@ -65,115 +83,33 @@ struct SpeechContextEvalRow: Codable {
     var elapsedDeltaSeconds: Double { variantElapsedSeconds - baselineElapsedSeconds }
     var hasAlternatives: Bool { !variantAlternatives.isEmpty }
     var hasDifferentAlternative: Bool { variantAlternatives.contains { $0 != variantText } }
-}
-
-struct SpeechContextEvalSummary {
-    private var variantSummaries: [String: VariantSummary] = [:]
-
-    mutating func add(_ row: SpeechContextEvalRow) {
-        variantSummaries[row.variant, default: VariantSummary()].add(row)
+    var hasAlternativeTranscriptCandidates: Bool { !variantAlternativeTranscriptCandidates.isEmpty }
+    var rawWERDelta: Double? {
+        guard let baselineTranscriptScore, let variantTranscriptScore else { return nil }
+        return variantTranscriptScore.wordErrorRate - baselineTranscriptScore.wordErrorRate
     }
-
-    func report(
-        recordingCount: Int,
-        variantCount: Int,
-        outputURL: URL,
-        rows: [SpeechContextEvalRow]
-    ) -> String {
-        var lines = ["", "Speech context eval"]
-        for row in rows {
-            append(row: row, to: &lines)
-        }
-        lines.append("")
-        lines.append("recordings: \(recordingCount)")
-        lines.append("variants: \(variantCount)")
-        for variant in variantSummaries.keys.sorted() {
-            guard let summary = variantSummaries[variant] else { continue }
-            lines.append(summary.report(variant: variant))
-        }
-        lines.append("output: \(outputURL.path)")
-        return lines.joined(separator: "\n")
+    var canonicalizedWERDelta: Double? {
+        guard let baselineCanonicalizedTranscriptScore, let variantCanonicalizedTranscriptScore else { return nil }
+        return variantCanonicalizedTranscriptScore.wordErrorRate - baselineCanonicalizedTranscriptScore.wordErrorRate
     }
-
-    private func append(row: SpeechContextEvalRow, to lines: inout [String]) {
-        let tagText = tags(for: row).isEmpty ? "same" : tags(for: row).joined(separator: " ")
-        lines.append(
-            "[\(row.file)] \(row.variant) <\(tagText)> " +
-                "audio=\(Self.formatSeconds(row.audioDurationSeconds))s " +
-                "latencyDelta=\(Self.formatSignedSeconds(row.elapsedDeltaSeconds))s"
-        )
-        lines.append("  base: \(row.baselineText)")
-        lines.append("  ctx:  \(row.variantText)")
-        lines.append(
-            "  context: \(row.applicationMode.rawValue) terms=\(row.contextTermCount) " +
-                "readback=\(row.contextReadbackCount) alternatives=\(row.variantAlternatives.count)"
-        )
-        if row.canonicalizedChanged {
-            lines.append("  base can: \(row.baselineCanonicalized)")
-            lines.append("  ctx can:  \(row.variantCanonicalized)")
-        }
-        if row.vocabularyHitDelta != 0 {
-            lines.append("  base hits: \(row.baselineVocabularyHits.joined(separator: ", "))")
-            lines.append("  ctx hits:  \(row.variantVocabularyHits.joined(separator: ", "))")
-        }
-        if row.hasAlternatives {
-            lines.append("  alternatives: \(row.variantAlternatives.joined(separator: " | "))")
-        }
+    var rawWERImproved: Bool { rawWERDelta.map { $0 < 0 } ?? false }
+    var rawWERWorsened: Bool { rawWERDelta.map { $0 > 0 } ?? false }
+    var canonicalizedWERImproved: Bool { canonicalizedWERDelta.map { $0 < 0 } ?? false }
+    var canonicalizedWERWorsened: Bool { canonicalizedWERDelta.map { $0 > 0 } ?? false }
+    var bestAlternativeImprovesVariant: Bool {
+        guard let bestAlternativeTranscriptScore, let variantTranscriptScore else { return false }
+        return bestAlternativeTranscriptScore.wordErrorRate < variantTranscriptScore.wordErrorRate
     }
-
-    private func tags(for row: SpeechContextEvalRow) -> [String] {
-        var tags: [String] = []
-        if row.rawChanged { tags.append("RAW-CHANGED") }
-        if row.canonicalizedChanged { tags.append("CANON-CHANGED") }
-        if row.vocabularyHitDelta > 0 { tags.append("VOCAB-GAIN") }
-        if row.vocabularyHitDelta < 0 { tags.append("VOCAB-LOSS") }
-        if !row.contextReadbackMatches { tags.append("READBACK-MISMATCH") }
-        if row.hasAlternatives { tags.append("ALTERNATIVES") }
-        if row.hasDifferentAlternative { tags.append("ALT-DIFF") }
-        return tags
+    var bestAlternativeMatchesIntended: Bool {
+        bestAlternativeTranscriptScore?.wordErrorRate == 0
     }
-
-    private static func formatSeconds(_ seconds: Double) -> String {
-        String(format: "%.3f", seconds)
+    var bestCanonicalizedAlternativeImprovesVariant: Bool {
+        guard let bestCanonicalizedAlternativeTranscriptScore,
+              let variantCanonicalizedTranscriptScore else { return false }
+        return bestCanonicalizedAlternativeTranscriptScore.wordErrorRate <
+            variantCanonicalizedTranscriptScore.wordErrorRate
     }
-
-    private static func formatSignedSeconds(_ seconds: Double) -> String {
-        String(format: "%+.3f", seconds)
-    }
-
-    private struct VariantSummary {
-        var rows = 0
-        var contextTermCount = 0
-        var rawChanged = 0
-        var canonicalizedChanged = 0
-        var vocabularyHitGains = 0
-        var vocabularyHitLosses = 0
-        var contextReadbackMismatches = 0
-        var alternativesRows = 0
-        var differentAlternativeRows = 0
-        var elapsedDeltaTotal = 0.0
-
-        mutating func add(_ row: SpeechContextEvalRow) {
-            rows += 1
-            contextTermCount = row.contextTermCount
-            elapsedDeltaTotal += row.elapsedDeltaSeconds
-            if row.rawChanged { rawChanged += 1 }
-            if row.canonicalizedChanged { canonicalizedChanged += 1 }
-            if row.vocabularyHitDelta > 0 { vocabularyHitGains += 1 }
-            if row.vocabularyHitDelta < 0 { vocabularyHitLosses += 1 }
-            if !row.contextReadbackMatches { contextReadbackMismatches += 1 }
-            if row.hasAlternatives { alternativesRows += 1 }
-            if row.hasDifferentAlternative { differentAlternativeRows += 1 }
-        }
-
-        func report(variant: String) -> String {
-            let meanDelta = rows == 0 ? 0 : elapsedDeltaTotal / Double(rows)
-            return "\(variant): context terms=\(contextTermCount) " +
-                "raw changed=\(rawChanged) canonicalized changed=\(canonicalizedChanged) " +
-                "vocabulary hit gains/losses=\(vocabularyHitGains)/\(vocabularyHitLosses) " +
-                "readback mismatches=\(contextReadbackMismatches) " +
-                "alternatives/different=\(alternativesRows)/\(differentAlternativeRows) " +
-                "mean latency delta=\(String(format: "%+.3f", meanDelta))s"
-        }
+    var bestCanonicalizedAlternativeMatchesIntended: Bool {
+        bestCanonicalizedAlternativeTranscriptScore?.wordErrorRate == 0
     }
 }

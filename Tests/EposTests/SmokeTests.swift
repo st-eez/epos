@@ -50,6 +50,14 @@ final class SmokeTests: XCTestCase {
             "work around using these Foundation Models"
         )
         XCTAssertEqual(
+            canonicalizer.canonicalize("what's the point of having the foundation models"),
+            "what's the point of having Foundation Models"
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("So you're seeing deprecate the foundation models altogether?"),
+            "So you're saying deprecate Foundation Models altogether?"
+        )
+        XCTAssertEqual(
             canonicalizer.canonicalize("different than Maine and focus"),
             "different than main and focus"
         )

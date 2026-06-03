@@ -64,7 +64,11 @@ public struct TranscriptCanonicalizer: Sendable {
         ),
         Rule(canonical: "Stath", aliases: ["steph", "staff"]),
         Rule(canonical: "LLM polish", aliases: ["LOL polish"]),
-        Rule(canonical: "Foundation Models", aliases: ["foundation models", "foundational models"]),
+        Rule(
+            canonical: "Foundation Models",
+            aliases: ["foundation models", "foundational models", "the foundation models"]
+        ),
+        Rule(canonical: "saying deprecate", aliases: ["seeing deprecate"]),
         Rule(canonical: "codebase", aliases: ["code basis", "code base"]),
         Rule(canonical: "unslopify", aliases: ["unslop the fight"]),
         Rule(canonical: "Claude has been vibe coding", aliases: ["Plot has been vibe coding"]),

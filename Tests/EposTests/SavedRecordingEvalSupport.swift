@@ -7,14 +7,36 @@ enum SavedRecordingEvalSupport {
         let text: String
         let failureMessages: [String]
         let alternatives: [String]
+        let alternativeTranscripts: [String]
+        let alternativeTranscriptCandidates: [AlternativeTranscriptCandidate]
+        let confidenceMean: Double?
+        let confidenceMinimum: Double?
         let contextReadback: [String]
 
-        init(text: String, failureMessages: [String], alternatives: [String] = [], contextReadback: [String] = []) {
+        init(
+            text: String,
+            failureMessages: [String],
+            alternatives: [String] = [],
+            alternativeTranscripts: [String] = [],
+            alternativeTranscriptCandidates: [AlternativeTranscriptCandidate] = [],
+            confidenceMean: Double? = nil,
+            confidenceMinimum: Double? = nil,
+            contextReadback: [String] = []
+        ) {
             self.text = text
             self.failureMessages = failureMessages
             self.alternatives = alternatives
+            self.alternativeTranscripts = alternativeTranscripts
+            self.alternativeTranscriptCandidates = alternativeTranscriptCandidates
+            self.confidenceMean = confidenceMean
+            self.confidenceMinimum = confidenceMinimum
             self.contextReadback = contextReadback
         }
+    }
+
+    struct AlternativeTranscriptCandidate: Codable {
+        let text: String
+        let confidenceMean: Double?
     }
 
     static func isTruthy(_ value: String?) -> Bool {

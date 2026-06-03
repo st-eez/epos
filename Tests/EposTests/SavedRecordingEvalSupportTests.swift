@@ -130,6 +130,33 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
         )
     }
 
+    func testSpeechContextEvalRowComputesWERDeltas() {
+        let row = makeSpeechContextEvalRow(
+            reference: "Ask Stath to review CMOX.",
+            baselineText: "Ask Stas to review CMOX.",
+            variantText: "Ask Stath to review CMOX."
+        )
+
+        XCTAssertTrue(row.rawWERImproved)
+        XCTAssertFalse(row.rawWERWorsened)
+        XCTAssertTrue(row.canonicalizedWERImproved)
+        XCTAssertFalse(row.canonicalizedWERWorsened)
+    }
+
+    func testSpeechContextEvalRowScoresBestAlternativesAgainstGroundTruth() {
+        let row = makeSpeechContextEvalRow(
+            reference: "Open project.yml.",
+            baselineText: "Open project yamo.",
+            variantText: "Open project yamo.",
+            bestAlternativeTranscript: "Open project.yml."
+        )
+
+        XCTAssertTrue(row.bestAlternativeImprovesVariant)
+        XCTAssertTrue(row.bestAlternativeMatchesIntended)
+        XCTAssertTrue(row.bestCanonicalizedAlternativeImprovesVariant)
+        XCTAssertTrue(row.bestCanonicalizedAlternativeMatchesIntended)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -139,5 +166,53 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
 
     private func makeRecording(_ name: String, in directory: URL) throws {
         try Data().write(to: directory.appendingPathComponent(name))
+    }
+
+    private func makeSpeechContextEvalRow(
+        reference: String,
+        baselineText: String,
+        variantText: String,
+        bestAlternativeTranscript: String? = nil
+    ) -> SpeechContextEvalRow {
+        let baselineScore = PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: baselineText)
+        let variantScore = PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: variantText)
+        let bestAlternativeScore = bestAlternativeTranscript.map {
+            PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: $0)
+        }
+        return SpeechContextEvalRow(
+            file: "sample.wav",
+            localeIdentifier: "en-US",
+            audioDurationSeconds: 1,
+            humanIntendedTranscript: reference,
+            baselineVariant: "none",
+            variant: "production-alternatives",
+            contextTermCount: 1,
+            applicationMode: .setContextBeforeStart,
+            includeAlternatives: bestAlternativeTranscript != nil,
+            contextReadbackCount: 1,
+            contextReadbackMatches: true,
+            baselineText: baselineText,
+            variantText: variantText,
+            baselineTranscriptScore: baselineScore,
+            variantTranscriptScore: variantScore,
+            baselineCanonicalized: baselineText,
+            variantCanonicalized: variantText,
+            baselineCanonicalizedTranscriptScore: baselineScore,
+            variantCanonicalizedTranscriptScore: variantScore,
+            baselineVocabularyHits: [],
+            variantVocabularyHits: [],
+            variantAlternatives: bestAlternativeTranscript.map { [$0] } ?? [],
+            variantAlternativeTranscriptCandidates: bestAlternativeTranscript.map { [$0] } ?? [],
+            variantConfidenceMean: 0.8,
+            variantConfidenceMinimum: 0.7,
+            bestAlternativeTranscript: bestAlternativeTranscript,
+            bestAlternativeTranscriptScore: bestAlternativeScore,
+            bestAlternativeTranscriptConfidenceMean: bestAlternativeTranscript == nil ? nil : 0.9,
+            bestCanonicalizedAlternativeTranscript: bestAlternativeTranscript,
+            bestCanonicalizedAlternativeTranscriptScore: bestAlternativeScore,
+            bestCanonicalizedAlternativeTranscriptConfidenceMean: bestAlternativeTranscript == nil ? nil : 0.9,
+            baselineElapsedSeconds: 1,
+            variantElapsedSeconds: 1
+        )
     }
 }

@@ -51,6 +51,10 @@ extension SavedRecordingEvalSupport {
             text: collected.text,
             failureMessages: collected.failureMessages,
             alternatives: includeAlternatives ? collected.alternatives : [],
+            alternativeTranscripts: includeAlternatives ? collected.alternativeTranscripts : [],
+            alternativeTranscriptCandidates: includeAlternatives ? collected.alternativeTranscriptCandidates : [],
+            confidenceMean: collected.confidenceMean,
+            confidenceMinimum: collected.confidenceMinimum,
             contextReadback: contextReadback
         )
         if let failure = transcription.failureMessages.first {
@@ -110,23 +114,80 @@ extension SavedRecordingEvalSupport {
     }
 
     private static func collectResults(from transcriber: SpeechTranscriber) async -> Transcription {
-        var finalText = ""
+        var finalSegments: [SpeechContextAlternativeSegment] = []
         var failures: [String] = []
-        var alternatives: [String] = []
         do {
             for try await result in transcriber.results {
                 guard result.isFinal else { continue }
-                finalText += String(result.text.characters)
-                alternatives += result.alternatives.map { String($0.characters) }
+                finalSegments.append(SpeechContextAlternativeSegment(
+                    text: attributedText(result.text),
+                    alternatives: result.alternatives.map(attributedText(_:))
+                ))
             }
         } catch {
             failures.append(String(describing: error))
         }
+        let finalText = finalSegments.map(\.text.text).joined()
+        let alternatives = finalSegments.flatMap { segment in segment.alternatives.map(\.text) }
+        let candidateTranscripts = alternativeTranscriptCandidates(from: finalSegments)
+        let confidenceSummary = confidenceSummary(finalSegments.map(\.text))
         return Transcription(
             text: finalText.trimmingCharacters(in: .whitespacesAndNewlines),
             failureMessages: failures,
-            alternatives: uniqueNonEmpty(alternatives)
+            alternatives: uniqueNonEmpty(alternatives),
+            alternativeTranscripts: candidateTranscripts.map(\.text),
+            alternativeTranscriptCandidates: candidateTranscripts,
+            confidenceMean: confidenceSummary.mean,
+            confidenceMinimum: confidenceSummary.minimum
         )
+    }
+
+    private static func alternativeTranscriptCandidates(
+        from segments: [SpeechContextAlternativeSegment]
+    ) -> [AlternativeTranscriptCandidate] {
+        let canonicalText = segments.map(\.text.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates: [AlternativeTranscriptCandidate] = []
+        var seen: Set<String> = []
+        for (index, segment) in segments.enumerated() {
+            for alternative in segment.alternatives {
+                var candidateSegments = segments.map(\.text)
+                candidateSegments[index] = alternative
+                let candidate = candidateSegments.map(\.text).joined().trimmingCharacters(in: .whitespacesAndNewlines)
+                guard candidate != canonicalText else { continue }
+                guard !candidate.isEmpty else { continue }
+                guard seen.insert(candidate.lowercased()).inserted else { continue }
+                candidates.append(AlternativeTranscriptCandidate(
+                    text: candidate,
+                    confidenceMean: confidenceSummary(candidateSegments).mean
+                ))
+            }
+        }
+        return candidates
+    }
+
+    private static func attributedText(_ value: AttributedString) -> SpeechContextAttributedText {
+        let text = String(value.characters)
+        let confidences = value.runs.compactMap {
+            $0[AttributeScopes.SpeechAttributes.ConfidenceAttribute.self]
+        }
+        return SpeechContextAttributedText(
+            text: text,
+            confidenceMean: mean(confidences),
+            confidenceMinimum: confidences.min()
+        )
+    }
+
+    private static func confidenceSummary(
+        _ values: [SpeechContextAttributedText]
+    ) -> (mean: Double?, minimum: Double?) {
+        let means = values.compactMap(\.confidenceMean)
+        let minimums = values.compactMap(\.confidenceMinimum)
+        return (mean(means), minimums.min())
+    }
+
+    private static func mean(_ values: [Double]) -> Double? {
+        guard !values.isEmpty else { return nil }
+        return values.reduce(0, +) / Double(values.count)
     }
 
     private static func uniqueNonEmpty(_ strings: [String]) -> [String] {
@@ -138,4 +199,15 @@ extension SavedRecordingEvalSupport {
             return trimmed
         }
     }
+}
+
+private struct SpeechContextAlternativeSegment {
+    let text: SpeechContextAttributedText
+    let alternatives: [SpeechContextAttributedText]
+}
+
+private struct SpeechContextAttributedText {
+    let text: String
+    let confidenceMean: Double?
+    let confidenceMinimum: Double?
 }
