@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: CD-2 implemented; CD-3 pending
+Status: CD-3 implemented; CD-4 pending
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -29,8 +29,9 @@ runtime canonicalizer.
 
 Keep `TranscriptCanonicalizer` as the runtime execution engine, with
 `CorrectionDictionary.defaultRecords` owning built-in correction definitions.
-User-saved rules remain flat canonicalizer rules until CD-3 migrates
-persistence.
+User-saved rules now persist as dictionary records while the existing flat
+canonicalizer rule API remains a compatibility surface for the editor and
+legacy payload migration.
 
 Do not replace Apple `SpeechTranscriber`.
 Do not loosen the LLM polish guard as part of this work.
@@ -289,16 +290,72 @@ swift test
 swiftlint --quiet
 ```
 
-## Future Slices
+## Slice 3
 
-### CD-3: Persist CorrectionDictionary records
+Slice ID: `CD-3`
 
-Move the persisted correction source from flat canonicalizer rules toward
-dictionary records while preserving user data migration.
+Title: Persist CorrectionDictionary records
+
+Goal: move the persisted correction source from flat canonicalizer rules toward
+dictionary records while preserving existing flat-rule behavior and migration.
+
+Behavior under test: saving rules through the current `CorrectionStore` writes a
+dictionary-record payload, `TranscriptCanonicalizer.load(from:)` reads compiled
+dictionary records, and current/legacy flat payloads still migrate with the same
+runtime behavior.
+
+Seam under test:
+
+```
+CorrectionStore.save(_:)
+CorrectionDictionary.load(from:)
+CorrectionDictionary.saveRecords(_:to:)
+TranscriptCanonicalizer.load(from:)
+TranscriptCanonicalizer.saveRules(_:to:)
+```
+
+Boundary:
+
+- Add a `UserDefaults`-backed dictionary record payload.
+- Keep the existing flat canonicalizer rule API as compatibility.
+- Migrate versioned flat stored rules as replacement records.
+- Migrate legacy unversioned flat custom rules before built-in defaults.
+- No UI changes.
+- No ASR, polish, learning, mining, evidence capture, scoring, or promotion
+  changes.
+
+Red tests:
+
+- `CorrectionDictionaryPersistenceTests.testCorrectionStoreSavesRulesAsDictionaryRecords`
+- `CorrectionDictionaryPersistenceTests.testTranscriptCanonicalizerLoadsPersistedDictionaryRecords`
+- `CorrectionDictionaryPersistenceTests.testDictionaryMigratesVersionedFlatRulesAsReplacementRecords`
+- `CorrectionDictionaryPersistenceTests.testDictionaryMigratesLegacyFlatRulesBeforeDefaults`
+
+Verification command:
+
+```
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter CorrectionDictionaryCompilerTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
+Implementation notes:
+
+- `CorrectionDictionary.recordsDefaultsKey` is the new authoritative dictionary
+  persistence key.
+- `TranscriptCanonicalizer.rulesDefaultsKey` remains as a compatibility mirror
+  and migration source for existing flat payloads.
+- The Corrections editor still edits flat `TranscriptCanonicalizer.Rule` rows;
+  a later UI upgrade can expose record metadata.
 
 Do not choose SQLite here by default. Start with the smallest durable format
 that preserves current behavior and can migrate the existing `UserDefaults`
 payload safely.
+
+## Future Slices
 
 ### CD-4: Correction Evidence Capture / Candidate Suggestions
 
@@ -380,5 +437,17 @@ decision.
 - Verification for CD-2: red
   `CorrectionDictionaryCompilerTests.testBuiltInSpokenCommandRecordsCarryRecordSemantics`,
   then `swift test --filter CorrectionDictionaryCompilerTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test`, and `swiftlint --quiet`.
+- Implemented CD-3 dictionary-backed persistence:
+  `CorrectionDictionary` now loads/saves versioned record payloads,
+  `CorrectionStore.save(_:)` persists edited rules as dictionary records,
+  `TranscriptCanonicalizer.load(from:)` compiles loaded records, and flat
+  stored-rule payloads migrate into dictionary records while preserving current
+  behavior.
+- Verification for CD-3: red
+  `CorrectionDictionaryPersistenceTests`, then
+  `swift test --filter CorrectionDictionaryPersistenceTests`,
+  `swift test --filter CorrectionDictionaryCompilerTests`,
   `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
   full `swift test`, and `swiftlint --quiet`.

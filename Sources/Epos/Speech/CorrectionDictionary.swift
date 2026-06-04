@@ -1,10 +1,46 @@
 import Foundation
 
 public struct CorrectionDictionary: Equatable, Sendable {
+    public static let recordsDefaultsKey = "settings.correctionDictionary.recordsJSON"
+    private static let storedDictionaryVersion = 1
+
     public var records: [CorrectionRecord]
 
     public init(records: [CorrectionRecord] = Self.defaultRecords) {
         self.records = records
+    }
+
+    public static func load(from defaults: UserDefaults = .standard) -> CorrectionDictionary {
+        let result = storedRecords(from: defaults)
+        if let migratedRecords = result.migratedRecords {
+            saveRecords(migratedRecords, to: defaults)
+        }
+        return CorrectionDictionary(records: result.records)
+    }
+
+    public static func records(from defaults: UserDefaults = .standard) -> [CorrectionRecord] {
+        storedRecords(from: defaults).records
+    }
+
+    public static func saveRecords(_ records: [CorrectionRecord], to defaults: UserDefaults = .standard) {
+        let storedDictionary = StoredDictionary(version: storedDictionaryVersion, records: records)
+        guard let data = try? JSONEncoder().encode(storedDictionary) else { return }
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: recordsDefaultsKey)
+    }
+
+    public static func records(from rules: [TranscriptCanonicalizer.Rule]) -> [CorrectionRecord] {
+        var defaultPairs = zip(
+            CorrectionRuleCompiler.compile(records: defaultRecords),
+            defaultRecords
+        ).map { (rule: $0.0, record: $0.1) }
+
+        return rules.enumerated().map { index, rule in
+            if let defaultIndex = defaultPairs.firstIndex(where: { $0.rule == rule }) {
+                return defaultPairs.remove(at: defaultIndex).record
+            }
+
+            return manualRecord(index: index, rule: rule)
+        }
     }
 
     public static let defaultRecords: [CorrectionRecord] = [
@@ -209,6 +245,84 @@ public struct CorrectionDictionary: Equatable, Sendable {
             source: .builtIn,
             status: .active
         )
+    }
+
+    private static func storedRecords(from defaults: UserDefaults) -> StoredRecordsResult {
+        if let rawDictionary = defaults.string(forKey: recordsDefaultsKey),
+           let data = rawDictionary.data(using: .utf8),
+           let storedDictionary = try? JSONDecoder().decode(StoredDictionary.self, from: data) {
+            return StoredRecordsResult(records: storedDictionary.records)
+        }
+
+        let migratedRules = migratedRulesFromFlatStorage(defaults)
+        let migratedRecords = records(from: migratedRules.rules)
+        return StoredRecordsResult(
+            records: migratedRecords,
+            migratedRecords: migratedRules.shouldPersist ? migratedRecords : nil
+        )
+    }
+
+    private static func migratedRulesFromFlatStorage(_ defaults: UserDefaults) -> MigratedRules {
+        guard let rawRules = defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey),
+              let data = rawRules.data(using: .utf8) else {
+            return MigratedRules(rules: TranscriptCanonicalizer.defaultRules, shouldPersist: false)
+        }
+
+        if let storedRules = try? JSONDecoder().decode(StoredRules.self, from: data) {
+            return MigratedRules(rules: storedRules.rules, shouldPersist: true)
+        }
+
+        if let legacyCustomRules = try? JSONDecoder().decode([TranscriptCanonicalizer.Rule].self, from: data) {
+            return MigratedRules(
+                rules: legacyCustomRules + TranscriptCanonicalizer.defaultRules,
+                shouldPersist: true
+            )
+        }
+
+        return MigratedRules(rules: TranscriptCanonicalizer.defaultRules, shouldPersist: false)
+    }
+
+    private static func manualRecord(index: Int, rule: TranscriptCanonicalizer.Rule) -> CorrectionRecord {
+        CorrectionRecord(
+            id: manualRecordID(index: index, canonical: rule.canonical),
+            kind: .replacement,
+            canonical: rule.canonical,
+            aliases: rule.aliases,
+            contexts: rule.contexts,
+            source: .manual,
+            status: .active
+        )
+    }
+
+    private static func manualRecordID(index: Int, canonical: String) -> String {
+        let slug = canonical
+            .lowercased()
+            .split { !$0.isLetter && !$0.isNumber }
+            .joined(separator: "-")
+        let suffix = slug.isEmpty ? "replacement" : slug
+        return "manual.\(index).\(suffix)"
+    }
+}
+
+private extension CorrectionDictionary {
+    struct StoredDictionary: Codable {
+        var version: Int
+        var records: [CorrectionRecord]
+    }
+
+    struct StoredRules: Codable {
+        var version: Int
+        var rules: [TranscriptCanonicalizer.Rule]
+    }
+
+    struct StoredRecordsResult {
+        var records: [CorrectionRecord]
+        var migratedRecords: [CorrectionRecord]?
+    }
+
+    struct MigratedRules {
+        var rules: [TranscriptCanonicalizer.Rule]
+        var shouldPersist: Bool
     }
 }
 

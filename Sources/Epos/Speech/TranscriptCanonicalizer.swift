@@ -59,27 +59,17 @@ public struct TranscriptCanonicalizer: Sendable {
     }
 
     public static func load(from defaults: UserDefaults = .standard) -> TranscriptCanonicalizer {
-        TranscriptCanonicalizer(rules: rules(from: defaults))
+        let dictionary = CorrectionDictionary.load(from: defaults)
+        return TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: dictionary.records))
     }
 
     public static func rules(from defaults: UserDefaults = .standard) -> [Rule] {
-        guard let rawRules = defaults.string(forKey: rulesDefaultsKey),
-              let data = rawRules.data(using: .utf8) else {
-            return defaultRules
-        }
-
-        if let storedRules = try? JSONDecoder().decode(StoredRules.self, from: data) {
-            return storedRules.rules
-        }
-
-        if let legacyCustomRules = try? JSONDecoder().decode([Rule].self, from: data) {
-            return legacyCustomRules + defaultRules
-        }
-
-        return defaultRules
+        let dictionary = CorrectionDictionary.load(from: defaults)
+        return CorrectionRuleCompiler.compile(records: dictionary.records)
     }
 
     public static func saveRules(_ rules: [Rule], to defaults: UserDefaults = .standard) {
+        CorrectionDictionary.saveRecords(CorrectionDictionary.records(from: rules), to: defaults)
         let storedRules = StoredRules(version: storedRulesVersion, rules: rules)
         guard let data = try? JSONEncoder().encode(storedRules) else { return }
         defaults.set(String(decoding: data, as: UTF8.self), forKey: rulesDefaultsKey)

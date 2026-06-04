@@ -8,11 +8,15 @@ import Foundation
 @MainActor
 public final class CorrectionStore: ObservableObject {
     @Published public private(set) var canonicalizer: TranscriptCanonicalizer
+    public private(set) var dictionary: CorrectionDictionary
     private let defaults: UserDefaults
 
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.canonicalizer = .load(from: defaults)
+        self.dictionary = CorrectionDictionary.load(from: defaults)
+        self.canonicalizer = TranscriptCanonicalizer(
+            rules: CorrectionRuleCompiler.compile(records: dictionary.records)
+        )
     }
 
     public var rules: [TranscriptCanonicalizer.Rule] { canonicalizer.rules }
@@ -23,7 +27,11 @@ public final class CorrectionStore: ObservableObject {
 
     /// Persist `rules` and refresh the live canonicalizer so the next insertion uses them.
     public func save(_ rules: [TranscriptCanonicalizer.Rule]) {
+        let records = CorrectionDictionary.records(from: rules)
         TranscriptCanonicalizer.saveRules(rules, to: defaults)
-        canonicalizer = TranscriptCanonicalizer(rules: rules)
+        dictionary = CorrectionDictionary(records: records)
+        canonicalizer = TranscriptCanonicalizer(
+            rules: CorrectionRuleCompiler.compile(records: dictionary.records)
+        )
     }
 }
