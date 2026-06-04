@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: active planning guide
+Status: CD-1 implemented; Slice 2 pending decision
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -310,3 +310,14 @@ decision.
 - Open point: decide in implementation whether `TranscriptCanonicalizer` keeps
   `defaultRules` as compatibility source of truth or delegates to compiled
   `CorrectionDictionary.defaultRecords`.
+- Implemented CD-1 as behavior-preserving scaffolding:
+  `CorrectionDictionary.defaultRecords` derives from
+  `TranscriptCanonicalizer.defaultRules`, and `CorrectionRuleCompiler` compiles
+  active lexicon/replacement/spoken-command records into canonicalizer rules.
+- Verification for CD-1: red test first, then
+  `swift test --filter CorrectionDictionaryCompilerTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test`, and `swiftlint --quiet`.
+- Slice 2 should not proceed until it decides whether `defaultRecords` becomes
+  the source of truth or remains a compatibility projection from
+  `TranscriptCanonicalizer.defaultRules`.
