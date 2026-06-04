@@ -68,6 +68,12 @@ public final class CorrectionEvidenceStore {
         CorrectionCandidateSuggester.suggestedRecords(from: evidence)
     }
 
+    public var promotionAssessments: [CorrectionPromotionAssessment] {
+        suggestedRecords.map { record in
+            CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        }
+    }
+
     public func record(_ item: CorrectionEvidence) {
         evidence.append(item)
         if evidence.count > maxEvidenceCount {
@@ -106,15 +112,17 @@ public enum CorrectionCandidateSuggester {
 
         for item in evidence {
             guard let edited = item.userEditedTranscript,
-                  let candidate = phraseReplacement(from: item.finalInsertedTranscript, to: edited) else {
+                  let candidate = CorrectionPhraseDiff.replacement(
+                    from: item.finalInsertedTranscript,
+                    to: edited
+                  ) else {
                 continue
             }
 
-            let key = "\(normalizedPhrase(candidate.alias))->\(normalizedPhrase(candidate.canonical))"
-            guard seen.insert(key).inserted else { continue }
+            guard seen.insert(candidate.key).inserted else { continue }
 
             suggestions.append(CorrectionRecord(
-                id: "suggested.\(slug(candidate.alias)).to-\(slug(candidate.canonical))",
+                id: "suggested.\(candidate.aliasSlug).to-\(candidate.canonicalSlug)",
                 kind: .replacement,
                 canonical: candidate.canonical,
                 aliases: [candidate.alias],
@@ -124,54 +132,6 @@ public enum CorrectionCandidateSuggester {
         }
 
         return suggestions
-    }
-
-    private static func phraseReplacement(
-        from observed: String,
-        to edited: String
-    ) -> (alias: String, canonical: String)? {
-        let observedWords = words(in: observed)
-        let editedWords = words(in: edited)
-        guard !observedWords.isEmpty, !editedWords.isEmpty else { return nil }
-        guard observedWords != editedWords else { return nil }
-
-        var prefixCount = 0
-        while prefixCount < observedWords.count,
-              prefixCount < editedWords.count,
-              observedWords[prefixCount] == editedWords[prefixCount] {
-            prefixCount += 1
-        }
-
-        var suffixCount = 0
-        while suffixCount < observedWords.count - prefixCount,
-              suffixCount < editedWords.count - prefixCount,
-              observedWords[observedWords.count - 1 - suffixCount] == editedWords[editedWords.count - 1 - suffixCount] {
-            suffixCount += 1
-        }
-
-        let observedEnd = observedWords.count - suffixCount
-        let editedEnd = editedWords.count - suffixCount
-        let alias = observedWords[prefixCount..<observedEnd].joined(separator: " ")
-        let canonical = editedWords[prefixCount..<editedEnd].joined(separator: " ")
-        guard !alias.isEmpty, !canonical.isEmpty else { return nil }
-        guard normalizedPhrase(alias) != normalizedPhrase(canonical) else { return nil }
-        return (alias: alias, canonical: canonical)
-    }
-
-    private static func words(in text: String) -> [String] {
-        text.split { $0.isWhitespace }.map(String.init)
-    }
-
-    private static func normalizedPhrase(_ phrase: String) -> String {
-        phrase
-            .lowercased()
-            .split { !$0.isLetter && !$0.isNumber }
-            .joined(separator: " ")
-    }
-
-    private static func slug(_ phrase: String) -> String {
-        let slug = normalizedPhrase(phrase).replacingOccurrences(of: " ", with: "-")
-        return slug.isEmpty ? "replacement" : slug
     }
 }
 

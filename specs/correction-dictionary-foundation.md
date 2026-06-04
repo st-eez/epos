@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: CD-4 implemented; CD-5 pending
+Status: CD-5 implemented; later corrections UI pending
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -34,6 +34,8 @@ canonicalizer rule API remains a compatibility surface for the editor and
 legacy payload migration.
 Finalization evidence is captured into a bounded local store and edited-miss
 evidence can produce suggested inactive records.
+Suggested records can now be scored by a non-mutating promotion gate before any
+record is allowed to become active.
 
 Do not replace Apple `SpeechTranscriber`.
 Do not loosen the LLM polish guard as part of this work.
@@ -430,9 +432,11 @@ Implementation notes:
   replacement suggestions from evidence that already contains a user-edited
   transcript.
 
-## Future Slices
+## Slice 5
 
-### CD-5: Risk Scoring And Promotion Gate
+Slice ID: `CD-5`
+
+Title: Risk scoring and promotion gate
 
 Mine repeated safe misses into suggested records. Suggested records do not
 compile into runtime rules until accepted.
@@ -447,6 +451,65 @@ Success requires:
 Score suggested records for recurrence, scope risk, phrase ambiguity, negative
 examples, and locked-eval regressions before allowing promotion to active
 runtime rules.
+
+Behavior under test: suggested correction records receive a promotion
+assessment with recurrence evidence, negative evidence, conflicting suggestion
+evidence, phrase risk, scope risk, and locked-baseline regression blockers.
+Only assessments without blockers expose an active promoted record.
+
+Seam under test:
+
+```
+CorrectionEvidenceStore.promotionAssessments
+CorrectionPromotionGate.assess(...)
+CorrectionPromotionAssessment.promotedRecord
+```
+
+Boundary:
+
+- Score existing suggested records from CD-4 evidence.
+- Require repeated positive edited-miss evidence before promotion.
+- Block explicit no-change negative examples.
+- Block conflicting canonical suggestions for the same alias.
+- Score phrase ambiguity and app-scope risk.
+- Block locked baseline rows that would change under the promoted record.
+- No automatic activation.
+- No UI changes.
+- No ASR, polish-policy, or UserDefaults migration changes.
+
+Red tests:
+
+- `CorrectionPromotionGateTests.testPromotionGateBlocksUntilSuggestionRecurs`
+- `CorrectionPromotionGateTests.testPromotionGateBlocksExplicitNegativeExamples`
+- `CorrectionPromotionGateTests.testPromotionGateBlocksAmbiguousShortPhrases`
+- `CorrectionPromotionGateTests.testPromotionGateBlocksLockedBaselineRegressions`
+- `CorrectionPromotionGateTests.testPromotionGateScoresSingleAppEvidenceAsMediumScopeRisk`
+- `CorrectionPromotionGateTests.testPromotionGateBlocksConflictingCanonicalSuggestions`
+- `CorrectionPromotionGateTests.testEvidenceStoreExposesPromotionAssessmentsForSuggestions`
+
+Verification command:
+
+```
+swift test --filter CorrectionPromotionGateTests
+swift test --filter CorrectionEvidenceTests
+swift test --filter CorrectionDictionaryCompilerTests
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
+Implementation notes:
+
+- `CorrectionPhraseDiff` is shared by suggestion generation and promotion
+  scoring so both paths extract the same replacement phrase.
+- `CorrectionPromotionAssessment.promotedRecord` is nil until blockers are
+  clear; promotion is still caller-controlled and non-persistent.
+- Single-app positive evidence is scored as medium scope risk but is not blocked
+  unless conflicting suggestion evidence makes scope risk high.
+
+## Future Slices
 
 ### Later: Corrections UI Upgrade
 
@@ -532,3 +595,21 @@ decision.
   canonicalizer rules. Added
   `CorrectionEvidenceTests.testAppliedRuleIDsIncludeCascadedRules` and made
   applied-ID tracking simulate the canonicalizer's sequential replacements.
+- Implemented CD-5 risk scoring and promotion gate:
+  `CorrectionPromotionGate` now assesses suggested records for recurrence,
+  explicit no-change negatives, conflicting canonical suggestions, phrase risk,
+  app-scope risk, and locked-baseline regressions. `CorrectionEvidenceStore`
+  exposes promotion assessments without activating or persisting promoted
+  records.
+- Verification for CD-5: red `CorrectionPromotionGateTests`, then
+  `swift test --filter CorrectionPromotionGateTests`,
+  `swift test --filter CorrectionEvidenceTests`,
+  `swift test --filter CorrectionDictionaryCompilerTests`,
+  `swift test --filter CorrectionDictionaryPersistenceTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test`, and `swiftlint --quiet`.
+- CD-5 verifier found that duplicate evidence rows could fake recurrence.
+  Added
+  `CorrectionPromotionGateTests.testPromotionGateDoesNotCountDuplicateEvidenceAsRecurrence`
+  and made recurrence scoring count distinct recording IDs, falling back to
+  evidence IDs.
