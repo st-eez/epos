@@ -214,6 +214,98 @@ final class CorrectionEvidenceTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinatorSkipsCorrectionEvidenceWhenCorrectionEvidenceCaptureDisabled() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        let coordinator = AppCoordinator(
+            correctionEvidence: evidenceStore,
+            recordingIDGenerator: { "rec-1" },
+            autoStart: false
+        )
+
+        let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
+            enabled: false,
+            rawTranscript: "open siemux",
+            polishResult: PolishResult(
+                text: "open CMUX",
+                outcome: .disabled,
+                rawCharacterCount: "open CMUX".count
+            ),
+            effectiveOutcome: .disabled,
+            applied: true,
+            recordingID: "rec-1"
+        )
+
+        XCTAssertNil(evidenceID)
+        XCTAssertTrue(evidenceStore.evidence.isEmpty)
+    }
+
+    @MainActor
+    func testCoordinatorSkipsCorrectionEvidenceWhenFinalInsertDidNotLand() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        let coordinator = AppCoordinator(
+            correctionEvidence: evidenceStore,
+            recordingIDGenerator: { "rec-1" },
+            autoStart: false
+        )
+
+        let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
+            enabled: true,
+            rawTranscript: "open siemux",
+            polishResult: PolishResult(
+                text: "open CMUX",
+                outcome: .disabled,
+                rawCharacterCount: "open CMUX".count
+            ),
+            effectiveOutcome: .disabled,
+            applied: false,
+            finalInsertedTranscript: nil,
+            recordingID: "rec-1"
+        )
+
+        XCTAssertNil(evidenceID)
+        XCTAssertTrue(evidenceStore.evidence.isEmpty)
+    }
+
+    @MainActor
+    func testCoordinatorRecordsCorrectionEvidenceWhenFinalInsertLanded() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        let coordinator = AppCoordinator(
+            correctionEvidence: evidenceStore,
+            recordingIDGenerator: { "rec-1" },
+            autoStart: false
+        )
+
+        let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
+            enabled: true,
+            rawTranscript: "open siemux",
+            polishResult: PolishResult(
+                text: "open CMUX",
+                outcome: .disabled,
+                rawCharacterCount: "open CMUX".count
+            ),
+            effectiveOutcome: .disabled,
+            applied: false,
+            finalInsertedTranscript: "open CMUX",
+            recordingID: "rec-1"
+        )
+
+        XCTAssertNotNil(evidenceID)
+        XCTAssertEqual(evidenceStore.evidence.first?.finalInsertedTranscript, "open CMUX")
+    }
+
+    @MainActor
     func testCoordinatorReturnsStableEvidenceIDForLaterEditCapture() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

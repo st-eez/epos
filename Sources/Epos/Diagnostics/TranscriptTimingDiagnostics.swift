@@ -1,13 +1,28 @@
 import Foundation
 
+enum TranscriptDiagnosticTextPolicy {
+    static let environmentKey = "EPOS_DIAGNOSTIC_TRANSCRIPT_TEXT"
+
+    static func load(
+        from environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment[environmentKey] == "1"
+    }
+}
+
 enum TranscriptTimingEventKind: String {
     case partial
     case final
 }
 
 struct TranscriptTimingDiagnostics {
+    private let includeTranscriptText: Bool
     private var startedAt: Date?
     private var sequence = 0
+
+    init(includeTranscriptText: Bool = TranscriptDiagnosticTextPolicy.load()) {
+        self.includeTranscriptText = includeTranscriptText
+    }
 
     mutating func start(now: Date = Date()) {
         startedAt = now
@@ -31,7 +46,7 @@ struct TranscriptTimingDiagnostics {
         let finalChars = Self.characterCount(finalText)
         let partialChars = Self.characterCount(partialText)
 
-        return [
+        var fields = [
             "transcript timing",
             "seq=\(sequence)",
             "kind=\(kind.rawValue)",
@@ -39,12 +54,17 @@ struct TranscriptTimingDiagnostics {
             "eventChars=\(Self.characterCount(eventText))",
             "finalChars=\(finalChars)",
             "partialChars=\(partialChars)",
-            "displayChars=\(finalChars + partialChars)",
-            "eventText=\(Self.quoted(eventText))",
-            "finalText=\(Self.quoted(finalText))",
-            "partialText=\(Self.quoted(partialText))",
-            "displayText=\(Self.quoted(finalText + partialText))"
-        ].joined(separator: " ")
+            "displayChars=\(finalChars + partialChars)"
+        ]
+        if includeTranscriptText {
+            fields.append(contentsOf: [
+                "eventText=\(Self.quoted(eventText))",
+                "finalText=\(Self.quoted(finalText))",
+                "partialText=\(Self.quoted(partialText))",
+                "displayText=\(Self.quoted(finalText + partialText))"
+            ])
+        }
+        return fields.joined(separator: " ")
     }
 
     private static func characterCount(_ text: String) -> Int {

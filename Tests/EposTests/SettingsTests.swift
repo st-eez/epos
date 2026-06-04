@@ -30,4 +30,14 @@ final class SettingsTests: XCTestCase {
 
         XCTAssertTrue(Settings.load(from: defaults).polishEnabled)
     }
+
+    func testCorrectionEvidenceDefaultsOnAndPersistsOff() {
+        XCTAssertTrue(Settings.load(from: defaults).saveCorrectionEvidence)
+
+        var settings = Settings.load(from: defaults)
+        settings.saveCorrectionEvidence = false
+        settings.save(to: defaults)
+
+        XCTAssertFalse(Settings.load(from: defaults).saveCorrectionEvidence)
+    }
 }

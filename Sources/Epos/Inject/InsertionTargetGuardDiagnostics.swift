@@ -93,10 +93,38 @@ extension InsertionTargetGuard {
         case .positionedValue(let onScreen, let context, let selectedRange):
             let caretMatches = context.caretMatches(expected: expected, selectedRange: selectedRange)
             let textMatches = onScreen == context.prefix + expected + context.suffix
+            let initialSelectionMatches = context.initialSelectionMatches(
+                value: onScreen,
+                selectedRange: selectedRange
+            )
             guard !expected.isEmpty else {
+                if (textMatches && caretMatches) || initialSelectionMatches {
+                    return evaluation(
+                        decision: .proceed,
+                        reason: initialSelectionMatches ? "initialSelectionMatch" : "positionedMatch",
+                        expected: expected,
+                        observedChars: onScreen.utf16.count,
+                        context: context,
+                        caretAvailable: selectedRange != nil,
+                        caretMatches: caretMatches || initialSelectionMatches,
+                        textMatches: textMatches
+                    )
+                }
+                if selectedRange != nil, !caretMatches {
+                    return evaluation(
+                        decision: .abort,
+                        reason: "caretMismatch",
+                        expected: expected,
+                        observedChars: onScreen.utf16.count,
+                        context: context,
+                        caretAvailable: true,
+                        caretMatches: false,
+                        textMatches: textMatches
+                    )
+                }
                 return evaluation(
-                    decision: .proceed,
-                    reason: "emptyExpected",
+                    decision: .stopAppendOnly,
+                    reason: "positionedTextMismatch",
                     expected: expected,
                     observedChars: onScreen.utf16.count,
                     context: context,

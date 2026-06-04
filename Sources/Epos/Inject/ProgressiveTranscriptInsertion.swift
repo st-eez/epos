@@ -25,6 +25,7 @@ public final class ProgressiveTranscriptInsertionSession {
     private var committedText = ""
     private var didFinish = false
     private var didCaptureBaseline = false
+    private var didReplaceInitialSelection = false
     /// Latched once the target diverges: backspacing is no longer safe because
     /// `committedText` no longer models the screen. We never resume deleting; we
     /// only append, so existing on-screen text can never be corrupted.
@@ -38,6 +39,8 @@ public final class ProgressiveTranscriptInsertionSession {
         self.insertionSession = insertionSession
         self.canonicalize = canonicalize
         self.target = target
+        target.captureBaseline()
+        didCaptureBaseline = true
     }
 
     /// Volatile partial: reconcile to the latest text immediately so the newest
@@ -82,6 +85,13 @@ public final class ProgressiveTranscriptInsertionSession {
         insertionSession.cancel()
     }
 
+    public func cancelAndRetractInsertedText() {
+        guard !didFinish else { return }
+        retractInsertedTextIfSafe()
+        didFinish = true
+        insertionSession.cancel()
+    }
+
     public func observedInsertedText() -> String? {
         guard didCaptureBaseline,
               !target.focusChangedSinceStart(),
@@ -102,6 +112,8 @@ public final class ProgressiveTranscriptInsertionSession {
         target.targetWindowTitle()
     }
 
+    public var insertedTranscript: String { committedText }
+
     /// Converge the inserted text to `newTarget` with a minimal edit: backspace
     /// the suffix that diverges from `newTarget`, then type the corrected
     /// remainder. Shared by partials and finals so the field always tracks the
@@ -110,10 +122,9 @@ public final class ProgressiveTranscriptInsertionSession {
     ///
     /// Guarded so the backspace half can never delete characters that aren't
     /// ours. The cheap focus-identity check runs every reconcile; the expensive
-    /// on-screen value read is gated to the pre-delete moment only — an append
-    /// (deleteCount == 0) lands at the caret and corrupts nothing, so it needs no
-    /// value read. Once focus moves we abort; once the value diverges we latch
-    /// into append-only and never delete again.
+    /// on-screen value read is paid before deletes and before pure appends in
+    /// text-exposing targets. Once focus moves we abort; once the value diverges
+    /// before a delete we latch into append-only and never delete again.
     /// The minimal backspace-from-caret edit converging `committed` onto `target`:
     /// delete everything past their longest common prefix, then type the rest.
     /// With a delete-backward-only backend this prefix edit is optimal — a leading
@@ -128,11 +139,6 @@ public final class ProgressiveTranscriptInsertionSession {
     private func reconcile(to newTarget: String, lossProofAppend: Bool = false) -> Bool {
         guard newTarget != committedText else { return false }
 
-        if !didCaptureBaseline {
-            target.captureBaseline()
-            didCaptureBaseline = true
-        }
-
         // Cheap, every reconcile: if focus left the home field, no insertion can
         // land safely. Stop the whole session without backspacing — cleanup
         // backspacing would itself delete the wrong characters.
@@ -145,20 +151,14 @@ public final class ProgressiveTranscriptInsertionSession {
 
         var (deleteCount, insertion) = Self.minimalEdit(from: committedText, to: newTarget)
 
-        // A delete is the only operation that can corrupt existing text, so it is
-        // the only one that pays for the expensive value read (unless we've
-        // already latched append-only). The read maps an empty/failed result to
-        // `.emptyExposed` (this field has shown text before → divergence) or
-        // `.notRead` (an AX-opaque app such as cmux → uninformative, keep
-        // self-correcting). Only divergence forces append-only.
+        // A delete is the operation that can corrupt existing text, so it always
+        // pays for the expensive value read (unless we've already latched
+        // append-only). The read maps an empty/failed result to `.emptyExposed`
+        // (this field has shown text before → divergence) or `.notRead` (an
+        // AX-opaque app such as cmux → uninformative, keep self-correcting).
+        // Divergence before a delete forces append-only.
         if deleteCount > 0, !appendOnly {
-            let context = target.baselineInsertionContext()
-            let observation = InsertionTargetObservation.read(
-                target.observedValue(),
-                exposesText: target.exposesTextValue(),
-                context: context,
-                selectedRange: context == nil ? nil : target.observedSelectedRange()
-            )
+            let observation = targetObservation()
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
             switch evaluation.decision {
             case .abort:
@@ -170,6 +170,32 @@ public final class ProgressiveTranscriptInsertionSession {
                 log.info("insertion guard decision \(evaluation.logFields) action=appendOnly")
             case .proceed:
                 break
+            }
+        }
+
+        // A pure append cannot delete user content, but it can still type into the
+        // wrong field after a same-app focus move. Text-exposing targets are
+        // checked before appending; AX-opaque targets stay on the cheap pid guard
+        // because their value reads are uninformative.
+        if deleteCount == 0,
+           !appendOnly,
+           !insertion.isEmpty,
+            target.exposesTextValue() {
+            let observation = targetObservation()
+            let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
+            switch evaluation.decision {
+            case .proceed:
+                break
+            case .stopAppendOnly where !committedText.isEmpty && evaluation.caretMatches == true:
+                appendOnly = true
+                log.info("insertion guard decision \(evaluation.logFields) action=appendOnly")
+            case .stopAppendOnly, .abort:
+                log.info("insertion guard decision \(evaluation.logFields) action=abortAppend")
+                cancel()
+                return false
+            }
+            if committedText.isEmpty, evaluation.reason == "initialSelectionMatch" {
+                didReplaceInitialSelection = true
             }
         }
 
@@ -214,6 +240,46 @@ public final class ProgressiveTranscriptInsertionSession {
         committedText = appendOnly ? committedText + insertion : newTarget
         log.info("progressive reconcile deletedChars=\(deleteCount) insertedChars=\(insertion.utf16.count) totalChars=\(committedText.utf16.count) appendOnly=\(self.appendOnly)")
         return applied
+    }
+
+    private func retractInsertedTextIfSafe() {
+        guard !committedText.isEmpty, !appendOnly else { return }
+        guard !didReplaceInitialSelection else {
+            log.info("progressive retract skipped: initial selection replacement cannot be restored")
+            return
+        }
+        if target.focusChangedSinceStart() {
+            let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: .focusChanged)
+            log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
+            return
+        }
+
+        let observation = targetObservation()
+        guard case .positionedValue = observation else {
+            let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
+            log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
+            return
+        }
+
+        let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
+        guard evaluation.decision == .proceed else {
+            log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
+            return
+        }
+
+        insertionSession.deleteBackward(count: committedText.count)
+        log.info("progressive retract deletedChars=\(committedText.count)")
+        committedText = ""
+    }
+
+    private func targetObservation() -> InsertionTargetObservation {
+        let context = target.baselineInsertionContext()
+        return InsertionTargetObservation.read(
+            target.observedValue(),
+            exposesText: target.exposesTextValue(),
+            context: context,
+            selectedRange: context == nil ? nil : target.observedSelectedRange()
+        )
     }
 
     private static func lossProofAppendTail(from committed: String, to target: String) -> String {

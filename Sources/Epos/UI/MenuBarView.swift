@@ -6,6 +6,7 @@ public struct MenuBarView: View {
     @State private var permissions: PermissionsSnapshot?
     @State private var launchAtLogin = false
     @State private var saveAudioSamples = false
+    @State private var saveCorrectionEvidence = true
     @State private var polishEnabled = false
 
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
@@ -39,6 +40,7 @@ public struct MenuBarView: View {
             permissions = coordinator.snapshotPermissions()
             launchAtLogin = coordinator.launchAtLogin
             saveAudioSamples = coordinator.saveAudioSamples
+            saveCorrectionEvidence = coordinator.saveCorrectionEvidence
             polishEnabled = coordinator.polishEnabled
         }
     }
@@ -103,6 +105,18 @@ public struct MenuBarView: View {
                     .frame(width: 42, height: 22)
                     .onChange(of: saveAudioSamples) { _, newValue in
                         coordinator.setSaveAudioSamples(newValue)
+                    }
+            }
+            Divider().overlay(.white.opacity(0.08))
+            metaRow("Learn corrections") {
+                Toggle("", isOn: $saveCorrectionEvidence)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(teal)
+                    .scaleEffect(0.74)
+                    .frame(width: 42, height: 22)
+                    .onChange(of: saveCorrectionEvidence) { _, newValue in
+                        coordinator.setSaveCorrectionEvidence(newValue)
                     }
             }
             Divider().overlay(.white.opacity(0.08))

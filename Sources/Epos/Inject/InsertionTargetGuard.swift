@@ -47,6 +47,20 @@ public struct InsertionTargetContext: Equatable {
         return selectedRange == InsertionTargetTextRange(location: expectedCaret, length: 0)
     }
 
+    func initialSelectionMatches(value: String, selectedRange: InsertionTargetTextRange?) -> Bool {
+        guard let selectedRange,
+              selectedRange.length > 0,
+              value.hasPrefix(prefix),
+              value.hasSuffix(suffix),
+              value.utf16.count >= prefix.utf16.count + suffix.utf16.count else {
+            return false
+        }
+        return selectedRange == InsertionTargetTextRange(
+            location: prefix.utf16.count,
+            length: value.utf16.count - prefix.utf16.count - suffix.utf16.count
+        )
+    }
+
     func insertedText(in value: String) -> String? {
         guard value.hasPrefix(prefix),
               value.hasSuffix(suffix),
@@ -98,11 +112,11 @@ extension InsertionTargetObservation {
         context: InsertionTargetContext? = nil,
         selectedRange: InsertionTargetTextRange? = nil
     ) -> InsertionTargetObservation {
-        if let value, !value.isEmpty {
-            if let context {
+        if let value {
+            if let context, !value.isEmpty || context != InsertionTargetContext(prefix: "", suffix: "") {
                 return .positionedValue(value, context: context, selectedRange: selectedRange)
             }
-            return .value(value)
+            if !value.isEmpty { return .value(value) }
         }
         return exposesText ? .emptyExposed : .notRead
     }
@@ -179,6 +193,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     /// different app changes this; an element-handle churn within the same app (a
     /// Chromium/Electron terminal like cmux rebuilds its AX node between keystrokes) does
     /// not — so the focus guard compares this, not the element's identity.
+    private var homeElement: AXUIElement?
     private var homePid: pid_t?
     private var homeApplicationBundleIdentifier: String?
     private var homeWindowTitle: String?
@@ -210,6 +225,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             log.info("insertion guard: no focused element at session start; focus guard inactive")
             return
         }
+        homeElement = baseline
         homePid = pid(of: baseline)
         if let homePid {
             homeApplicationBundleIdentifier = NSRunningApplication(
@@ -234,22 +250,27 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             log.info("insertion guard: focused element unreadable mid-session; treating as focus change")
             return true
         }
-        // Compare by owning process, not element identity. A Chromium/Electron terminal
+        // Compare by owning process first, not element identity. A Chromium/Electron terminal
         // such as cmux hands back a fresh AXUIElement for the same field between
         // keystrokes, so `CFEqual` on the element reported a change and aborted
         // mid-dictation even though focus never left the app. The pid is stable across
         // that churn and still changes when focus moves to another app — the case the
-        // guard actually protects against. A move to another window/field of the SAME app
-        // is NOT caught here (we can't tell it apart from cmux's churn without the
-        // element-identity check that broke cmux). Instead `observedValue` reads the live
-        // focused element, so the new field's content won't end with our committed text →
-        // the value guard latches append-only. That tail may then append into the other
-        // field, but it can never delete content that isn't ours — the existing
-        // append-only contract, which we accept here rather than risk a false abort.
+        // guard protects in every app. For text-exposing native controls, also compare
+        // element identity so same-app field moves are caught before even the first
+        // append; AX-opaque controls still skip the identity check because their element
+        // churn is what broke cmux.
         guard let currentPid = pid(of: current) else { return true }
-        guard currentPid != homePid else { return false }
-        log.info("insertion guard: focus left the app mid-session (pid \(homePid) -> \(currentPid))")
-        return true
+        guard currentPid == homePid else {
+            log.info("insertion guard: focus left the app mid-session (pid \(homePid) -> \(currentPid))")
+            return true
+        }
+        if homeElementAdvertisesValue,
+           let homeElement,
+           !CFEqual(current, homeElement) {
+            log.info("insertion guard: focused text element changed within app pid \(homePid)")
+            return true
+        }
+        return false
     }
 
     public func observedValue() -> String? {

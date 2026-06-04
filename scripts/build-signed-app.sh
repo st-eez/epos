@@ -19,15 +19,23 @@ discover_development_teams() {
   for cert in "$tmpdir"/cert-*.pem; do
     [[ -e "$cert" ]] || continue
     subject="$(openssl x509 -in "$cert" -noout -subject 2>/dev/null || true)"
-    team="$(sed -n 's/.*OU=\([^,]*\).*/\1/p' <<<"$subject" | head -n 1)"
+    team="$(sed -n 's/.*OU[[:space:]]*=[[:space:]]*\([^,\/]*\).*/\1/p' <<<"$subject" | head -n 1)"
     [[ -n "$team" ]] && printf '%s\n' "$team"
   done | sort -u
+}
+
+load_discovered_teams() {
+  discovered_teams=()
+  local team
+  while IFS= read -r team; do
+    discovered_teams+=("$team")
+  done < <(discover_development_teams)
 }
 
 code_sign_identity="${CODE_SIGN_IDENTITY:-Apple Development}"
 
 if [[ -z "${DEVELOPMENT_TEAM:-}" ]]; then
-  mapfile -t discovered_teams < <(discover_development_teams)
+  load_discovered_teams
   if [[ "${#discovered_teams[@]}" -eq 1 ]]; then
     DEVELOPMENT_TEAM="${discovered_teams[0]}"
     export DEVELOPMENT_TEAM
@@ -49,7 +57,7 @@ MSG
     exit 64
   fi
 else
-  mapfile -t discovered_teams < <(discover_development_teams)
+  load_discovered_teams
   if [[ "${#discovered_teams[@]}" -gt 0 ]]; then
     team_matches=false
     for team in "${discovered_teams[@]}"; do

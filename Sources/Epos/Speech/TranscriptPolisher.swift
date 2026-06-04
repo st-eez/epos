@@ -100,7 +100,15 @@ public struct PolishGuardRejection: Sendable, Equatable {
     public let diff: String
 
     public var logDescription: String {
-        "reason=\(reason.rawValue) candidateChars=\(candidateCharacterCount) candidateText=\(String(reflecting: candidateText)) \(diff)"
+        logDescription(includeTranscriptText: true)
+    }
+
+    public func logDescription(includeTranscriptText: Bool) -> String {
+        var fields = "reason=\(reason.rawValue) candidateChars=\(candidateCharacterCount)"
+        if includeTranscriptText {
+            fields += " candidateText=\(String(reflecting: candidateText))"
+        }
+        return "\(fields) \(diff)"
     }
 }
 

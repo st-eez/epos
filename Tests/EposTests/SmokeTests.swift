@@ -26,9 +26,10 @@ final class SmokeTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        Settings(saveAudioSamples: true).save(to: defaults)
+        Settings(saveAudioSamples: true, saveCorrectionEvidence: false).save(to: defaults)
 
         XCTAssertTrue(Settings.load(from: defaults).saveAudioSamples)
+        XCTAssertFalse(Settings.load(from: defaults).saveCorrectionEvidence)
     }
 
     func testCanonicalizerFixesSeededDeveloperTerms() {
@@ -708,7 +709,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(contents.contains("\tinfo\ttest\trecordingID=rec-test hello"))
     }
 
-    func testTranscriptTimingDiagnosticsLogTranscriptText() {
+    func testTranscriptTimingDiagnosticsRedactsTranscriptTextByDefault() {
         var diagnostics = TranscriptTimingDiagnostics()
         diagnostics.start(now: Date(timeIntervalSince1970: 100))
 
@@ -728,6 +729,25 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(message.contains("finalChars=7"))
         XCTAssertTrue(message.contains("partialChars=25"))
         XCTAssertTrue(message.contains("displayChars=32"))
+        XCTAssertFalse(message.contains("private dictated phrase"))
+        XCTAssertFalse(message.contains("eventText="))
+        XCTAssertFalse(message.contains("finalText="))
+        XCTAssertFalse(message.contains("partialText="))
+        XCTAssertFalse(message.contains("displayText="))
+    }
+
+    func testTranscriptTimingDiagnosticsCanOptIntoTranscriptText() {
+        var diagnostics = TranscriptTimingDiagnostics(includeTranscriptText: true)
+        diagnostics.start(now: Date(timeIntervalSince1970: 100))
+
+        let message = diagnostics.eventMessage(
+            kind: .partial,
+            eventText: "private dictated phrase\nnext\tline",
+            finalText: "private",
+            partialText: "dictated phrase\nnext\tline",
+            now: Date(timeIntervalSince1970: 101.234)
+        )
+
         XCTAssertTrue(message.contains(#"eventText="private dictated phrase\nnext\tline""#))
         XCTAssertTrue(message.contains(#"finalText="private""#))
         XCTAssertTrue(message.contains(#"partialText="dictated phrase\nnext\tline""#))
@@ -735,7 +755,7 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
-    func testCoordinatorTranscriptTimingLogIncludesRawTranscriptText() throws {
+    func testCoordinatorTranscriptTimingLogRedactsRawTranscriptTextByDefault() throws {
         let directory = try makeTemporaryDirectory()
         let sink = DiagnosticLogSink(
             configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
@@ -760,18 +780,17 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(files.count, 1)
         let contents = try String(contentsOf: files[0], encoding: .utf8)
         XCTAssertTrue(contents.contains("\tinfo\tcoordinator\ttranscript timing seq=1 kind=partial"))
-        XCTAssertTrue(contents.contains(#"eventText="raw partial\nnext\tline""#))
-        XCTAssertTrue(contents.contains(#"partialText="raw partial\nnext\tline""#))
-        XCTAssertTrue(contents.contains(#"displayText="raw partial\nnext\tline""#))
         XCTAssertTrue(contents.contains("\tinfo\tcoordinator\ttranscript timing seq=2 kind=final"))
-        XCTAssertTrue(contents.contains(#"eventText="raw final""#))
-        XCTAssertTrue(contents.contains(#"finalText="raw final""#))
-        XCTAssertTrue(contents.contains(#"partialText="""#))
-        XCTAssertTrue(contents.contains(#"displayText="raw final""#))
+        XCTAssertFalse(contents.contains("raw partial"))
+        XCTAssertFalse(contents.contains("raw final"))
+        XCTAssertFalse(contents.contains("eventText="))
+        XCTAssertFalse(contents.contains("finalText="))
+        XCTAssertFalse(contents.contains("partialText="))
+        XCTAssertFalse(contents.contains("displayText="))
     }
 
     @MainActor
-    func testCoordinatorPolishRejectionLogIncludesRawAndCandidateText() throws {
+    func testCoordinatorPolishRejectionLogRedactsRawAndCandidateTextByDefault() throws {
         let directory = try makeTemporaryDirectory()
         let sink = DiagnosticLogSink(
             configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
@@ -806,10 +825,53 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(files.count, 1)
         let contents = try String(contentsOf: files[0], encoding: .utf8)
         XCTAssertTrue(contents.contains("polish rejected: retention guard"))
+        XCTAssertTrue(contents.contains("rawText=<redacted>"))
+        XCTAssertFalse(contents.contains("test 1st thing"))
+        XCTAssertFalse(contents.contains("Test first thing"))
+        XCTAssertFalse(contents.contains("candidateText="))
+        XCTAssertTrue(contents.contains("reason=content-tokens-changed"))
+        XCTAssertTrue(contents.contains("candidateChars=27"))
+        XCTAssertTrue(contents.contains("hint=ordinal-normalization"))
+    }
+
+    @MainActor
+    func testCoordinatorPolishRejectionLogCanOptIntoRawAndCandidateText() throws {
+        let directory = try makeTemporaryDirectory()
+        let sink = DiagnosticLogSink(
+            configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
+            directory: directory
+        )
+        let coordinator = AppCoordinator(
+            textInsertion: RecordingTextInsertionBackend(),
+            diagnostics: sink,
+            includeTranscriptTextInDiagnostics: true,
+            autoStart: false
+        )
+        let rejection = PolishGuardRejection(
+            reason: .contentTokensChanged,
+            candidateText: "Test first thing.\nNext line",
+            candidateCharacterCount: 27,
+            diff: "kind=raw-token-changed hint=ordinal-normalization"
+        )
+
+        coordinator.logPolishOutcome(
+            outcome: .guardRejected,
+            rawText: "test 1st thing\nnext line",
+            polishedCount: 0,
+            rawCount: 24,
+            guardRejection: rejection,
+            elapsedMs: 12
+        )
+        sink.flush()
+
+        let files = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil
+        )
+        XCTAssertEqual(files.count, 1)
+        let contents = try String(contentsOf: files[0], encoding: .utf8)
         XCTAssertTrue(contents.contains(#"rawText="test 1st thing\nnext line""#))
         XCTAssertTrue(contents.contains(#"candidateText="Test first thing.\nNext line""#))
-        XCTAssertTrue(contents.contains("reason=content-tokens-changed"))
-        XCTAssertTrue(contents.contains("hint=ordinal-normalization"))
     }
 
     func testDogfoodTapDiscardsRecordingWhenTranscriptIsEmpty() throws {

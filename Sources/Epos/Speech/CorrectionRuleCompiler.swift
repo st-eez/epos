@@ -1,3 +1,5 @@
+import Foundation
+
 public enum CorrectionRuleCompiler {
     public static func compile(records: [CorrectionRecord]) -> [TranscriptCanonicalizer.Rule] {
         records.compactMap { record in

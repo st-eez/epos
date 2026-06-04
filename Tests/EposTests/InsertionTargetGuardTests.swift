@@ -82,6 +82,24 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
+    func testPositionedValueAllowsInitialReplacementSelection() {
+        let context = InsertionTargetContext(prefix: "replace ", suffix: " please")
+        XCTAssertEqual(
+            InsertionTargetGuard.decide(
+                expected: "",
+                observed: .positionedValue(
+                    "replace old please",
+                    context: context,
+                    selectedRange: InsertionTargetTextRange(
+                        location: "replace ".utf16.count,
+                        length: "old".utf16.count
+                    )
+                )
+            ),
+            .proceed
+        )
+    }
+
     func testPositionedValueRejectsWhenCaretMovedAwayFromInsertion() {
         let context = InsertionTargetContext(prefix: "hello ", suffix: " world")
         XCTAssertEqual(
@@ -241,6 +259,251 @@ final class InsertionTargetGuardTests: XCTestCase {
         session.acceptFinalTranscript("hello world again")
 
         XCTAssertEqual(backend.operations, [.insert("hello"), .insert(" world")])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testSessionCapturesBaselineBeforeFirstTranscriptArrives() {
+        let backend = GuardRecordingBackend()
+        let observer = MovingTargetObserver()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        observer.currentTargetID = "field-b"
+        session.acceptPartialTranscript("hello")
+
+        XCTAssertEqual(backend.operations, [])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testSessionAbortsPureAppendWhenTextExposingTargetDiverges() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.value = ""
+        session.acceptPartialTranscript("hello world")
+        session.acceptFinalTranscript("hello world")
+
+        XCTAssertEqual(backend.operations, [.insert("hello")])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testSessionKeepsPureAppendingWhenSameTargetMutatesCommittedTextAtCaret() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "", suffix: "")
+        observer.value = ""
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.value = "Hello"
+        observer.selectedRange = InsertionTargetTextRange(location: "Hello".utf16.count, length: 0)
+        session.acceptPartialTranscript("hello world")
+        session.finish()
+
+        XCTAssertEqual(backend.operations, [.insert("hello"), .insert(" world")])
+        XCTAssertEqual(backend.cancelCount, 0)
+        XCTAssertEqual(backend.finishCount, 1)
+    }
+
+    func testFirstInsertAbortsWhenTextExposingTargetNoLongerMatchesBaselineContext() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "before ", suffix: " after")
+        observer.value = "different field"
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+
+        XCTAssertEqual(backend.operations, [])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testFirstInsertProceedsWhenTextExposingTargetStillMatchesBaselineContext() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "before ", suffix: " after")
+        observer.value = "before  after"
+        observer.selectedRange = InsertionTargetTextRange(location: "before ".utf16.count, length: 0)
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+
+        XCTAssertEqual(backend.operations, [.insert("hello")])
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testFirstInsertProceedsWhenReplacingOriginalSelection() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "replace ", suffix: " please")
+        observer.value = "replace old please"
+        observer.selectedRange = InsertionTargetTextRange(
+            location: "replace ".utf16.count,
+            length: "old".utf16.count
+        )
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("new")
+
+        XCTAssertEqual(backend.operations, [.insert("new")])
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextDeletesOnlyWhenTargetStillMatches() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "", suffix: "")
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.value = "hello"
+        observer.selectedRange = InsertionTargetTextRange(location: "hello".utf16.count, length: 0)
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("hello"), .delete(5)])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextDeletesCaretInsertionInExistingText() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "before ", suffix: " after")
+        observer.value = "before  after"
+        observer.selectedRange = InsertionTargetTextRange(location: "before ".utf16.count, length: 0)
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.value = "before hello after"
+        observer.selectedRange = InsertionTargetTextRange(location: "before hello".utf16.count, length: 0)
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("hello"), .delete(5)])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextSkipsDeleteAfterFocusChange() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.focusChanged = true
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("hello")])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextSkipsDeleteWithoutBaselineContext() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.value = "hello"
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("hello")])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextSkipsDeleteWhenTargetReadIsUninformative() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = false
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("hello")])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextSkipsDeleteAfterReplacingInitialSelection() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "replace ", suffix: " please")
+        observer.value = "replace old please"
+        observer.selectedRange = InsertionTargetTextRange(
+            location: "replace ".utf16.count,
+            length: "old".utf16.count
+        )
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("new")
+        observer.value = "replace new please"
+        observer.selectedRange = InsertionTargetTextRange(location: "replace new".utf16.count, length: 0)
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("new")])
         XCTAssertEqual(backend.cancelCount, 1)
         XCTAssertEqual(backend.finishCount, 0)
     }
@@ -709,6 +972,20 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
     func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }
     func targetWindowTitle() -> String? { windowTitle }
+}
+
+private final class MovingTargetObserver: InsertionTargetObserver {
+    var currentTargetID = "field-a"
+    private var baselineTargetID: String?
+
+    func captureBaseline() { baselineTargetID = currentTargetID }
+    func focusChangedSinceStart() -> Bool { baselineTargetID != currentTargetID }
+    func observedValue() -> String? { nil }
+    func observedSelectedRange() -> InsertionTargetTextRange? { nil }
+    func exposesTextValue() -> Bool { false }
+    func baselineInsertionContext() -> InsertionTargetContext? { nil }
+    func targetApplicationBundleIdentifier() -> String? { nil }
+    func targetWindowTitle() -> String? { nil }
 }
 
 private final class GuardRecordingBackend: TextInsertionBackend {

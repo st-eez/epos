@@ -5,17 +5,20 @@ public struct Settings: Equatable, Sendable {
     public var launchAtLogin: Bool
     public var localeIdentifier: String
     public var saveAudioSamples: Bool
+    public var saveCorrectionEvidence: Bool
     public var polishEnabled: Bool
 
     public init(
         launchAtLogin: Bool = false,
         localeIdentifier: String = "en-US",
         saveAudioSamples: Bool = false,
+        saveCorrectionEvidence: Bool = true,
         polishEnabled: Bool = false
     ) {
         self.launchAtLogin = launchAtLogin
         self.localeIdentifier = localeIdentifier
         self.saveAudioSamples = saveAudioSamples
+        self.saveCorrectionEvidence = saveCorrectionEvidence
         self.polishEnabled = polishEnabled
     }
 
@@ -23,6 +26,7 @@ public struct Settings: Equatable, Sendable {
         static let launchAtLogin = "settings.launchAtLogin"
         static let localeIdentifier = "settings.localeIdentifier"
         static let saveAudioSamples = "settings.saveAudioSamples"
+        static let saveCorrectionEvidence = "settings.saveCorrectionEvidence"
         static let polishEnabled = "settings.polishEnabled"
     }
 
@@ -31,6 +35,7 @@ public struct Settings: Equatable, Sendable {
             launchAtLogin: defaults.bool(forKey: Key.launchAtLogin),
             localeIdentifier: defaults.string(forKey: Key.localeIdentifier) ?? "en-US",
             saveAudioSamples: defaults.bool(forKey: Key.saveAudioSamples),
+            saveCorrectionEvidence: defaults.object(forKey: Key.saveCorrectionEvidence) as? Bool ?? true,
             polishEnabled: defaults.bool(forKey: Key.polishEnabled)
         )
     }
@@ -39,6 +44,7 @@ public struct Settings: Equatable, Sendable {
         defaults.set(launchAtLogin, forKey: Key.launchAtLogin)
         defaults.set(localeIdentifier, forKey: Key.localeIdentifier)
         defaults.set(saveAudioSamples, forKey: Key.saveAudioSamples)
+        defaults.set(saveCorrectionEvidence, forKey: Key.saveCorrectionEvidence)
         defaults.set(polishEnabled, forKey: Key.polishEnabled)
     }
 

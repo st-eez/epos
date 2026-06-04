@@ -4,6 +4,14 @@ set -euo pipefail
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install_app_path="${INSTALL_APP_PATH:-/Applications/Epos.app}"
 
+if [[ "$install_app_path" != /* || "$(basename "$install_app_path")" != "Epos.app" ]]; then
+  cat >&2 <<MSG
+error: INSTALL_APP_PATH must be an absolute path ending in Epos.app.
+refusing to remove/install at: $install_app_path
+MSG
+  exit 64
+fi
+
 if pgrep -f "$install_app_path/Contents/MacOS/Epos" >/dev/null 2>&1; then
   cat >&2 <<MSG
 error: $install_app_path is running.
