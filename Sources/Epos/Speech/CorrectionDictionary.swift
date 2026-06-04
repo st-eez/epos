@@ -302,6 +302,7 @@ public struct CorrectionDictionary: Equatable, Sendable {
         let suffix = slug.isEmpty ? "replacement" : slug
         return "manual.\(index).\(suffix)"
     }
+
 }
 
 private extension CorrectionDictionary {

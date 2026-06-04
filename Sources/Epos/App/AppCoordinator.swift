@@ -43,6 +43,7 @@ public final class AppCoordinator: ObservableObject {
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
     /// editor mutates the same instance (the app hands the editor `coordinator.corrections`).
     public let corrections = CorrectionStore()
+    public let correctionEvidence: CorrectionEvidenceStore
     // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
     private let log: EposLogger
@@ -76,6 +77,7 @@ public final class AppCoordinator: ObservableObject {
         settings: Settings = Settings.load(),
         polishEngine: (any PolishEngine)? = nil,
         diagnostics: DiagnosticLogSink = .shared,
+        correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
         autoStart: Bool = true
     ) {
@@ -84,6 +86,7 @@ public final class AppCoordinator: ObservableObject {
         self.textInsertion = textInsertion
         self.polishEngine = polishEngine ?? PolishEngineFactory.makeDefault()
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
+        self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
         self.settings = settings
         self.permissions = PermissionsGate()
@@ -323,6 +326,12 @@ public final class AppCoordinator: ObservableObject {
             // can't claim a polish the user never received.
             let applied = insertFinalTranscript(result.text)
             let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
+            recordCorrectionEvidence(
+                rawTranscript: finalText,
+                polishResult: result,
+                effectiveOutcome: effectiveOutcome,
+                applied: applied
+            )
             // Count raw and polished on the SAME normalization: both come from the
             // polisher's own canonicalizer — `result.text` for `.applied` is
             // canonicalize(polished), and `result.rawCharacterCount` is the matching
@@ -377,6 +386,29 @@ public final class AppCoordinator: ObservableObject {
         let applied = oneShotSession.acceptFinalPolishedTranscript(text)
         oneShotSession.finish()
         return applied
+    }
+
+    func recordCorrectionEvidence(
+        rawTranscript: String,
+        polishResult: PolishResult,
+        effectiveOutcome: PolishOutcome,
+        applied: Bool,
+        recordingID: String? = nil
+    ) {
+        let canonicalizedRaw = corrections.canonicalize(rawTranscript)
+        correctionEvidence.record(CorrectionEvidence(
+            id: UUID().uuidString,
+            observedAt: Date(),
+            recordingID: recordingID ?? currentRecordingID,
+            rawTranscript: rawTranscript,
+            canonicalizedTranscript: canonicalizedRaw,
+            finalInsertedTranscript: applied ? polishResult.text : canonicalizedRaw,
+            userEditedTranscript: nil,
+            appliedRuleIDs: corrections.dictionary.appliedRecordIDs(in: rawTranscript),
+            polishOutcome: effectiveOutcome.evidenceName,
+            engineOutcome: polishResult.engineOutcome?.rawValue,
+            guardRejectionReason: polishResult.guardRejection?.reason.rawValue
+        ))
     }
 
     func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {

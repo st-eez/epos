@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: CD-3 implemented; CD-4 pending
+Status: CD-4 implemented; CD-5 pending
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -32,6 +32,8 @@ Keep `TranscriptCanonicalizer` as the runtime execution engine, with
 User-saved rules now persist as dictionary records while the existing flat
 canonicalizer rule API remains a compatibility surface for the editor and
 legacy payload migration.
+Finalization evidence is captured into a bounded local store and edited-miss
+evidence can produce suggested inactive records.
 
 Do not replace Apple `SpeechTranscriber`.
 Do not loosen the LLM polish guard as part of this work.
@@ -355,9 +357,11 @@ Do not choose SQLite here by default. Start with the smallest durable format
 that preserves current behavior and can migrate the existing `UserDefaults`
 payload safely.
 
-## Future Slices
+## Slice 4
 
-### CD-4: Correction Evidence Capture / Candidate Suggestions
+Slice ID: `CD-4`
+
+Title: Correction evidence capture / candidate suggestions
 
 Add a local evidence path for future rule suggestions:
 
@@ -372,17 +376,73 @@ Add a local evidence path for future rule suggestions:
 This is where the Flow-like history substrate starts to matter. It is not CD-2
 or CD-3.
 
+Behavior under test: each finalized transcript can record raw ASR text,
+canonicalized output, final inserted output, applied rule IDs, and polish/guard
+outcome into a bounded local store. When edited-miss evidence includes a
+user-edited transcript, the deterministic suggester can create inactive
+`CorrectionRecord` suggestions.
+
+Seam under test:
+
+```
+CorrectionEvidenceStore.record(_:)
+CorrectionCandidateSuggester.suggestedRecords(from:)
+CorrectionDictionary.appliedRecordIDs(in:)
+AppCoordinator.recordCorrectionEvidence(...)
+```
+
+Boundary:
+
+- Capture finalization evidence after polish/insertion decision.
+- Persist a bounded local evidence list.
+- Add a deterministic phrase-diff suggester for edited miss evidence.
+- Suggested records use `source: .suggested` and `status: .suggested`.
+- Suggested records do not compile into runtime canonicalizer rules.
+- No UI changes.
+- No ASR, polish-policy, persistence-migration, scoring, or promotion-gate
+  changes.
+
+Red tests:
+
+- `CorrectionEvidenceTests.testEvidenceStorePersistsRecentFinalizationEvidence`
+- `CorrectionEvidenceTests.testEditedMissEvidenceCreatesSuggestedRecordThatDoesNotCompile`
+- `CorrectionEvidenceTests.testCoordinatorCapturesCorrectionEvidenceAtFinalization`
+
+Verification command:
+
+```
+swift test --filter CorrectionEvidenceTests
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter CorrectionDictionaryCompilerTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
+Implementation notes:
+
+- `CorrectionEvidenceStore.evidenceDefaultsKey` stores recent local evidence in
+  `UserDefaults` with a bounded count.
+- Runtime capture currently observes finalization data; user edit deltas are a
+  model/API field for future observable edit hooks.
+- `CorrectionCandidateSuggester` creates deterministic one-span phrase
+  replacement suggestions from evidence that already contains a user-edited
+  transcript.
+
+## Future Slices
+
+### CD-5: Risk Scoring And Promotion Gate
+
 Mine repeated safe misses into suggested records. Suggested records do not
 compile into runtime rules until accepted.
 
 Success requires:
 
-- recurrence evidence
+- recurrence evidence using CD-4 observations
 - negative examples
 - app/context scope when needed
 - zero-regression eval against locked baseline rows
-
-### CD-5: Risk Scoring And Promotion Gate
 
 Score suggested records for recurrence, scope risk, phrase ambiguity, negative
 examples, and locked-eval regressions before allowing promotion to active
@@ -451,3 +511,24 @@ decision.
   `swift test --filter CorrectionDictionaryCompilerTests`,
   `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
   full `swift test`, and `swiftlint --quiet`.
+- Implemented CD-4 evidence capture and suggestions:
+  `CorrectionEvidenceStore` now persists bounded finalization evidence,
+  `AppCoordinator` records raw/canonicalized/inserted transcript evidence after
+  polish/insertion decisions, `CorrectionDictionary.appliedRecordIDs(in:)`
+  reports active correction records that match the raw transcript, and
+  `CorrectionCandidateSuggester` creates inactive suggested replacement records
+  from edited-miss evidence.
+- Verification for CD-4: red `CorrectionEvidenceTests`, then
+  `swift test --filter CorrectionEvidenceTests`,
+  `swift test --filter CorrectionDictionaryPersistenceTests`,
+  `swift test --filter CorrectionDictionaryCompilerTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test`, and `swiftlint --quiet`.
+- CD-4 verifier found that applied-rule evidence over-reported contextual rules.
+  Added `CorrectionEvidenceTests.testAppliedRuleIDsRespectContextualRules` and
+  made `CorrectionDictionary.appliedRecordIDs(in:)` preserve canonicalizer
+  context gating.
+- CD-4 verifier also found that applied-rule evidence under-reported cascaded
+  canonicalizer rules. Added
+  `CorrectionEvidenceTests.testAppliedRuleIDsIncludeCascadedRules` and made
+  applied-ID tracking simulate the canonicalizer's sequential replacements.
