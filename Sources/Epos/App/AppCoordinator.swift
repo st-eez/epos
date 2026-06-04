@@ -64,8 +64,8 @@ public final class AppCoordinator: ObservableObject {
     /// so a back-to-back utterance isn't lost to the polish-widened window.
     private var pendingStartWhileFinalizing = false
     /// The current recording's polisher, held so a re-press during finalize can abandon
-    /// its in-flight polish. Set at `startRecording`, cleared in `resetToIdle`. (Distinct
-    /// from threading it into `runSession`, which is what actually runs the polish.)
+    /// its in-flight polish. Set at `startRecording`, cleared before returning to idle.
+    /// (Distinct from threading it into `runSession`, which is what actually runs the polish.)
     private var activePolisher: TranscriptPolisher?
     private var didBootstrap = false
     private lazy var indicator: RecordingIndicatorController = {
@@ -281,15 +281,16 @@ public final class AppCoordinator: ObservableObject {
         let dogfood = self.dogfood
         let shouldSaveAudioSamples = settings.saveAudioSamples
         let shouldSaveCorrectionEvidence = settings.saveCorrectionEvidence
+        let sessionRecordingID = currentRecordingID
 
         let events: AsyncStream<TranscriptEvent>
         do {
             events = try await transcriber.start(contextualStrings: contextualStrings)
             guard state == .recording else {
                 cancelTextInsertionSession()
-                await resetToIdle()
+                await resetSessionStateBeforeIdle()
                 log.info("recording done (finalChars=0 cancelledBeforeAudioStart=true)")
-                completeRecordingLogScope()
+                returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
                 return
             }
             audio.onBuffer = { buffer in transcriber.accept(buffer) }
@@ -300,8 +301,7 @@ public final class AppCoordinator: ObservableObject {
                 }
             }
             if shouldSaveAudioSamples {
-                let recordingID = currentRecordingID
-                audio.onRawBuffer = { buffer in dogfood.write(buffer, recordingID: recordingID) }
+                audio.onRawBuffer = { buffer in dogfood.write(buffer, recordingID: sessionRecordingID) }
             } else {
                 audio.onRawBuffer = nil
             }
@@ -310,9 +310,9 @@ public final class AppCoordinator: ObservableObject {
             log.error("recording setup failed: \(String(describing: error))")
             dogfood.stop(keeping: false)
             cancelTextInsertionSession()
-            await resetToIdle()
+            await resetSessionStateBeforeIdle()
             log.info("recording done (finalChars=0 failed=true)")
-            completeRecordingLogScope()
+            returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
             return
         }
 
@@ -357,6 +357,7 @@ public final class AppCoordinator: ObservableObject {
                 effectiveOutcome: effectiveOutcome,
                 applied: applied,
                 finalInsertedTranscript: insertedTranscript == result.text ? insertedTranscript : nil,
+                recordingID: sessionRecordingID,
                 session: textInsertionSession
             ) {
                 if let finalInsertedTranscript = correctionEvidence.evidence.last(
@@ -389,9 +390,9 @@ public final class AppCoordinator: ObservableObject {
         }
 
         let finalChars = finalText.count
-        await resetToIdle()
+        await resetSessionStateBeforeIdle()
         log.info("recording done (finalChars=\(finalChars))")
-        completeRecordingLogScope()
+        returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
     }
 
     func handlePartialTranscript(_ text: String) {
@@ -636,7 +637,11 @@ public final class AppCoordinator: ObservableObject {
     /// (callbacks set to nil, `finish()` is idempotent). Path-specific work — `audio.stop()`,
     /// `dogfood.stop(keeping:)`, insertion session closeout — stays at the call sites; only
     /// what every path does identically lives here, so the three exits can't drift apart again.
-    private func resetToIdle() async {
+    ///
+    /// This deliberately does not set `state = .idle`. The caller logs completion and
+    /// clears the finished recording scope first, so a queued fn press cannot start the
+    /// next recording in the middle of old-session cleanup.
+    private func resetSessionStateBeforeIdle() async {
         audio.onBuffer = nil
         audio.onAmplitude = nil
         audio.onRawBuffer = nil
@@ -648,14 +653,19 @@ public final class AppCoordinator: ObservableObject {
         activePolisher = nil
         transcriptTiming.finish()
         finalizationPhase = .finalizingSpeech
-        state = .idle
     }
 
-    private func completeRecordingLogScope() {
-        let finishedRecordingID = currentRecordingID
-        currentRecordingID = nil
+    private func returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: String?) {
+        if currentRecordingID == finishedRecordingID {
+            currentRecordingID = nil
+        }
+        if let finishedRecordingID {
+            RecordingLogContext.clear(finishedRecordingID)
+        } else if currentRecordingID == nil {
+            RecordingLogContext.clear()
+        }
+        state = .idle
         replayPendingStartIfNeeded()
-        RecordingLogContext.clear(finishedRecordingID)
     }
 
     /// Retry, at the `.finalizing → .idle` transition, a start that arrived during the

@@ -445,7 +445,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.finishCount, 0)
     }
 
-    func testCancelAndRetractInsertedTextSkipsDeleteWithoutBaselineContext() {
+    func testCancelAndRetractInsertedTextDeletesWhenValueMatchesWithoutBaselineContext() {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
@@ -457,6 +457,27 @@ final class InsertionTargetGuardTests: XCTestCase {
 
         session.acceptPartialTranscript("hello")
         observer.value = "hello"
+        observer.selectedRange = InsertionTargetTextRange(location: "hello".utf16.count, length: 0)
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("hello"), .delete(5)])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextSkipsDeleteWhenValueMatchesButCaretIsUnverified() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.value = "hello"
+        observer.selectedRange = nil
         session.cancelAndRetractInsertedText()
 
         XCTAssertEqual(backend.operations, [.insert("hello")])
@@ -475,6 +496,25 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
 
         session.acceptPartialTranscript("hello")
+        session.cancelAndRetractInsertedText()
+
+        XCTAssertEqual(backend.operations, [.insert("hello")])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testCancelAndRetractInsertedTextSkipsDeleteWhenTextExposingTargetIsEmpty() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.value = ""
         session.cancelAndRetractInsertedText()
 
         XCTAssertEqual(backend.operations, [.insert("hello")])

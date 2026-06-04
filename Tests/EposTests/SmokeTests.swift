@@ -709,6 +709,17 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(contents.contains("\tinfo\ttest\trecordingID=rec-test hello"))
     }
 
+    func testRecordingLogContextClearSpecificIDDoesNotClearNewerID() {
+        RecordingLogContext.clear()
+        defer { RecordingLogContext.clear() }
+
+        RecordingLogContext.activate("old-rec")
+        RecordingLogContext.activate("new-rec")
+        RecordingLogContext.clear("old-rec")
+
+        XCTAssertEqual(RecordingLogContext.currentRecordingID, "new-rec")
+    }
+
     func testTranscriptTimingDiagnosticsRedactsTranscriptTextByDefault() {
         var diagnostics = TranscriptTimingDiagnostics()
         diagnostics.start(now: Date(timeIntervalSince1970: 100))

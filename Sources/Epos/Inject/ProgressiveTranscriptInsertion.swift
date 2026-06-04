@@ -255,14 +255,12 @@ public final class ProgressiveTranscriptInsertionSession {
         }
 
         let observation = targetObservation()
-        guard case .positionedValue = observation else {
-            let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
+        let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
+        guard evaluation.decision == .proceed else {
             log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
             return
         }
-
-        let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
-        guard evaluation.decision == .proceed else {
+        guard canRetractCommittedText(for: observation) else {
             log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
             return
         }
@@ -270,6 +268,20 @@ public final class ProgressiveTranscriptInsertionSession {
         insertionSession.deleteBackward(count: committedText.count)
         log.info("progressive retract deletedChars=\(committedText.count)")
         committedText = ""
+    }
+
+    private func canRetractCommittedText(for observation: InsertionTargetObservation) -> Bool {
+        switch observation {
+        case .positionedValue:
+            return true
+        case .value(let value):
+            return target.observedSelectedRange() == InsertionTargetTextRange(
+                location: value.utf16.count,
+                length: 0
+            )
+        case .focusChanged, .emptyExposed, .notRead:
+            return false
+        }
     }
 
     private func targetObservation() -> InsertionTargetObservation {
