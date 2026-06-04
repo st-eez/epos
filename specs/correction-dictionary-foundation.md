@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: CD-7 implemented; later corrections UI pending
+Status: CD-11 implemented; Milestone A+B verified
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -37,7 +37,10 @@ evidence can produce suggested inactive records.
 Suggested records can now be scored by a non-mutating promotion gate before any
 record is allowed to become active. Observable same-target user edits can update
 existing evidence rows, and accepted blocker-free promotion assessments can be
-persisted into the active correction dictionary.
+persisted into the active correction dictionary. The Corrections window now
+surfaces pending suggestions with recurrence/risk/evidence context, supports
+accept/reject, and evidence rows can carry optional insertion target app/window
+context for dogfood review.
 
 Do not replace Apple `SpeechTranscriber`.
 Do not loosen the LLM polish guard as part of this work.
@@ -683,7 +686,251 @@ swiftlint --quiet
 
 ## Future Slices
 
-### Later: Corrections UI Upgrade
+## Slice 8
+
+Slice ID: `CD-8`
+
+Title: Suggestion review model and resolution state
+
+Goal: create a deterministic review model for suggested corrections and persist
+rejected suggestions so accepted/rejected suggestions stop appearing as pending.
+
+Behavior under test: unresolved promotion assessments become review items with
+alias, canonical, evidence count, blocker/risk summary, and accept eligibility.
+Accepted and rejected suggestion record IDs are filtered out of pending review
+items.
+
+Seam under test:
+
+```
+CorrectionSuggestionReviewItem.items(...)
+CorrectionStore.rejectSuggestion(_:)
+CorrectionStore.acceptPromotion(_:)
+```
+
+Boundary:
+
+- No UI layout changes in this slice.
+- No automatic promotion.
+- No ASR or polish changes.
+- No evidence mining changes beyond filtering resolved suggestion IDs.
+
+Files likely touched:
+
+- `Sources/Epos/Speech/CorrectionStore.swift`
+- `Sources/Epos/UI/CorrectionSuggestionReviewItem.swift`
+- `Tests/EposTests/CorrectionSuggestionReviewTests.swift`
+- `Tests/EposTests/CorrectionDictionaryPersistenceTests.swift`
+
+Red tests:
+
+- `CorrectionSuggestionReviewTests.testReviewItemsExposeAcceptableAndBlockedSuggestions`
+- `CorrectionSuggestionReviewTests.testReviewItemsHideAcceptedAndRejectedSuggestions`
+- `CorrectionDictionaryPersistenceTests.testCorrectionStorePersistsRejectedSuggestion`
+
+Fixture / harness: isolated `UserDefaults`, deterministic evidence rows, and
+pure review item construction.
+
+Isolation rule: no real UI, no Accessibility, no live app state, no shared
+`UserDefaults.standard`.
+
+Determinism rule: fixed evidence IDs, explicit evidence arrays, no clock
+assertions.
+
+Assertion contract: review items must preserve promotion assessment state,
+accepted/rejected IDs must hide from pending items, and rejected records must not
+compile into runtime rules.
+
+Green condition:
+
+```
+swift test --filter CorrectionSuggestionReviewTests
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter CorrectionPromotionGateTests
+```
+
+Refactor target: keep UI-independent review logic outside the SwiftUI view.
+
+Smoke budget: none.
+
+Verification command:
+
+```
+swift test --filter CorrectionSuggestionReviewTests
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter CorrectionPromotionGateTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
+## Slice 9
+
+Slice ID: `CD-9`
+
+Title: Corrections UI suggestions section
+
+Goal: make suggested corrections visible and actionable in the existing
+Corrections window.
+
+Behavior under test: the corrections editor receives a `CorrectionEvidenceStore`,
+shows pending suggestion review items above manual rules, enables Accept only
+when the promotion assessment can promote, and supports Reject for pending
+suggestions.
+
+Seam under test:
+
+```
+CorrectionsEditorView(store:evidenceStore:)
+CorrectionSuggestionReviewItem
+CorrectionStore.acceptPromotion(_:)
+CorrectionStore.rejectSuggestion(_:)
+```
+
+Boundary:
+
+- Keep the existing manual rule editor working.
+- No new windows or history browser.
+- No automatic promotion.
+- No ASR, polish, or evidence capture changes.
+
+Files likely touched:
+
+- `Sources/Epos/App/EposApp.swift`
+- `Sources/Epos/UI/CorrectionsEditorView.swift`
+- `Sources/Epos/UI/CorrectionSuggestionRow.swift`
+- `Tests/EposTests/SmokeTests.swift`
+
+Red tests:
+
+- `SmokeTests.testSuggestionReviewItemsBackCorrectionsEditorActions`
+
+Fixture / harness: model-level UI action harness; runtime visual verification
+via signed app build/install/open after implementation.
+
+Isolation rule: unit tests avoid real SwiftUI inspection dependencies and use
+isolated stores.
+
+Determinism rule: deterministic evidence rows and no live AX/mic state in unit
+tests.
+
+Assertion contract: Accept persists an active rule and hides the suggestion;
+Reject persists a rejected record and hides the suggestion; blocked suggestions
+remain visible but not accept-eligible.
+
+Green condition:
+
+```
+swift test --filter SmokeTests/testSuggestionReviewItemsBackCorrectionsEditorActions
+swift build -Xswiftc -warnings-as-errors
+```
+
+Refactor target: keep view code thin by delegating review state to
+`CorrectionSuggestionReviewItem`.
+
+Smoke budget: single signed-app launch smoke.
+
+Verification command:
+
+```
+swift test --filter CorrectionSuggestionReviewTests
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+scripts/build-signed-app.sh
+scripts/install-signed-app.sh
+open /Applications/Epos.app
+```
+
+## Slice 10
+
+Slice ID: `CD-10`
+
+Title: Dogfood review evidence surface
+
+Goal: make tomorrow-morning dogfood review trustworthy by showing why a
+suggestion exists without turning the editor into a history browser.
+
+Behavior under test: each suggestion review item exposes recurrence count,
+positive evidence IDs, blocker names, risk names, and a bounded evidence example
+that can be displayed in the row.
+
+Seam under test:
+
+```
+CorrectionSuggestionReviewItem
+CorrectionEvidenceStore.promotionAssessments
+```
+
+Boundary:
+
+- Display only bounded examples and counts.
+- No transcript history browser.
+- No new persistence format.
+- No ASR or polish changes.
+
+Red tests:
+
+- `CorrectionSuggestionReviewTests.testReviewItemsExposeEvidenceAndRiskSummary`
+
+Verification command:
+
+```
+swift test --filter CorrectionSuggestionReviewTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
+## Slice 11
+
+Slice ID: `CD-11`
+
+Title: Dogfood context capture
+
+Goal: capture lightweight app/window context in correction evidence when the
+current insertion target exposes it, so dogfood review can tell whether a
+suggestion is app-local.
+
+Behavior under test: finalization evidence can include application bundle ID and
+window title from the insertion target observer without requiring real AX in unit
+tests.
+
+Seam under test:
+
+```
+InsertionTargetObserver
+AXInsertionTargetObserver
+AppCoordinator.recordCorrectionEvidence(...)
+CorrectionEvidence.applicationBundleIdentifier/windowTitle
+```
+
+Boundary:
+
+- No URL scraping unless already exposed cheaply by the target.
+- No broad AX tree walking.
+- No ASR or polish changes.
+- Context absence must be allowed.
+
+Red tests:
+
+- `CorrectionEvidenceTests.testCoordinatorCapturesInsertionTargetContext`
+
+Verification command:
+
+```
+swift test --filter CorrectionEvidenceTests
+swift test --filter InsertionTargetGuardTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
+### Later: Rich Corrections UI Upgrade
 
 Expose record status, source, scope, usage, snippets, and suggested corrections
 without turning the editor into a history browser.
@@ -819,3 +1066,46 @@ decision.
   `swift test --filter CorrectionEvidenceTests`,
   `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
   full `swift test`, `swiftlint --quiet`, and `git diff --check`.
+- Implemented CD-8 suggestion review model and resolution state:
+  `CorrectionSuggestionReviewItem` turns promotion assessments into pending
+  review rows, `CorrectionStore.rejectSuggestion(_:)` persists rejected
+  suggested records, and manual-rule saves preserve accepted/rejected suggested
+  records so resolved suggestions do not reappear.
+- Implemented CD-9 Corrections UI suggestions section:
+  `CorrectionsEditorView(store:evidenceStore:)` shows pending suggestions above
+  manual rules, Accept promotes only blocker-free assessments, Reject persists a
+  rejected record, and both actions hide the resolved suggestion.
+- Implemented CD-10 dogfood review evidence surface:
+  suggestion rows expose positive evidence IDs/counts, phrase/scope risk,
+  blockers, a bounded before/after example, and optional app/window context.
+- Implemented CD-11 lightweight insertion-target context capture:
+  `InsertionTargetObserver` exposes optional app bundle ID and window title,
+  `AXInsertionTargetObserver` captures them from the baseline focused target,
+  `ProgressiveTranscriptInsertionSession` passes them through, and
+  `AppCoordinator.recordCorrectionEvidence(...)` stores them on finalization
+  evidence when available.
+- Verification for CD-8 through CD-11: red focused tests first, then
+  `swift test --filter CorrectionSuggestionReviewTests`,
+  `swift test --filter CorrectionEvidenceTests`,
+  `swift test --filter InsertionTargetGuardTests`,
+  `swift test --filter CorrectionDictionaryPersistenceTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test` (185 tests, 7 expected gated skips),
+  `swiftlint --quiet`, `git diff --check`, `scripts/build-signed-app.sh`,
+  `scripts/install-signed-app.sh`, `open /Applications/Epos.app`, and
+  `codesign --verify --strict --verbose=2 /Applications/Epos.app`.
+  Verifier rerun returned PASS after probing the stale accept path, repeated
+  accept/reject actions, and manual-save preservation.
+- Verifier found that a stale pre-rejection promotion assessment could
+  reactivate a rejected suggested record. Added
+  `CorrectionDictionaryPersistenceTests.testCorrectionStoreDoesNotAcceptStaleRejectedSuggestion`
+  and made `CorrectionStore.acceptPromotion(_:)` refuse stale accepts when the
+  current dictionary already has the same suggested record ID resolved to a
+  non-suggested status. Post-fix verification reran
+  `swift test --filter CorrectionDictionaryPersistenceTests`,
+  `swift test --filter CorrectionSuggestionReviewTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test` (186 tests, 7 expected gated skips),
+  `swiftlint --quiet`, `git diff --check`, `scripts/build-signed-app.sh`,
+  `scripts/install-signed-app.sh`, `open /Applications/Epos.app`, and
+  `codesign --verify --strict --verbose=2 /Applications/Epos.app`.

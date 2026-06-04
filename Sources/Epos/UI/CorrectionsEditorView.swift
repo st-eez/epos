@@ -4,8 +4,10 @@ struct CorrectionsEditorView: View {
     static let windowID = "corrections"
 
     @ObservedObject var store: CorrectionStore
+    let evidenceStore: CorrectionEvidenceStore
     @State private var rows: [CorrectionDraft] = []
     @State private var savedRows: [CorrectionDraft] = []
+    @State private var suggestionItems: [CorrectionSuggestionReviewItem] = []
 
     private var hasInvalidRows: Bool {
         rows.contains { !$0.isValid }
@@ -19,6 +21,7 @@ struct CorrectionsEditorView: View {
         VStack(spacing: 0) {
             header
             Divider()
+            suggestionsSection
             tableHeader
             rulesList
             Divider()
@@ -34,6 +37,11 @@ struct CorrectionsEditorView: View {
             Label("Corrections", systemImage: "text.badge.checkmark")
                 .font(.system(size: 16, weight: .semibold))
             Spacer(minLength: 12)
+            if !suggestionItems.isEmpty {
+                Text("\(suggestionItems.count) suggestions")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
             Text("\(rows.count) entries")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(.secondary)
@@ -44,6 +52,32 @@ struct CorrectionsEditorView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
+    }
+
+    @ViewBuilder
+    private var suggestionsSection: some View {
+        if !suggestionItems.isEmpty {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Label("Suggestions", systemImage: "wand.and.stars")
+                        .font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 8)
+                .background(Color(nsColor: .controlBackgroundColor))
+
+                ForEach(suggestionItems) { item in
+                    CorrectionSuggestionRow(
+                        item: item,
+                        accept: { acceptSuggestion(item) },
+                        reject: { rejectSuggestion(item) }
+                    )
+                    Divider()
+                        .padding(.leading, 18)
+                }
+            }
+        }
     }
 
     private var tableHeader: some View {
@@ -158,11 +192,30 @@ struct CorrectionsEditorView: View {
         let loadedRows = CorrectionDraft.fromRules(store.rules)
         rows = loadedRows
         savedRows = loadedRows
+        reloadSuggestions()
     }
 
     private func saveRules() {
         guard !hasInvalidRows else { return }
         store.save(rows.map(\.rule))
         savedRows = rows
+        reloadSuggestions()
+    }
+
+    private func reloadSuggestions() {
+        suggestionItems = CorrectionSuggestionReviewItem.items(
+            evidenceStore: evidenceStore,
+            store: store
+        )
+    }
+
+    private func acceptSuggestion(_ item: CorrectionSuggestionReviewItem) {
+        guard store.acceptPromotion(item.assessment) else { return }
+        reload()
+    }
+
+    private func rejectSuggestion(_ item: CorrectionSuggestionReviewItem) {
+        guard store.rejectSuggestion(item.assessment) else { return }
+        reloadSuggestions()
     }
 }

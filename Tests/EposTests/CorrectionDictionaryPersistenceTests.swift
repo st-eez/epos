@@ -146,6 +146,84 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(store.canonicalize("open widget pro"), "open widget pro")
     }
 
+    @MainActor
+    func testCorrectionStorePersistsRejectedSuggestion() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CorrectionStore(defaults: defaults)
+        let evidence = [
+            editedEvidence(id: "one", final: "open db", edited: "open Database"),
+            editedEvidence(id: "two", final: "launch db", edited: "launch Database")
+        ]
+        let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
+        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+
+        XCTAssertTrue(store.rejectSuggestion(assessment))
+
+        let rejected = try XCTUnwrap(CorrectionDictionary.load(from: defaults).records.last)
+        XCTAssertEqual(rejected.id, "suggested.db.to-database")
+        XCTAssertEqual(rejected.status, .rejected)
+        XCTAssertEqual(rejected.source, .suggested)
+        XCTAssertTrue(CorrectionRuleCompiler.compile(records: [rejected]).isEmpty)
+        XCTAssertEqual(store.resolvedSuggestionRecordIDs, ["suggested.db.to-database"])
+    }
+
+    @MainActor
+    func testCorrectionStoreSavePreservesResolvedSuggestions() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CorrectionStore(defaults: defaults)
+        let acceptedEvidence = [
+            editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
+            editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
+        ]
+        let acceptedRecord = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: acceptedEvidence).first)
+        let acceptedAssessment = CorrectionPromotionGate.assess(record: acceptedRecord, evidence: acceptedEvidence)
+        XCTAssertTrue(store.acceptPromotion(acceptedAssessment))
+
+        let rejectedEvidence = [
+            editedEvidence(id: "three", final: "open db", edited: "open Database"),
+            editedEvidence(id: "four", final: "launch db", edited: "launch Database")
+        ]
+        let rejectedRecord = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: rejectedEvidence).first)
+        let rejectedAssessment = CorrectionPromotionGate.assess(record: rejectedRecord, evidence: rejectedEvidence)
+        XCTAssertTrue(store.rejectSuggestion(rejectedAssessment))
+
+        store.save(store.rules)
+
+        let records = CorrectionDictionary.load(from: defaults).records
+        XCTAssertEqual(records.first { $0.id == "suggested.widget-pro.to-widgetpro" }?.status, .active)
+        XCTAssertEqual(records.first { $0.id == "suggested.db.to-database" }?.status, .rejected)
+        XCTAssertEqual(
+            CorrectionStore(defaults: defaults).resolvedSuggestionRecordIDs,
+            ["suggested.db.to-database", "suggested.widget-pro.to-widgetpro"]
+        )
+    }
+
+    @MainActor
+    func testCorrectionStoreDoesNotAcceptStaleRejectedSuggestion() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CorrectionStore(defaults: defaults)
+        let evidence = [
+            editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
+            editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
+        ]
+        let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
+        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+
+        XCTAssertTrue(store.rejectSuggestion(assessment))
+        XCTAssertFalse(store.acceptPromotion(assessment))
+        XCTAssertEqual(CorrectionDictionary.load(from: defaults).records.first { $0.id == record.id }?.status, .rejected)
+        XCTAssertEqual(store.canonicalize("open widget pro"), "open widget pro")
+    }
+
     private func editedEvidence(id: String, final: String, edited: String) -> CorrectionEvidence {
         CorrectionEvidence(
             id: id,

@@ -334,7 +334,8 @@ public final class AppCoordinator: ObservableObject {
                 rawTranscript: finalText,
                 polishResult: result,
                 effectiveOutcome: effectiveOutcome,
-                applied: applied
+                applied: applied,
+                session: textInsertionSession
             )
             if let finalInsertedTranscript = correctionEvidence.evidence.last(where: { $0.id == evidenceID })?.finalInsertedTranscript {
                 scheduleObservedUserEditCapture(
@@ -405,7 +406,8 @@ public final class AppCoordinator: ObservableObject {
         polishResult: PolishResult,
         effectiveOutcome: PolishOutcome,
         applied: Bool,
-        recordingID: String? = nil
+        recordingID: String? = nil,
+        session: ProgressiveTranscriptInsertionSession? = nil
     ) -> String {
         let canonicalizedRaw = corrections.canonicalize(rawTranscript)
         return correctionEvidence.record(CorrectionEvidence(
@@ -416,6 +418,8 @@ public final class AppCoordinator: ObservableObject {
             canonicalizedTranscript: canonicalizedRaw,
             finalInsertedTranscript: applied ? polishResult.text : canonicalizedRaw,
             userEditedTranscript: nil,
+            applicationBundleIdentifier: session?.targetApplicationBundleIdentifier(),
+            windowTitle: session?.targetWindowTitle(),
             appliedRuleIDs: corrections.dictionary.appliedRecordIDs(in: rawTranscript),
             polishOutcome: effectiveOutcome.evidenceName,
             engineOutcome: polishResult.engineOutcome?.rawValue,

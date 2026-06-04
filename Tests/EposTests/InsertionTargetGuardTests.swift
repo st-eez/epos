@@ -697,6 +697,8 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     var exposesText = false
     var insertionContext: InsertionTargetContext?
     var selectedRange: InsertionTargetTextRange?
+    var applicationBundleIdentifier: String?
+    var windowTitle: String?
     private(set) var baselineCaptured = false
 
     func captureBaseline() { baselineCaptured = true }
@@ -705,6 +707,8 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     func observedSelectedRange() -> InsertionTargetTextRange? { selectedRange }
     func exposesTextValue() -> Bool { exposesText }
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
+    func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }
+    func targetWindowTitle() -> String? { windowTitle }
 }
 
 private final class GuardRecordingBackend: TextInsertionBackend {

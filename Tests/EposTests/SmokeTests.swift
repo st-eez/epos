@@ -221,6 +221,28 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(draft.rule.contexts, ["open", "launch"])
     }
 
+    @MainActor
+    func testSuggestionReviewItemsBackCorrectionsEditorActions() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CorrectionStore(defaults: defaults)
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        evidenceStore.record(correctionEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"))
+        evidenceStore.record(correctionEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro"))
+
+        let item = try XCTUnwrap(CorrectionSuggestionReviewItem.items(
+            evidenceStore: evidenceStore,
+            store: store
+        ).first)
+
+        XCTAssertTrue(item.canAccept)
+        XCTAssertTrue(store.acceptPromotion(item.assessment))
+        XCTAssertTrue(CorrectionSuggestionReviewItem.items(evidenceStore: evidenceStore, store: store).isEmpty)
+        XCTAssertEqual(store.canonicalize("open widget pro"), "open WidgetPro")
+    }
+
     func testCanonicalizerDoesNotRewriteSubstrings() {
         let canonicalizer = TranscriptCanonicalizer()
 
@@ -906,6 +928,22 @@ private func makeTemporaryDirectory() throws -> URL {
         .appendingPathComponent("EposTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+}
+
+private func correctionEvidence(id: String, final: String, edited: String) -> CorrectionEvidence {
+    CorrectionEvidence(
+        id: id,
+        observedAt: Date(timeIntervalSince1970: 1),
+        recordingID: id,
+        rawTranscript: final,
+        canonicalizedTranscript: final,
+        finalInsertedTranscript: final,
+        userEditedTranscript: edited,
+        appliedRuleIDs: [],
+        polishOutcome: "disabled",
+        engineOutcome: nil,
+        guardRejectionReason: nil
+    )
 }
 
 private func repositoryRoot() -> URL {

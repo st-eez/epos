@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import Foundation
 
 /// What the session is allowed to do this reconcile, given what we observed about
@@ -149,6 +150,10 @@ public protocol InsertionTargetObserver: AnyObject {
     func exposesTextValue() -> Bool
     /// The original text split around the insertion selection at session start.
     func baselineInsertionContext() -> InsertionTargetContext?
+    /// The bundle identifier for the app that owned the insertion target at baseline.
+    func targetApplicationBundleIdentifier() -> String?
+    /// The title of the window that owned the insertion target at baseline, if exposed.
+    func targetWindowTitle() -> String?
 }
 
 /// A no-op observer: focus never changes, value never readable. The session then
@@ -162,6 +167,8 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
     public func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     public func exposesTextValue() -> Bool { false }
     public func baselineInsertionContext() -> InsertionTargetContext? { nil }
+    public func targetApplicationBundleIdentifier() -> String? { nil }
+    public func targetWindowTitle() -> String? { nil }
 }
 
 /// Live Accessibility-backed observer. Uses the same trust the keystroke backend
@@ -173,6 +180,8 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     /// Chromium/Electron terminal like cmux rebuilds its AX node between keystrokes) does
     /// not — so the focus guard compares this, not the element's identity.
     private var homePid: pid_t?
+    private var homeApplicationBundleIdentifier: String?
+    private var homeWindowTitle: String?
     /// True when the home element advertises `kAXValueAttribute` at session start.
     /// Set once at `captureBaseline`, before any delete, so the FIRST delete cycle
     /// already knows a text-exposing field is text-exposing — without it, the
@@ -202,6 +211,12 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             return
         }
         homePid = pid(of: baseline)
+        if let homePid {
+            homeApplicationBundleIdentifier = NSRunningApplication(
+                processIdentifier: homePid
+            )?.bundleIdentifier
+        }
+        homeWindowTitle = windowTitle(of: baseline)
         homeElementAdvertisesValue = advertisesValueAttribute(baseline)
         if let value = textValue(of: baseline), let selectedRange = selectedTextRange(of: baseline) {
             insertionContext = Self.context(in: value, selectedRange: selectedRange)
@@ -260,6 +275,10 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
 
     public func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
 
+    public func targetApplicationBundleIdentifier() -> String? { homeApplicationBundleIdentifier }
+
+    public func targetWindowTitle() -> String? { homeWindowTitle }
+
     private func advertisesValueAttribute(_ element: AXUIElement) -> Bool {
         var names: CFArray?
         let result = AXUIElementCopyAttributeNames(element, &names)
@@ -288,6 +307,29 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         // swiftlint:disable:next force_cast
         guard AXValueGetValue((axValue as! AXValue), .cfRange, &range) else { return nil }
         return InsertionTargetTextRange(location: range.location, length: range.length)
+    }
+
+    private func windowTitle(of element: AXUIElement) -> String? {
+        guard let window = window(of: element) else { return nil }
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            window, kAXTitleAttribute as CFString, &value
+        )
+        guard result == .success, let title = value as? String else { return nil }
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func window(of element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(
+            element, kAXWindowAttribute as CFString, &value
+        )
+        guard result == .success, let window = value else { return nil }
+        // CFTypeRef of an AXUIElement; force-cast is safe after the window
+        // attribute succeeds.
+        // swiftlint:disable:next force_cast
+        return (window as! AXUIElement)
     }
 
     private static func context(

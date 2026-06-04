@@ -13,7 +13,10 @@ public struct EposApp: App {
         .menuBarExtraStyle(.window)
 
         Window("Corrections", id: CorrectionsEditorView.windowID) {
-            CorrectionsEditorView(store: coordinator.corrections)
+            CorrectionsEditorView(
+                store: coordinator.corrections,
+                evidenceStore: coordinator.correctionEvidence
+            )
         }
         .defaultSize(width: 940, height: 560)
         .defaultLaunchBehavior(.suppressed)

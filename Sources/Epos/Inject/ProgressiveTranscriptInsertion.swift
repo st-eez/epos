@@ -94,6 +94,14 @@ public final class ProgressiveTranscriptInsertionSession {
         return context.insertedText(in: value)
     }
 
+    public func targetApplicationBundleIdentifier() -> String? {
+        target.targetApplicationBundleIdentifier()
+    }
+
+    public func targetWindowTitle() -> String? {
+        target.targetWindowTitle()
+    }
+
     /// Converge the inserted text to `newTarget` with a minimal edit: backspace
     /// the suffix that diverges from `newTarget`, then type the corrected
     /// remainder. Shared by partials and finals so the field always tracks the

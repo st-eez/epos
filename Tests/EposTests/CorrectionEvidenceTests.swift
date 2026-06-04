@@ -246,6 +246,46 @@ final class CorrectionEvidenceTests: XCTestCase {
     }
 
     @MainActor
+    func testCoordinatorCapturesInsertionTargetContext() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        let coordinator = AppCoordinator(
+            correctionEvidence: evidenceStore,
+            recordingIDGenerator: { "rec-1" },
+            autoStart: false
+        )
+        let observer = EvidenceFakeTargetObserver()
+        observer.applicationBundleIdentifier = "com.example.editor"
+        observer.windowTitle = "Draft.md"
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: EvidenceNoopTextInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptFinalTranscript("open widget pro")
+        coordinator.recordCorrectionEvidence(
+            rawTranscript: "open widget pro",
+            polishResult: PolishResult(
+                text: "open widget pro",
+                outcome: .disabled,
+                rawCharacterCount: "open widget pro".count
+            ),
+            effectiveOutcome: .disabled,
+            applied: true,
+            recordingID: "rec-1",
+            session: session
+        )
+
+        let evidence = try XCTUnwrap(evidenceStore.evidence.first)
+        XCTAssertEqual(evidence.applicationBundleIdentifier, "com.example.editor")
+        XCTAssertEqual(evidence.windowTitle, "Draft.md")
+    }
+
+    @MainActor
     func testCoordinatorSchedulesObservedUserEditCapture() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -298,6 +338,8 @@ private final class EvidenceFakeTargetObserver: InsertionTargetObserver {
     var value: String?
     var exposesText = false
     var insertionContext: InsertionTargetContext?
+    var applicationBundleIdentifier: String?
+    var windowTitle: String?
 
     func captureBaseline() {}
     func focusChangedSinceStart() -> Bool { focusChanged }
@@ -305,6 +347,8 @@ private final class EvidenceFakeTargetObserver: InsertionTargetObserver {
     func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     func exposesTextValue() -> Bool { exposesText }
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
+    func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }
+    func targetWindowTitle() -> String? { windowTitle }
 }
 
 private final class EvidenceNoopTextInsertionSession: TextInsertionSession {

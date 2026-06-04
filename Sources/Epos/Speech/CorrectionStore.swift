@@ -21,14 +21,22 @@ public final class CorrectionStore: ObservableObject {
 
     public var rules: [TranscriptCanonicalizer.Rule] { canonicalizer.rules }
 
+    public var resolvedSuggestionRecordIDs: Set<String> {
+        Set(dictionary.records.compactMap { record in
+            guard record.source == .suggested, record.status != .suggested else { return nil }
+            return record.id
+        })
+    }
+
     public func canonicalize(_ text: String) -> String {
         canonicalizer.canonicalize(text)
     }
 
     /// Persist `rules` and refresh the live canonicalizer so the next insertion uses them.
     public func save(_ rules: [TranscriptCanonicalizer.Rule]) {
-        let records = CorrectionDictionary.records(from: rules)
+        let records = recordsPreservingResolvedSuggestions(from: rules)
         TranscriptCanonicalizer.saveRules(rules, to: defaults)
+        CorrectionDictionary.saveRecords(records, to: defaults)
         dictionary = CorrectionDictionary(records: records)
         canonicalizer = TranscriptCanonicalizer(
             rules: CorrectionRuleCompiler.compile(records: dictionary.records)
@@ -38,17 +46,69 @@ public final class CorrectionStore: ObservableObject {
     @discardableResult
     public func acceptPromotion(_ assessment: CorrectionPromotionAssessment) -> Bool {
         guard let promotedRecord = assessment.promotedRecord else { return false }
+        if let existing = dictionary.records.first(where: { $0.id == assessment.record.id }),
+           existing.source == .suggested,
+           existing.status != .suggested {
+            return false
+        }
 
-        if let index = dictionary.records.firstIndex(where: { $0.id == promotedRecord.id }) {
-            dictionary.records[index] = promotedRecord
+        upsertRecord(promotedRecord)
+        return true
+    }
+
+    @discardableResult
+    public func rejectSuggestion(_ assessment: CorrectionPromotionAssessment) -> Bool {
+        guard assessment.record.status == .suggested else { return false }
+        if let existing = dictionary.records.first(where: { $0.id == assessment.record.id }),
+           existing.status == .active {
+            return false
+        }
+
+        var rejectedRecord = assessment.record
+        rejectedRecord.status = .rejected
+        upsertRecord(rejectedRecord)
+        return true
+    }
+
+    private func upsertRecord(_ record: CorrectionRecord) {
+        if let index = dictionary.records.firstIndex(where: { $0.id == record.id }) {
+            dictionary.records[index] = record
         } else {
-            dictionary.records.append(promotedRecord)
+            dictionary.records.append(record)
         }
 
         CorrectionDictionary.saveRecords(dictionary.records, to: defaults)
         canonicalizer = TranscriptCanonicalizer(
             rules: CorrectionRuleCompiler.compile(records: dictionary.records)
         )
-        return true
+    }
+
+    private func recordsPreservingResolvedSuggestions(
+        from rules: [TranscriptCanonicalizer.Rule]
+    ) -> [CorrectionRecord] {
+        var records = CorrectionDictionary.records(from: rules)
+        let resolvedSuggestions = dictionary.records.filter { record in
+            record.source == .suggested && record.status != .suggested
+        }
+
+        for suggestion in resolvedSuggestions {
+            if let index = records.firstIndex(where: { $0.id == suggestion.id }) {
+                records[index] = suggestion
+                continue
+            }
+
+            if let rule = CorrectionRuleCompiler.compile(records: [suggestion]).first,
+               let equivalentIndex = records.firstIndex(where: { candidate in
+                   candidate.source != .builtIn &&
+                       CorrectionRuleCompiler.compile(records: [candidate]).first == rule
+               }) {
+                records[equivalentIndex] = suggestion
+                continue
+            }
+
+            records.append(suggestion)
+        }
+
+        return records
     }
 }
