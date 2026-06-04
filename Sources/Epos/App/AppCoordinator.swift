@@ -40,6 +40,7 @@ public final class AppCoordinator: ObservableObject {
     private let permissions: PermissionsGate
     private let assets: AssetManager
     private let recordingIDGenerator: @Sendable () -> String
+    private let observedEditCaptureDelay: TimeInterval
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
     /// editor mutates the same instance (the app hands the editor `coordinator.corrections`).
     public let corrections = CorrectionStore()
@@ -52,6 +53,7 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
     private var textInsertionSession: ProgressiveTranscriptInsertionSession?
+    private var observedEditCaptureWorkItem: DispatchWorkItem?
     private var currentRecordingID: String?
     /// Set when a press arrives during the finalize/polish window (state != .idle),
     /// where `startRecording` would otherwise silently drop it. The press also abandons
@@ -79,6 +81,7 @@ public final class AppCoordinator: ObservableObject {
         diagnostics: DiagnosticLogSink = .shared,
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
+        observedEditCaptureDelay: TimeInterval = 1.5,
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
@@ -88,6 +91,7 @@ public final class AppCoordinator: ObservableObject {
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
+        self.observedEditCaptureDelay = observedEditCaptureDelay
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -326,12 +330,19 @@ public final class AppCoordinator: ObservableObject {
             // can't claim a polish the user never received.
             let applied = insertFinalTranscript(result.text)
             let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
-            recordCorrectionEvidence(
+            let evidenceID = recordCorrectionEvidence(
                 rawTranscript: finalText,
                 polishResult: result,
                 effectiveOutcome: effectiveOutcome,
                 applied: applied
             )
+            if let finalInsertedTranscript = correctionEvidence.evidence.last(where: { $0.id == evidenceID })?.finalInsertedTranscript {
+                scheduleObservedUserEditCapture(
+                    evidenceID: evidenceID,
+                    finalInsertedTranscript: finalInsertedTranscript,
+                    session: textInsertionSession
+                )
+            }
             // Count raw and polished on the SAME normalization: both come from the
             // polisher's own canonicalizer — `result.text` for `.applied` is
             // canonicalize(polished), and `result.rawCharacterCount` is the matching
@@ -388,15 +399,16 @@ public final class AppCoordinator: ObservableObject {
         return applied
     }
 
+    @discardableResult
     func recordCorrectionEvidence(
         rawTranscript: String,
         polishResult: PolishResult,
         effectiveOutcome: PolishOutcome,
         applied: Bool,
         recordingID: String? = nil
-    ) {
+    ) -> String {
         let canonicalizedRaw = corrections.canonicalize(rawTranscript)
-        correctionEvidence.record(CorrectionEvidence(
+        return correctionEvidence.record(CorrectionEvidence(
             id: UUID().uuidString,
             observedAt: Date(),
             recordingID: recordingID ?? currentRecordingID,
@@ -409,6 +421,57 @@ public final class AppCoordinator: ObservableObject {
             engineOutcome: polishResult.engineOutcome?.rawValue,
             guardRejectionReason: polishResult.guardRejection?.reason.rawValue
         ))
+    }
+
+    func scheduleObservedUserEditCapture(
+        evidenceID: String,
+        finalInsertedTranscript: String,
+        session: ProgressiveTranscriptInsertionSession?
+    ) {
+        guard let session else { return }
+
+        observedEditCaptureWorkItem?.cancel()
+        guard observedEditCaptureDelay > 0 else {
+            captureObservedUserEdit(
+                evidenceID: evidenceID,
+                finalInsertedTranscript: finalInsertedTranscript,
+                session: session
+            )
+            return
+        }
+
+        let workItem = DispatchWorkItem { [weak self, session, evidenceID, finalInsertedTranscript] in
+            guard let self else { return }
+            _ = MainActor.assumeIsolated {
+                self.captureObservedUserEdit(
+                    evidenceID: evidenceID,
+                    finalInsertedTranscript: finalInsertedTranscript,
+                    session: session
+                )
+            }
+        }
+        observedEditCaptureWorkItem = workItem
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + observedEditCaptureDelay,
+            execute: workItem
+        )
+    }
+
+    @discardableResult
+    func captureObservedUserEdit(
+        evidenceID: String,
+        finalInsertedTranscript: String,
+        session: ProgressiveTranscriptInsertionSession
+    ) -> Bool {
+        guard let observedInsertedText = session.observedInsertedText(),
+              observedInsertedText != finalInsertedTranscript else {
+            return false
+        }
+
+        return correctionEvidence.recordUserEdit(
+            evidenceID: evidenceID,
+            userEditedTranscript: observedInsertedText
+        )
     }
 
     func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {

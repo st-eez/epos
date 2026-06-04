@@ -105,4 +105,60 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("open simux"), "open MUX")
         XCTAssertEqual(canonicalizer.canonicalize("edit agents dot md"), "edit AGENTS.md")
     }
+
+    @MainActor
+    func testCorrectionStoreAcceptsPromotedSuggestion() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CorrectionStore(defaults: defaults)
+        let evidence = [
+            editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
+            editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
+        ]
+        let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
+        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+
+        XCTAssertTrue(store.acceptPromotion(assessment))
+
+        let promoted = try XCTUnwrap(assessment.promotedRecord)
+        XCTAssertEqual(CorrectionDictionary.load(from: defaults).records.last, promoted)
+        XCTAssertEqual(store.canonicalize("open widget pro"), "open WidgetPro")
+        XCTAssertEqual(CorrectionStore(defaults: defaults).canonicalize("launch widget pro"), "launch WidgetPro")
+    }
+
+    @MainActor
+    func testCorrectionStoreRejectsBlockedPromotion() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let store = CorrectionStore(defaults: defaults)
+        let evidence = [
+            editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro")
+        ]
+        let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
+        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+
+        XCTAssertFalse(store.acceptPromotion(assessment))
+        XCTAssertEqual(CorrectionDictionary.load(from: defaults).records, CorrectionDictionary.defaultRecords)
+        XCTAssertEqual(store.canonicalize("open widget pro"), "open widget pro")
+    }
+
+    private func editedEvidence(id: String, final: String, edited: String) -> CorrectionEvidence {
+        CorrectionEvidence(
+            id: id,
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: id,
+            rawTranscript: final,
+            canonicalizedTranscript: final,
+            finalInsertedTranscript: final,
+            userEditedTranscript: edited,
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        )
+    }
 }

@@ -74,12 +74,26 @@ public final class CorrectionEvidenceStore {
         }
     }
 
-    public func record(_ item: CorrectionEvidence) {
+    @discardableResult
+    public func record(_ item: CorrectionEvidence) -> String {
         evidence.append(item)
         if evidence.count > maxEvidenceCount {
             evidence = Array(evidence.suffix(maxEvidenceCount))
         }
         save()
+        return item.id
+    }
+
+    @discardableResult
+    public func recordUserEdit(evidenceID: String, userEditedTranscript: String) -> Bool {
+        guard let index = evidence.firstIndex(where: { $0.id == evidenceID }),
+              evidence[index].finalInsertedTranscript != userEditedTranscript else {
+            return false
+        }
+
+        evidence[index].userEditedTranscript = userEditedTranscript
+        save()
+        return true
     }
 
     private func save() {

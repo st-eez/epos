@@ -590,6 +590,42 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.operations, [.insert("run --verbose")])
     }
 
+    func testSessionObservesEditedInsertedSpanAfterFinish() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptFinalTranscript("widget pro")
+        session.finish()
+        observer.value = "open WidgetPro please"
+
+        XCTAssertEqual(session.observedInsertedText(), "WidgetPro")
+    }
+
+    func testSessionDoesNotObserveInsertedSpanForOpaqueTarget() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = false
+        observer.insertionContext = InsertionTargetContext(prefix: "", suffix: "")
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptFinalTranscript("widget pro")
+        session.finish()
+        observer.value = ""
+
+        XCTAssertNil(session.observedInsertedText())
+    }
+
     func testMinimalEditIsPrefixOnly() {
         let pureAppend = ProgressiveTranscriptInsertionSession.minimalEdit(
             from: "the server is down", to: "the server is down."

@@ -45,6 +45,19 @@ public struct InsertionTargetContext: Equatable {
         let expectedCaret = (prefix + expected).utf16.count
         return selectedRange == InsertionTargetTextRange(location: expectedCaret, length: 0)
     }
+
+    func insertedText(in value: String) -> String? {
+        guard value.hasPrefix(prefix),
+              value.hasSuffix(suffix),
+              value.count >= prefix.count + suffix.count else {
+            return nil
+        }
+
+        let start = value.index(value.startIndex, offsetBy: prefix.count)
+        let end = value.index(value.endIndex, offsetBy: -suffix.count)
+        guard start <= end else { return nil }
+        return String(value[start..<end])
+    }
 }
 
 /// What the observer saw when asked to check the target before a reconcile.

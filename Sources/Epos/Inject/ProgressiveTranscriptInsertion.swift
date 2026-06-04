@@ -82,6 +82,18 @@ public final class ProgressiveTranscriptInsertionSession {
         insertionSession.cancel()
     }
 
+    public func observedInsertedText() -> String? {
+        guard didCaptureBaseline,
+              !target.focusChangedSinceStart(),
+              target.exposesTextValue(),
+              let context = target.baselineInsertionContext(),
+              let value = target.observedValue() else {
+            return nil
+        }
+
+        return context.insertedText(in: value)
+    }
+
     /// Converge the inserted text to `newTarget` with a minimal edit: backspace
     /// the suffix that diverges from `newTarget`, then type the corrected
     /// remainder. Shared by partials and finals so the field always tracks the

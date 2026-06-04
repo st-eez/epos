@@ -34,4 +34,21 @@ public final class CorrectionStore: ObservableObject {
             rules: CorrectionRuleCompiler.compile(records: dictionary.records)
         )
     }
+
+    @discardableResult
+    public func acceptPromotion(_ assessment: CorrectionPromotionAssessment) -> Bool {
+        guard let promotedRecord = assessment.promotedRecord else { return false }
+
+        if let index = dictionary.records.firstIndex(where: { $0.id == promotedRecord.id }) {
+            dictionary.records[index] = promotedRecord
+        } else {
+            dictionary.records.append(promotedRecord)
+        }
+
+        CorrectionDictionary.saveRecords(dictionary.records, to: defaults)
+        canonicalizer = TranscriptCanonicalizer(
+            rules: CorrectionRuleCompiler.compile(records: dictionary.records)
+        )
+        return true
+    }
 }

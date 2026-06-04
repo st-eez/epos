@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: CD-5 implemented; later corrections UI pending
+Status: CD-7 implemented; later corrections UI pending
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -35,7 +35,9 @@ legacy payload migration.
 Finalization evidence is captured into a bounded local store and edited-miss
 evidence can produce suggested inactive records.
 Suggested records can now be scored by a non-mutating promotion gate before any
-record is allowed to become active.
+record is allowed to become active. Observable same-target user edits can update
+existing evidence rows, and accepted blocker-free promotion assessments can be
+persisted into the active correction dictionary.
 
 Do not replace Apple `SpeechTranscriber`.
 Do not loosen the LLM polish guard as part of this work.
@@ -509,6 +511,176 @@ Implementation notes:
 - Single-app positive evidence is scored as medium scope risk but is not blocked
   unless conflicting suggestion evidence makes scope risk high.
 
+## Slice 6
+
+Slice ID: `CD-6`
+
+Title: Capture observed user edits
+
+Goal: turn real post-insertion user edits into correction evidence without
+changing runtime correction behavior.
+
+Behavior under test: finalization evidence is recorded with a stable evidence
+ID. When the same observable insertion target later shows that the inserted span
+changed, the existing evidence row is updated with `userEditedTranscript`.
+Opaque or mismatched targets do not create edit evidence.
+
+Seam under test:
+
+```
+CorrectionEvidenceStore.record(_:) -> String
+CorrectionEvidenceStore.recordUserEdit(evidenceID:userEditedTranscript:)
+ProgressiveTranscriptInsertionSession.observedInsertedText()
+AppCoordinator.recordCorrectionEvidence(...)
+AppCoordinator.scheduleObservedUserEditCapture(...)
+```
+
+Boundary:
+
+- Capture only same-target edits that preserve the original surrounding
+  insertion context.
+- Do not activate, promote, or persist correction records from the edit.
+- Do not add UI.
+- Do not add a history database or long-running transcript browser.
+- Do not change ASR, polish policy, insertion behavior, or UserDefaults
+  dictionary migration.
+
+Files likely touched:
+
+- `Sources/Epos/Speech/CorrectionEvidence.swift`
+- `Sources/Epos/Inject/ProgressiveTranscriptInsertion.swift`
+- `Sources/Epos/App/AppCoordinator.swift`
+- `Tests/EposTests/CorrectionEvidenceTests.swift`
+- `Tests/EposTests/InsertionTargetGuardTests.swift`
+
+Red tests:
+
+- `CorrectionEvidenceTests.testEvidenceStoreUpdatesExistingRowWithObservedUserEdit`
+- `InsertionTargetGuardTests.testSessionObservesEditedInsertedSpanAfterFinish`
+- `CorrectionEvidenceTests.testCoordinatorReturnsStableEvidenceIDForLaterEditCapture`
+- `CorrectionEvidenceTests.testCoordinatorSchedulesObservedUserEditCapture`
+- `InsertionTargetGuardTests.testSessionDoesNotObserveInsertedSpanForOpaqueTarget`
+
+Fixture / harness: isolated `UserDefaults` suites, fake insertion target
+observer, and existing coordinator test harness with `autoStart: false`.
+
+Isolation rule: no real Accessibility calls, no real focused app, no live
+keyboard events, no shared `UserDefaults.standard`.
+
+Determinism rule: fixed recording IDs and explicit fake observer values; no
+wall-clock assertions beyond existing stored timestamps.
+
+Assertion contract: the updated evidence row keeps its original raw,
+canonicalized, final inserted, and applied-rule fields, sets
+`userEditedTranscript` only when the observed inserted span differs, and makes
+existing suggestion generation see the edit.
+
+Green condition:
+
+```
+swift test --filter CorrectionEvidenceTests
+swift test --filter InsertionTargetGuardTests
+swift test --filter CorrectionPromotionGateTests
+swift test --filter SmokeTests
+```
+
+Refactor target: keep target-span extraction as a small pure helper or session
+method; do not grow the coordinator into an edit-monitor state machine.
+
+Smoke budget: none.
+
+Verification command:
+
+```
+swift test --filter CorrectionEvidenceTests
+swift test --filter InsertionTargetGuardTests
+swift test --filter CorrectionPromotionGateTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
+## Slice 7
+
+Slice ID: `CD-7`
+
+Title: Persist accepted suggestion promotions
+
+Goal: provide a non-UI promotion API that accepts a clear promotion assessment
+and persists the promoted record into the active correction dictionary.
+
+Behavior under test: when an assessment has no blockers, accepting it adds the
+assessment's `promotedRecord` to the persisted dictionary and refreshes the live
+canonicalizer. Blocked assessments and rejected suggestions do not change active
+runtime rules.
+
+Seam under test:
+
+```
+CorrectionStore.acceptPromotion(_:)
+CorrectionPromotionAssessment.promotedRecord
+CorrectionDictionary.saveRecords(_:to:)
+```
+
+Boundary:
+
+- No UI changes.
+- No automatic promotion.
+- No bypass around `CorrectionPromotionGate`.
+- No evidence capture changes.
+- No ASR, polish-policy, or UserDefaults migration changes.
+
+Files likely touched:
+
+- `Sources/Epos/Speech/CorrectionStore.swift`
+- `Tests/EposTests/CorrectionDictionaryPersistenceTests.swift`
+
+Red tests:
+
+- `CorrectionDictionaryPersistenceTests.testCorrectionStoreAcceptsPromotedSuggestion`
+- `CorrectionDictionaryPersistenceTests.testCorrectionStoreRejectsBlockedPromotion`
+
+Fixture / harness: isolated `UserDefaults` suites plus deterministic
+`CorrectionEvidence` rows that produce a clear promotion assessment.
+
+Isolation rule: no real Accessibility calls, no live dictation, no shared
+`UserDefaults.standard`, and no UI editor interaction.
+
+Determinism rule: fixed evidence IDs and explicit evidence rows; promotion
+acceptance depends only on the supplied `CorrectionPromotionAssessment`.
+
+Assertion contract: accepted blocker-free assessments append or replace the
+promoted active record in the persisted dictionary and immediately update the
+live canonicalizer; blocked assessments return false and leave records
+unchanged.
+
+Green condition:
+
+```
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter CorrectionPromotionGateTests
+swift test --filter CorrectionEvidenceTests
+swift test --filter SmokeTests
+```
+
+Refactor target: keep promotion acceptance in `CorrectionStore`, not in the
+compiler or evidence store.
+
+Smoke budget: none.
+
+Verification command:
+
+```
+swift test --filter CorrectionDictionaryPersistenceTests
+swift test --filter CorrectionPromotionGateTests
+swift test --filter CorrectionEvidenceTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
 ## Future Slices
 
 ### Later: Corrections UI Upgrade
@@ -613,3 +785,37 @@ decision.
   `CorrectionPromotionGateTests.testPromotionGateDoesNotCountDuplicateEvidenceAsRecurrence`
   and made recurrence scoring count distinct recording IDs, falling back to
   evidence IDs.
+- Implemented CD-6 observed user-edit capture seam:
+  `CorrectionEvidenceStore.record(_:)` returns a stable evidence ID,
+  `CorrectionEvidenceStore.recordUserEdit(...)` updates existing evidence rows,
+  `ProgressiveTranscriptInsertionSession.observedInsertedText()` extracts the
+  inserted span from the guarded insertion context, `AppCoordinator.recordCorrectionEvidence(...)`
+  returns the evidence ID, and `AppCoordinator.scheduleObservedUserEditCapture(...)`
+  performs the bounded delayed same-target read after finalization.
+- Verification for CD-6: red
+  `CorrectionEvidenceTests.testEvidenceStoreUpdatesExistingRowWithObservedUserEdit`,
+  `InsertionTargetGuardTests.testSessionObservesEditedInsertedSpanAfterFinish`,
+  and `CorrectionEvidenceTests.testCoordinatorReturnsStableEvidenceIDForLaterEditCapture`,
+  then verifier found that the production finalization path did not wire those
+  seams together. Added
+  `CorrectionEvidenceTests.testCoordinatorSchedulesObservedUserEditCapture` and
+  `InsertionTargetGuardTests.testSessionDoesNotObserveInsertedSpanForOpaqueTarget`,
+  wired finalization to `scheduleObservedUserEditCapture(...)`, then ran
+  `swift test --filter CorrectionEvidenceTests`,
+  `swift test --filter InsertionTargetGuardTests`,
+  `swift test --filter CorrectionPromotionGateTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test`, `swiftlint --quiet`, and `git diff --check`.
+- Implemented CD-7 accepted promotion persistence:
+  `CorrectionStore.acceptPromotion(_:)` accepts only assessments with a
+  `promotedRecord`, appends or replaces the promoted active record in
+  `CorrectionDictionary`, saves the dictionary payload, and refreshes the live
+  canonicalizer.
+- Verification for CD-7: red
+  `CorrectionDictionaryPersistenceTests.testCorrectionStoreAcceptsPromotedSuggestion`
+  and `CorrectionDictionaryPersistenceTests.testCorrectionStoreRejectsBlockedPromotion`,
+  then `swift test --filter CorrectionDictionaryPersistenceTests`,
+  `swift test --filter CorrectionPromotionGateTests`,
+  `swift test --filter CorrectionEvidenceTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test`, `swiftlint --quiet`, and `git diff --check`.
