@@ -9,6 +9,17 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
         )
     }
 
+    func testBuiltInSpokenCommandRecordsCarryRecordSemantics() {
+        let commandRecords = CorrectionDictionary.defaultRecords.filter { record in
+            ["/", "--", "/goal", "$HOME"].contains(record.canonical)
+        }
+
+        XCTAssertEqual(commandRecords.map(\.canonical), ["/", "--", "/goal", "$HOME"])
+        XCTAssertTrue(commandRecords.allSatisfy { $0.kind == .spokenCommand })
+        XCTAssertTrue(commandRecords.allSatisfy { $0.source == .builtIn })
+        XCTAssertTrue(commandRecords.allSatisfy { $0.status == .active })
+    }
+
     func testCompiledCanonicalizerMatchesDefaultCanonicalizer() {
         let defaultCanonicalizer = TranscriptCanonicalizer()
         let compiledCanonicalizer = TranscriptCanonicalizer(

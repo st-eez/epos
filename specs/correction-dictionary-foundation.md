@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: CD-1 implemented; Slice 2 pending decision
+Status: CD-2 implemented; CD-3 pending
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -27,12 +27,14 @@ runtime canonicalizer.
 
 ## Current Decision
 
-Keep `TranscriptCanonicalizer` as the runtime authority. Add a higher-level
-`CorrectionDictionary` / `CorrectionRecord` layer above it.
+Keep `TranscriptCanonicalizer` as the runtime execution engine, with
+`CorrectionDictionary.defaultRecords` owning built-in correction definitions.
+User-saved rules remain flat canonicalizer rules until CD-3 migrates
+persistence.
 
 Do not replace Apple `SpeechTranscriber`.
 Do not loosen the LLM polish guard as part of this work.
-Do not introduce SQLite or persistent transcription history in Slice 1.
+Do not introduce SQLite or persistent transcription history in CD-2.
 
 ## Evidence
 
@@ -242,9 +244,54 @@ Decision gate after Slice 1:
 - If equivalence requires awkward compatibility code or changes behavior, stop
   and update this spec before continuing.
 
+## Slice 2
+
+Slice ID: `CD-2`
+
+Title: Make CorrectionDictionary the default rule source
+
+Goal: move built-in correction definitions into `CorrectionRecord` form and
+derive `TranscriptCanonicalizer.defaultRules` from the compiler.
+
+Behavior under test: no user-facing correction behavior changes; today's
+default canonicalizer output, vocabulary strings, speech context strings, and
+flat saved-rule behavior remain unchanged.
+
+Seam under test:
+
+```
+CorrectionDictionary.defaultRecords
+CorrectionRuleCompiler.compile(records:)
+TranscriptCanonicalizer.defaultRules
+TranscriptCanonicalizer.load(from:)
+```
+
+Boundary:
+
+- Move built-in default definitions into `CorrectionDictionary.defaultRecords`.
+- Derive `TranscriptCanonicalizer.defaultRules` from compiled default records.
+- Preserve existing flat `UserDefaults` rule save/load behavior.
+- No UI changes.
+- No `UserDefaults` migration yet.
+- No learning, mining, scoring, ASR, or polish changes.
+
+Red test:
+
+- `CorrectionDictionaryCompilerTests.testBuiltInSpokenCommandRecordsCarryRecordSemantics`
+
+Verification command:
+
+```
+swift test --filter CorrectionDictionaryCompilerTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+```
+
 ## Future Slices
 
-### Slice 2: Store-backed CorrectionDictionary
+### CD-3: Persist CorrectionDictionary records
 
 Move the persisted correction source from flat canonicalizer rules toward
 dictionary records while preserving user data migration.
@@ -253,7 +300,7 @@ Do not choose SQLite here by default. Start with the smallest durable format
 that preserves current behavior and can migrate the existing `UserDefaults`
 payload safely.
 
-### Slice 3: Correction Evidence Capture
+### CD-4: Correction Evidence Capture / Candidate Suggestions
 
 Add a local evidence path for future rule suggestions:
 
@@ -265,10 +312,8 @@ Add a local evidence path for future rule suggestions:
 - rule ids applied
 - guard/polish outcome
 
-This is where the Flow-like history substrate starts to matter. It is not
-Slice 1.
-
-### Slice 4: Candidate Rule Miner
+This is where the Flow-like history substrate starts to matter. It is not CD-2
+or CD-3.
 
 Mine repeated safe misses into suggested records. Suggested records do not
 compile into runtime rules until accepted.
@@ -280,7 +325,13 @@ Success requires:
 - app/context scope when needed
 - zero-regression eval against locked baseline rows
 
-### Slice 5: Corrections UI Upgrade
+### CD-5: Risk Scoring And Promotion Gate
+
+Score suggested records for recurrence, scope risk, phrase ambiguity, negative
+examples, and locked-eval regressions before allowing promotion to active
+runtime rules.
+
+### Later: Corrections UI Upgrade
 
 Expose record status, source, scope, usage, snippets, and suggested corrections
 without turning the editor into a history browser.
@@ -321,3 +372,13 @@ decision.
 - Slice 2 should not proceed until it decides whether `defaultRecords` becomes
   the source of truth or remains a compatibility projection from
   `TranscriptCanonicalizer.defaultRules`.
+- Implemented CD-2 as the source-of-truth flip:
+  `CorrectionDictionary.defaultRecords` now owns the built-in correction
+  definitions, command-token defaults carry `.spokenCommand` record semantics,
+  and `TranscriptCanonicalizer.defaultRules` derives from
+  `CorrectionRuleCompiler.compile(records: CorrectionDictionary.defaultRecords)`.
+- Verification for CD-2: red
+  `CorrectionDictionaryCompilerTests.testBuiltInSpokenCommandRecordsCarryRecordSemantics`,
+  then `swift test --filter CorrectionDictionaryCompilerTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test`, and `swiftlint --quiet`.

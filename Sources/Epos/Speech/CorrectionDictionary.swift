@@ -7,26 +7,208 @@ public struct CorrectionDictionary: Equatable, Sendable {
         self.records = records
     }
 
-    public static let defaultRecords: [CorrectionRecord] = TranscriptCanonicalizer.defaultRules.enumerated().map {
-        index, rule in
+    public static let defaultRecords: [CorrectionRecord] = [
+        defaultRecord(
+            id: "builtin.claude-md",
+            canonical: "CLAUDE.md",
+            aliases: [
+                "CLAUDE.md",
+                "claude dot md",
+                "claude dot m d",
+                "claude md",
+                "cloud dot md",
+                "cloud dot m d",
+                "cloud.md"
+            ]
+        ),
+        defaultRecord(
+            id: "builtin.stath",
+            canonical: "Stath",
+            aliases: ["steph", "staff", "stas"]
+        ),
+        defaultRecord(
+            id: "builtin.stath-instructions",
+            canonical: "Stath instructions",
+            aliases: ["stuff instructions"]
+        ),
+        defaultRecord(id: "builtin.ping-stath", canonical: "ping Stath", aliases: ["ping stuff"]),
+        defaultRecord(
+            id: "builtin.when-stath-runs-it",
+            canonical: "when Stath runs it",
+            aliases: ["when stuff runs it"]
+        ),
+        defaultRecord(id: "builtin.llm-polish", canonical: "LLM polish", aliases: ["LOL polish"]),
+        defaultRecord(id: "builtin.epos-app", canonical: "Epos app", aliases: ["Ipos app"]),
+        defaultRecord(
+            id: "builtin.readme-and-agents-file",
+            canonical: "the README and the AGENTS file",
+            aliases: ["the read me and the agent's file"]
+        ),
+        defaultRecord(
+            id: "builtin.subagents-context-window",
+            canonical: "Use subagents as needed to keep your context window clean",
+            aliases: ["Use of agents as needed to keep your context window clean"]
+        ),
+        defaultRecord(
+            id: "builtin.foundation-models",
+            canonical: "Foundation Models",
+            aliases: ["foundation models", "foundational models", "the foundation models"]
+        ),
+        defaultRecord(id: "builtin.saying-deprecate", canonical: "saying deprecate", aliases: ["seeing deprecate"]),
+        defaultRecord(id: "builtin.yesterday-saying", canonical: "yesterday, saying", aliases: ["history, seeing"]),
+        defaultRecord(
+            id: "builtin.not-working-properly",
+            canonical: "not working properly",
+            aliases: ["not working progress"]
+        ),
+        defaultRecord(
+            id: "builtin.did-we-close-phase-one",
+            canonical: "Did we close phase one",
+            aliases: ["They'd be closed phase one"]
+        ),
+        defaultRecord(
+            id: "builtin.it-would-add-extra",
+            canonical: "It would add extra",
+            aliases: ["It'd be add extra"]
+        ),
+        defaultRecord(
+            id: "builtin.text-is-redundant",
+            canonical: "text is redundant and what you can remove",
+            aliases: ["text is redundant, and you can remove"]
+        ),
+        defaultRecord(
+            id: "builtin.three-letter-code",
+            canonical: "three-letter code",
+            aliases: ["3 litter code", "three litter code"]
+        ),
+        defaultRecord(id: "builtin.two-tickets", canonical: "two tickets", aliases: ["2 tickets"]),
+        defaultRecord(id: "builtin.two-things", canonical: "two things", aliases: ["2 things"]),
+        defaultRecord(id: "builtin.part-two", canonical: "part two", aliases: ["part 2"]),
+        defaultRecord(
+            id: "builtin.add-comment-ticket",
+            canonical: "Add a comment to the ticket",
+            aliases: ["At a comment to the ticket"]
+        ),
+        defaultRecord(
+            id: "builtin.add-comment-tickets",
+            canonical: "Add a comment to the tickets",
+            aliases: ["I recommend to the tickets"]
+        ),
+        defaultRecord(id: "builtin.codebase", canonical: "codebase", aliases: ["code basis", "code base"]),
+        defaultRecord(id: "builtin.unslopify", canonical: "unslopify", aliases: ["unslop the fight"]),
+        defaultRecord(
+            id: "builtin.claude-vibe-coding",
+            canonical: "Claude has been vibe coding",
+            aliases: ["Plot has been vibe coding"]
+        ),
+        defaultRecord(
+            id: "builtin.different-than-main",
+            canonical: "different than main",
+            aliases: ["different than Maine"]
+        ),
+        defaultRecord(
+            id: "builtin.different-from-main",
+            canonical: "different from main",
+            aliases: ["different from Maine"]
+        ),
+        defaultRecord(
+            id: "builtin.regressions-suite",
+            canonical: "regressions in the suite",
+            aliases: ["regressions in the sweet"]
+        ),
+        defaultRecord(id: "builtin.slash", kind: .spokenCommand, canonical: "/", aliases: ["slash"]),
+        defaultRecord(
+            id: "builtin.cmux",
+            canonical: "CMUX",
+            aliases: ["CMUX", "simux", "siemux", "semux", "cmox", "c m u x", "c mux", "see mux", "sea mux"]
+        ),
+        // "suite"/"sweet" are homophones, so the recognizer renders the spoken brand as
+        // a two-word common phrase ("net suite", "Net Sweet"). The "NetSuite" alias is the
+        // already-correct/no-space form; case-insensitive matching folds in the rest.
+        defaultRecord(
+            id: "builtin.netsuite",
+            canonical: "NetSuite",
+            aliases: ["NetSuite", "net suite", "net sweet", "net suit"]
+        ),
+        defaultRecord(
+            id: "builtin.netsuite-login",
+            canonical: "NetSuite login",
+            aliases: ["net suite login", "next week login"]
+        ),
+        defaultRecord(
+            id: "builtin.netsuite-ticket",
+            canonical: "NetSuite ticket",
+            aliases: ["next week ticket"]
+        ),
+        defaultRecord(
+            id: "builtin.open-netsuite",
+            canonical: "Open NetSuite",
+            aliases: ["Open that suite", "Open next feed"]
+        ),
+        defaultRecord(
+            id: "builtin.teams-message",
+            canonical: "Teams message",
+            aliases: ["team's message", "team s message"]
+        ),
+        defaultRecord(
+            id: "builtin.agents-md",
+            canonical: "AGENTS.md",
+            aliases: ["AGENTS.md", "agents dot md", "agents dot m d", "agents md", "agents dot markdown"]
+        ),
+        defaultRecord(
+            id: "builtin.readme-md",
+            canonical: "README.md",
+            aliases: ["README.md", "read me dot md", "readme dot md", "read me md"]
+        ),
+        defaultRecord(
+            id: "builtin.project-yml",
+            canonical: "project.yml",
+            aliases: ["project.yml", "project.yaml", "project.yamo", "project dot yml", "project dot yaml"]
+        ),
+        defaultRecord(
+            id: "builtin.updates-to-claude-md",
+            canonical: "updates to CLAUDE.md",
+            aliases: ["updates to the CLAUDE.md", "updates to the cloud.MD"]
+        ),
+        defaultRecord(id: "builtin.env", canonical: ".env", aliases: ["dot env"]),
+        // Developer-token shorthands. Plain alias->canonical, so they ride the same
+        // engine as user rules; only the flag-prefix form stays in TranscriptCanonicalizer.
+        defaultRecord(
+            id: "builtin.dash-dash",
+            kind: .spokenCommand,
+            canonical: "--",
+            aliases: ["dash dash"]
+        ),
+        defaultRecord(
+            id: "builtin.slash-goal",
+            kind: .spokenCommand,
+            canonical: "/goal",
+            aliases: ["slash goal"]
+        ),
+        defaultRecord(
+            id: "builtin.dollar-home",
+            kind: .spokenCommand,
+            canonical: "$HOME",
+            aliases: ["dollar home"]
+        )
+    ]
+
+    private static func defaultRecord(
+        id: String,
+        kind: CorrectionRecord.Kind = .replacement,
+        canonical: String,
+        aliases: [String],
+        contexts: [String] = []
+    ) -> CorrectionRecord {
         CorrectionRecord(
-            id: Self.defaultRecordID(index: index, canonical: rule.canonical),
-            kind: .replacement,
-            canonical: rule.canonical,
-            aliases: rule.aliases,
-            contexts: rule.contexts,
+            id: id,
+            kind: kind,
+            canonical: canonical,
+            aliases: aliases,
+            contexts: contexts,
             source: .builtIn,
             status: .active
         )
-    }
-
-    private static func defaultRecordID(index: Int, canonical: String) -> String {
-        let slug = canonical
-            .lowercased()
-            .split { !$0.isLetter && !$0.isNumber }
-            .joined(separator: "-")
-        let suffix = slug.isEmpty ? "symbol" : slug
-        return "builtin.\(index).\(suffix)"
     }
 }
 
