@@ -48,8 +48,12 @@ enum CorrectionPhraseDiff {
 
         let observedEnd = observedWords.count - suffixCount
         let editedEnd = editedWords.count - suffixCount
-        let alias = observedWords[prefixCount..<observedEnd].joined(separator: " ")
-        let canonical = editedWords[prefixCount..<editedEnd].joined(separator: " ")
+        let phrase = trimmingSharedTrailingPunctuation(
+            alias: observedWords[prefixCount..<observedEnd].joined(separator: " "),
+            canonical: editedWords[prefixCount..<editedEnd].joined(separator: " ")
+        )
+        let alias = phrase.alias
+        let canonical = phrase.canonical
         guard !alias.isEmpty, !canonical.isEmpty else { return nil }
         guard normalizedPhrase(alias) != normalizedPhrase(canonical) else { return nil }
         return CorrectionPhraseReplacement(alias: alias, canonical: canonical)
@@ -77,4 +81,24 @@ enum CorrectionPhraseDiff {
     static func words(in text: String) -> [String] {
         text.split { $0.isWhitespace }.map(String.init)
     }
+
+    private static func trimmingSharedTrailingPunctuation(
+        alias: String,
+        canonical: String
+    ) -> (alias: String, canonical: String) {
+        var alias = alias
+        var canonical = canonical
+
+        while let aliasLast = alias.last,
+              let canonicalLast = canonical.last,
+              aliasLast == canonicalLast,
+              trailingSentencePunctuation.contains(aliasLast) {
+            alias.removeLast()
+            canonical.removeLast()
+        }
+
+        return (alias.trimmingCharacters(in: .whitespaces), canonical.trimmingCharacters(in: .whitespaces))
+    }
+
+    private static let trailingSentencePunctuation: Set<Character> = [".", ",", "!", "?"]
 }

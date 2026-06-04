@@ -61,6 +61,127 @@ final class CorrectionEvidenceTests: XCTestCase {
         XCTAssertTrue(CorrectionRuleCompiler.compile(records: suggestions).isEmpty)
     }
 
+    func testEditedMissEvidenceTrimsSentencePunctuationFromSuggestedRecord() throws {
+        let evidence = CorrectionEvidence(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "open widget pro.",
+            canonicalizedTranscript: "open widget pro.",
+            finalInsertedTranscript: "open widget pro.",
+            userEditedTranscript: "open WidgetPro.",
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        )
+
+        let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
+
+        XCTAssertEqual(suggested.canonical, "WidgetPro")
+        XCTAssertEqual(suggested.aliases, ["widget pro"])
+
+        let accepted = CorrectionRecord(
+            id: suggested.id,
+            kind: suggested.kind,
+            canonical: suggested.canonical,
+            aliases: suggested.aliases,
+            source: suggested.source,
+            status: .active
+        )
+        let canonicalizer = TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: [accepted]))
+        XCTAssertEqual(canonicalizer.canonicalize("open widget pro."), "open WidgetPro.")
+    }
+
+    func testEditedMissEvidencePreservesInternalCanonicalPunctuation() throws {
+        let evidence = CorrectionEvidence(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "edit agents dot md,",
+            canonicalizedTranscript: "edit agents dot md,",
+            finalInsertedTranscript: "edit agents dot md,",
+            userEditedTranscript: "edit AGENTS.md,",
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        )
+
+        let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
+
+        XCTAssertEqual(suggested.canonical, "AGENTS.md")
+        XCTAssertEqual(suggested.aliases, ["agents dot md"])
+    }
+
+    func testEditedMissEvidencePreservesMeaningfulEdgePunctuation() throws {
+        let suggestions = CorrectionCandidateSuggester.suggestedRecords(from: [
+            CorrectionEvidence(
+                id: "evidence-1",
+                observedAt: Date(timeIntervalSince1970: 1),
+                recordingID: "rec-1",
+                rawTranscript: "open git ignore",
+                canonicalizedTranscript: "open git ignore",
+                finalInsertedTranscript: "open git ignore",
+                userEditedTranscript: "open .gitignore",
+                appliedRuleIDs: [],
+                polishOutcome: "disabled",
+                engineOutcome: nil,
+                guardRejectionReason: nil
+            ),
+            CorrectionEvidence(
+                id: "evidence-2",
+                observedAt: Date(timeIntervalSince1970: 2),
+                recordingID: "rec-2",
+                rawTranscript: "call foo parens",
+                canonicalizedTranscript: "call foo parens",
+                finalInsertedTranscript: "call foo parens",
+                userEditedTranscript: "call foo()",
+                appliedRuleIDs: [],
+                polishOutcome: "disabled",
+                engineOutcome: nil,
+                guardRejectionReason: nil
+            ),
+            CorrectionEvidence(
+                id: "evidence-3",
+                observedAt: Date(timeIntervalSince1970: 3),
+                recordingID: "rec-3",
+                rawTranscript: "call widget pro()",
+                canonicalizedTranscript: "call widget pro()",
+                finalInsertedTranscript: "call widget pro()",
+                userEditedTranscript: "call WidgetPro()",
+                appliedRuleIDs: [],
+                polishOutcome: "disabled",
+                engineOutcome: nil,
+                guardRejectionReason: nil
+            )
+        ])
+
+        XCTAssertEqual(suggestions.map(\.canonical), [".gitignore", "foo()", "WidgetPro()"])
+        XCTAssertEqual(suggestions.map(\.aliases), [["git ignore"], ["foo parens"], ["widget pro()"]])
+    }
+
+    func testEditedMissEvidencePreservesSharedMeaningfulLeadingPunctuation() throws {
+        let evidence = CorrectionEvidence(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "open .git ignore",
+            canonicalizedTranscript: "open .git ignore",
+            finalInsertedTranscript: "open .git ignore",
+            userEditedTranscript: "open .gitignore",
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        )
+
+        let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
+
+        XCTAssertEqual(suggested.canonical, ".gitignore")
+        XCTAssertEqual(suggested.aliases, [".git ignore"])
+    }
+
     func testEvidenceStoreUpdatesExistingRowWithObservedUserEdit() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))

@@ -12,7 +12,7 @@ public struct Settings: Equatable, Sendable {
         launchAtLogin: Bool = false,
         localeIdentifier: String = "en-US",
         saveAudioSamples: Bool = false,
-        saveCorrectionEvidence: Bool = true,
+        saveCorrectionEvidence: Bool = false,
         polishEnabled: Bool = false
     ) {
         self.launchAtLogin = launchAtLogin
@@ -35,7 +35,7 @@ public struct Settings: Equatable, Sendable {
             launchAtLogin: defaults.bool(forKey: Key.launchAtLogin),
             localeIdentifier: defaults.string(forKey: Key.localeIdentifier) ?? "en-US",
             saveAudioSamples: defaults.bool(forKey: Key.saveAudioSamples),
-            saveCorrectionEvidence: defaults.object(forKey: Key.saveCorrectionEvidence) as? Bool ?? true,
+            saveCorrectionEvidence: defaults.bool(forKey: Key.saveCorrectionEvidence),
             polishEnabled: defaults.bool(forKey: Key.polishEnabled)
         )
     }

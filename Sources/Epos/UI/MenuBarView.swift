@@ -6,7 +6,7 @@ public struct MenuBarView: View {
     @State private var permissions: PermissionsSnapshot?
     @State private var launchAtLogin = false
     @State private var saveAudioSamples = false
-    @State private var saveCorrectionEvidence = true
+    @State private var saveCorrectionEvidence = false
     @State private var polishEnabled = false
 
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
