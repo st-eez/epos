@@ -97,6 +97,23 @@ struct SpeechContextEvalSummary {
                     bestCanonicalizedAlternativeTranscript
             )
         }
+        if let alternativeReranking = row.alternativeReranking {
+            var rerankingLine = "  reranked \(alternativeReranking.rule): " +
+                "selectedAlt=\(alternativeReranking.selectedAlternative) " +
+                "candidates=\(alternativeReranking.candidateCount) " +
+                "topConfidence=\(Self.formatOptionalScore(alternativeReranking.topConfidenceMean))"
+            if let confidenceDelta = alternativeReranking.confidenceDelta {
+                rerankingLine += " confidenceDelta=\(Self.formatSignedScore(confidenceDelta))"
+            }
+            if let score = alternativeReranking.transcriptScore {
+                rerankingLine += " WER=\(Self.formatScore(score.wordErrorRate))"
+            }
+            if let score = alternativeReranking.canonicalizedTranscriptScore {
+                rerankingLine += " canWER=\(Self.formatScore(score.wordErrorRate))"
+            }
+            rerankingLine += " \(alternativeReranking.selectedTranscript)"
+            lines.append(rerankingLine)
+        }
     }
 
     private func tags(for row: SpeechContextEvalRow) -> [String] {
@@ -116,6 +133,13 @@ struct SpeechContextEvalSummary {
         if row.bestAlternativeMatchesIntended { tags.append("ALT-WER-ZERO") }
         if row.bestCanonicalizedAlternativeImprovesVariant { tags.append("ALT-CAN-WER-BETTER") }
         if row.bestCanonicalizedAlternativeMatchesIntended { tags.append("ALT-CAN-WER-ZERO") }
+        if row.rerankedAlternativeSelected { tags.append("RERANK-ALT") }
+        if row.rerankedAlternativeImprovesVariant { tags.append("RERANK-WER-BETTER") }
+        if row.rerankedAlternativeWorsensVariant { tags.append("RERANK-WER-WORSE") }
+        if row.rerankedAlternativeMatchesIntended { tags.append("RERANK-WER-ZERO") }
+        if row.rerankedCanonicalizedAlternativeImprovesVariant { tags.append("RERANK-CAN-WER-BETTER") }
+        if row.rerankedCanonicalizedAlternativeWorsensVariant { tags.append("RERANK-CAN-WER-WORSE") }
+        if row.rerankedCanonicalizedAlternativeMatchesIntended { tags.append("RERANK-CAN-WER-ZERO") }
         return tags
     }
 
@@ -129,6 +153,10 @@ struct SpeechContextEvalSummary {
 
     private static func formatScore(_ score: Double) -> String {
         String(format: "%.3f", score)
+    }
+
+    private static func formatSignedScore(_ score: Double) -> String {
+        String(format: "%+.3f", score)
     }
 
     private static func formatOptionalScore(_ score: Double?) -> String {
@@ -155,10 +183,21 @@ struct SpeechContextEvalSummary {
         var perfectAlternativeRows = 0
         var betterCanonicalizedAlternativeRows = 0
         var perfectCanonicalizedAlternativeRows = 0
+        var rerankedAlternativeSelectedRows = 0
+        var rerankedAlternativeBetterRows = 0
+        var rerankedAlternativeWorseRows = 0
+        var rerankedAlternativePerfectRows = 0
+        var rerankedCanonicalizedAlternativeBetterRows = 0
+        var rerankedCanonicalizedAlternativeWorseRows = 0
+        var rerankedCanonicalizedAlternativePerfectRows = 0
         var totalBaselineRawWER = 0.0
         var totalVariantRawWER = 0.0
         var totalBaselineCanonicalizedWER = 0.0
         var totalVariantCanonicalizedWER = 0.0
+        var totalOracleAlternativeRawWER = 0.0
+        var totalOracleAlternativeCanonicalizedWER = 0.0
+        var totalRerankedRawWER = 0.0
+        var totalRerankedCanonicalizedWER = 0.0
         var elapsedDeltaTotal = 0.0
 
         mutating func add(_ row: SpeechContextEvalRow) {
@@ -174,6 +213,18 @@ struct SpeechContextEvalSummary {
                 totalVariantRawWER += variantTranscriptScore.wordErrorRate
                 totalBaselineCanonicalizedWER += baselineCanonicalizedTranscriptScore.wordErrorRate
                 totalVariantCanonicalizedWER += variantCanonicalizedTranscriptScore.wordErrorRate
+                totalOracleAlternativeRawWER += bestScore(
+                    variantTranscriptScore,
+                    row.bestAlternativeTranscriptScore
+                ).wordErrorRate
+                totalOracleAlternativeCanonicalizedWER += bestScore(
+                    variantCanonicalizedTranscriptScore,
+                    row.bestCanonicalizedAlternativeTranscriptScore
+                ).wordErrorRate
+                totalRerankedRawWER += row.alternativeReranking?.transcriptScore?.wordErrorRate
+                    ?? variantTranscriptScore.wordErrorRate
+                totalRerankedCanonicalizedWER += row.alternativeReranking?.canonicalizedTranscriptScore?.wordErrorRate
+                    ?? variantCanonicalizedTranscriptScore.wordErrorRate
             }
             if row.rawChanged { rawChanged += 1 }
             if row.canonicalizedChanged { canonicalizedChanged += 1 }
@@ -191,6 +242,19 @@ struct SpeechContextEvalSummary {
             if row.bestAlternativeMatchesIntended { perfectAlternativeRows += 1 }
             if row.bestCanonicalizedAlternativeImprovesVariant { betterCanonicalizedAlternativeRows += 1 }
             if row.bestCanonicalizedAlternativeMatchesIntended { perfectCanonicalizedAlternativeRows += 1 }
+            if row.rerankedAlternativeSelected { rerankedAlternativeSelectedRows += 1 }
+            if row.rerankedAlternativeImprovesVariant { rerankedAlternativeBetterRows += 1 }
+            if row.rerankedAlternativeWorsensVariant { rerankedAlternativeWorseRows += 1 }
+            if row.rerankedAlternativeMatchesIntended { rerankedAlternativePerfectRows += 1 }
+            if row.rerankedCanonicalizedAlternativeImprovesVariant {
+                rerankedCanonicalizedAlternativeBetterRows += 1
+            }
+            if row.rerankedCanonicalizedAlternativeWorsensVariant {
+                rerankedCanonicalizedAlternativeWorseRows += 1
+            }
+            if row.rerankedCanonicalizedAlternativeMatchesIntended {
+                rerankedCanonicalizedAlternativePerfectRows += 1
+            }
         }
 
         func report(variant: String) -> String {
@@ -211,11 +275,23 @@ struct SpeechContextEvalSummary {
                         "\(formatMean(totalVariantRawWER, groundTruthRows)) " +
                         "can base/ctx=\(formatMean(totalBaselineCanonicalizedWER, groundTruthRows))/" +
                         "\(formatMean(totalVariantCanonicalizedWER, groundTruthRows)) " +
+                        "oracle upper-bound raw/can=" +
+                        "\(formatMean(totalOracleAlternativeRawWER, groundTruthRows))/" +
+                        "\(formatMean(totalOracleAlternativeCanonicalizedWER, groundTruthRows)) " +
+                        "reranked raw/can=\(formatMean(totalRerankedRawWER, groundTruthRows))/" +
+                        "\(formatMean(totalRerankedCanonicalizedWER, groundTruthRows)) " +
                         "raw WER better/worse=\(rawWERBetter)/\(rawWERWorse) " +
                         "can WER better/worse=\(canonicalizedWERBetter)/\(canonicalizedWERWorse) " +
                         "best alternatives better/perfect=\(betterAlternativeRows)/\(perfectAlternativeRows) " +
                         "best canonicalized alternatives better/perfect=" +
-                        "\(betterCanonicalizedAlternativeRows)/\(perfectCanonicalizedAlternativeRows)"
+                        "\(betterCanonicalizedAlternativeRows)/\(perfectCanonicalizedAlternativeRows) " +
+                        "reranked selected/better/worse/perfect=" +
+                        "\(rerankedAlternativeSelectedRows)/\(rerankedAlternativeBetterRows)/" +
+                        "\(rerankedAlternativeWorseRows)/\(rerankedAlternativePerfectRows) " +
+                        "reranked can better/worse/perfect=" +
+                        "\(rerankedCanonicalizedAlternativeBetterRows)/" +
+                        "\(rerankedCanonicalizedAlternativeWorseRows)/" +
+                        "\(rerankedCanonicalizedAlternativePerfectRows)"
                 )
             }
             return parts.joined(separator: " ")
@@ -223,6 +299,17 @@ struct SpeechContextEvalSummary {
 
         private func formatMean(_ total: Double, _ count: Int) -> String {
             String(format: "%.3f", total / Double(count))
+        }
+
+        private func bestScore(
+            _ first: TranscriptWordErrorScore,
+            _ second: TranscriptWordErrorScore?
+        ) -> TranscriptWordErrorScore {
+            guard let second else { return first }
+            if second.wordErrorRate != first.wordErrorRate {
+                return second.wordErrorRate < first.wordErrorRate ? second : first
+            }
+            return second.wordErrors < first.wordErrors ? second : first
         }
     }
 }

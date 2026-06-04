@@ -42,6 +42,112 @@ struct SpeechContextVariantResult {
     let elapsedSeconds: Double
 }
 
+struct AlternativeTranscriptRerankingEvalResult: Codable, Equatable {
+    let rule: String
+    let candidateCount: Int
+    let selectedTranscript: String
+    let selectedAlternativeTranscript: String?
+    let selectedAlternativeConfidenceMean: Double?
+    let topConfidenceMean: Double?
+    let confidenceDelta: Double?
+    let transcriptScore: TranscriptWordErrorScore?
+    let canonicalizedTranscript: String
+    let canonicalizedTranscriptScore: TranscriptWordErrorScore?
+
+    var selectedAlternative: Bool {
+        selectedAlternativeTranscript != nil
+    }
+
+    func scored(reference: String?, canonicalizedTranscript: String) -> AlternativeTranscriptRerankingEvalResult {
+        AlternativeTranscriptRerankingEvalResult(
+            rule: rule,
+            candidateCount: candidateCount,
+            selectedTranscript: selectedTranscript,
+            selectedAlternativeTranscript: selectedAlternativeTranscript,
+            selectedAlternativeConfidenceMean: selectedAlternativeConfidenceMean,
+            topConfidenceMean: topConfidenceMean,
+            confidenceDelta: confidenceDelta,
+            transcriptScore: reference.map {
+                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: selectedTranscript)
+            },
+            canonicalizedTranscript: canonicalizedTranscript,
+            canonicalizedTranscriptScore: reference.map {
+                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: canonicalizedTranscript)
+            }
+        )
+    }
+}
+
+enum AlternativeTranscriptReranker {
+    static let ruleName = "highestAlternativeMeanConfidence"
+
+    static func rerank(
+        topTranscript: String,
+        topConfidenceMean: Double?,
+        candidates: [SavedRecordingEvalSupport.AlternativeTranscriptCandidate]
+    ) -> AlternativeTranscriptRerankingEvalResult {
+        let trimmedTopTranscript = topTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let bestCandidate = bestCandidate(
+            topTranscript: trimmedTopTranscript,
+            candidates: candidates
+        ) else {
+            return AlternativeTranscriptRerankingEvalResult(
+                rule: ruleName,
+                candidateCount: candidates.count,
+                selectedTranscript: trimmedTopTranscript,
+                selectedAlternativeTranscript: nil,
+                selectedAlternativeConfidenceMean: nil,
+                topConfidenceMean: topConfidenceMean,
+                confidenceDelta: nil,
+                transcriptScore: nil,
+                canonicalizedTranscript: trimmedTopTranscript,
+                canonicalizedTranscriptScore: nil
+            )
+        }
+
+        return AlternativeTranscriptRerankingEvalResult(
+            rule: ruleName,
+            candidateCount: candidates.count,
+            selectedTranscript: bestCandidate.text,
+            selectedAlternativeTranscript: bestCandidate.text,
+            selectedAlternativeConfidenceMean: bestCandidate.confidenceMean,
+            topConfidenceMean: topConfidenceMean,
+            confidenceDelta: topConfidenceMean.map { bestCandidate.confidenceMean - $0 },
+            transcriptScore: nil,
+            canonicalizedTranscript: bestCandidate.text,
+            canonicalizedTranscriptScore: nil
+        )
+    }
+
+    private static func bestCandidate(
+        topTranscript: String,
+        candidates: [SavedRecordingEvalSupport.AlternativeTranscriptCandidate]
+    ) -> (text: String, confidenceMean: Double, index: Int)? {
+        let normalizedTopTranscript = normalized(topTranscript)
+        var ranked: [(text: String, confidenceMean: Double, index: Int)] = []
+        for (index, candidate) in candidates.enumerated() {
+            let text = candidate.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty else { continue }
+            guard normalized(text) != normalizedTopTranscript else { continue }
+            guard let confidenceMean = candidate.confidenceMean else { continue }
+            ranked.append((text: text, confidenceMean: confidenceMean, index: index))
+        }
+        return ranked.sorted { lhs, rhs in
+            if lhs.confidenceMean != rhs.confidenceMean {
+                return lhs.confidenceMean > rhs.confidenceMean
+            }
+            if lhs.text.count != rhs.text.count {
+                return lhs.text.count < rhs.text.count
+            }
+            return lhs.index < rhs.index
+        }.first
+    }
+
+    private static func normalized(_ text: String) -> String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+}
+
 struct SpeechContextEvalRow: Codable {
     let file: String
     let localeIdentifier: String
@@ -74,6 +180,7 @@ struct SpeechContextEvalRow: Codable {
     let bestCanonicalizedAlternativeTranscript: String?
     let bestCanonicalizedAlternativeTranscriptScore: TranscriptWordErrorScore?
     let bestCanonicalizedAlternativeTranscriptConfidenceMean: Double?
+    let alternativeReranking: AlternativeTranscriptRerankingEvalResult?
     let baselineElapsedSeconds: Double
     let variantElapsedSeconds: Double
 
@@ -111,5 +218,32 @@ struct SpeechContextEvalRow: Codable {
     }
     var bestCanonicalizedAlternativeMatchesIntended: Bool {
         bestCanonicalizedAlternativeTranscriptScore?.wordErrorRate == 0
+    }
+    var rerankedAlternativeSelected: Bool { alternativeReranking?.selectedAlternative ?? false }
+    var rerankedAlternativeImprovesVariant: Bool {
+        guard let rerankedScore = alternativeReranking?.transcriptScore,
+              let variantTranscriptScore else { return false }
+        return rerankedScore.wordErrorRate < variantTranscriptScore.wordErrorRate
+    }
+    var rerankedAlternativeWorsensVariant: Bool {
+        guard let rerankedScore = alternativeReranking?.transcriptScore,
+              let variantTranscriptScore else { return false }
+        return rerankedScore.wordErrorRate > variantTranscriptScore.wordErrorRate
+    }
+    var rerankedAlternativeMatchesIntended: Bool {
+        alternativeReranking?.transcriptScore?.wordErrorRate == 0
+    }
+    var rerankedCanonicalizedAlternativeImprovesVariant: Bool {
+        guard let rerankedScore = alternativeReranking?.canonicalizedTranscriptScore,
+              let variantCanonicalizedTranscriptScore else { return false }
+        return rerankedScore.wordErrorRate < variantCanonicalizedTranscriptScore.wordErrorRate
+    }
+    var rerankedCanonicalizedAlternativeWorsensVariant: Bool {
+        guard let rerankedScore = alternativeReranking?.canonicalizedTranscriptScore,
+              let variantCanonicalizedTranscriptScore else { return false }
+        return rerankedScore.wordErrorRate > variantCanonicalizedTranscriptScore.wordErrorRate
+    }
+    var rerankedCanonicalizedAlternativeMatchesIntended: Bool {
+        alternativeReranking?.canonicalizedTranscriptScore?.wordErrorRate == 0
     }
 }

@@ -133,6 +133,11 @@ final class SpeechContextEvalTests: XCTestCase {
                         reference: reference
                     )
                 }
+                let alternativeReranking = Self.alternativeReranking(
+                    result: result,
+                    canonicalizer: canonicalizer,
+                    humanIntendedTranscript: humanIntendedTranscript
+                )
 
                 let row = SpeechContextEvalRow(
                     file: recording.lastPathComponent,
@@ -166,6 +171,7 @@ final class SpeechContextEvalTests: XCTestCase {
                     bestCanonicalizedAlternativeTranscript: bestCanonicalizedAlternative?.text,
                     bestCanonicalizedAlternativeTranscriptScore: bestCanonicalizedAlternative?.score,
                     bestCanonicalizedAlternativeTranscriptConfidenceMean: bestCanonicalizedAlternative?.confidenceMean,
+                    alternativeReranking: alternativeReranking,
                     baselineElapsedSeconds: baseline.elapsedSeconds,
                     variantElapsedSeconds: result.elapsedSeconds
                 )
@@ -193,6 +199,23 @@ final class SpeechContextEvalTests: XCTestCase {
             return recordings
         }
         return recordings.filter { manifest.transcript(for: $0) != nil }
+    }
+
+    private static func alternativeReranking(
+        result: SpeechContextVariantResult,
+        canonicalizer: TranscriptCanonicalizer,
+        humanIntendedTranscript: String?
+    ) -> AlternativeTranscriptRerankingEvalResult? {
+        guard result.includeAlternatives else { return nil }
+        let selection = AlternativeTranscriptReranker.rerank(
+            topTranscript: result.text,
+            topConfidenceMean: result.confidenceMean,
+            candidates: result.alternativeTranscriptCandidates
+        )
+        return selection.scored(
+            reference: humanIntendedTranscript,
+            canonicalizedTranscript: canonicalizer.canonicalize(selection.selectedTranscript)
+        )
     }
 
     private static func bestAlternativeTranscript(

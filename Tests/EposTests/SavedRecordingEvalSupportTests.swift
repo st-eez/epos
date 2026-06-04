@@ -157,6 +157,74 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
         XCTAssertTrue(row.bestCanonicalizedAlternativeMatchesIntended)
     }
 
+    func testAlternativeRerankerSelectsHighestConfidenceCandidate() {
+        let lowerConfidence = SavedRecordingEvalSupport.AlternativeTranscriptCandidate(
+            text: "Open project yamo.",
+            confidenceMean: 0.72
+        )
+        let higherConfidence = SavedRecordingEvalSupport.AlternativeTranscriptCandidate(
+            text: "Open project.yml.",
+            confidenceMean: 0.83
+        )
+
+        let selected = AlternativeTranscriptReranker.rerank(
+            topTranscript: "Open project yamo.",
+            topConfidenceMean: 0.80,
+            candidates: [lowerConfidence, higherConfidence]
+        )
+
+        XCTAssertEqual(selected.selectedTranscript, "Open project.yml.")
+        XCTAssertEqual(selected.selectedAlternativeTranscript, "Open project.yml.")
+        XCTAssertEqual(try XCTUnwrap(selected.confidenceDelta), 0.03, accuracy: 0.000_001)
+        XCTAssertEqual(selected.rule, "highestAlternativeMeanConfidence")
+    }
+
+    func testAlternativeRerankerKeepsTopTranscriptWhenCandidatesHaveNoConfidence() {
+        let candidate = SavedRecordingEvalSupport.AlternativeTranscriptCandidate(
+            text: "Open project.yml.",
+            confidenceMean: nil
+        )
+
+        let unchanged = AlternativeTranscriptReranker.rerank(
+            topTranscript: "Open project yamo.",
+            topConfidenceMean: 0.84,
+            candidates: [candidate]
+        )
+
+        XCTAssertEqual(unchanged.selectedTranscript, "Open project yamo.")
+        XCTAssertNil(unchanged.selectedAlternativeTranscript)
+    }
+
+    func testSpeechContextEvalRowScoresRerankedAlternativeAgainstGroundTruth() {
+        let rerankingScore = PolishEvalScoring.wordErrorScore(
+            reference: "Open project.yml.",
+            hypothesis: "Open project.yml."
+        )
+        let row = makeSpeechContextEvalRow(
+            reference: "Open project.yml.",
+            baselineText: "Open project yamo.",
+            variantText: "Open project yamo.",
+            alternativeReranking: AlternativeTranscriptRerankingEvalResult(
+                rule: "highestAlternativeMeanConfidence",
+                candidateCount: 1,
+                selectedTranscript: "Open project.yml.",
+                selectedAlternativeTranscript: "Open project.yml.",
+                selectedAlternativeConfidenceMean: 0.83,
+                topConfidenceMean: 0.80,
+                confidenceDelta: 0.03,
+                transcriptScore: rerankingScore,
+                canonicalizedTranscript: "Open project.yml.",
+                canonicalizedTranscriptScore: rerankingScore
+            )
+        )
+
+        XCTAssertTrue(row.rerankedAlternativeSelected)
+        XCTAssertTrue(row.rerankedAlternativeImprovesVariant)
+        XCTAssertTrue(row.rerankedAlternativeMatchesIntended)
+        XCTAssertTrue(row.rerankedCanonicalizedAlternativeImprovesVariant)
+        XCTAssertTrue(row.rerankedCanonicalizedAlternativeMatchesIntended)
+    }
+
     private func makeTemporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -172,7 +240,8 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
         reference: String,
         baselineText: String,
         variantText: String,
-        bestAlternativeTranscript: String? = nil
+        bestAlternativeTranscript: String? = nil,
+        alternativeReranking: AlternativeTranscriptRerankingEvalResult? = nil
     ) -> SpeechContextEvalRow {
         let baselineScore = PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: baselineText)
         let variantScore = PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: variantText)
@@ -211,6 +280,7 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
             bestCanonicalizedAlternativeTranscript: bestAlternativeTranscript,
             bestCanonicalizedAlternativeTranscriptScore: bestAlternativeScore,
             bestCanonicalizedAlternativeTranscriptConfidenceMean: bestAlternativeTranscript == nil ? nil : 0.9,
+            alternativeReranking: alternativeReranking,
             baselineElapsedSeconds: 1,
             variantElapsedSeconds: 1
         )

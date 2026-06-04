@@ -54,6 +54,7 @@ Lever files live under `specs/ollama-polish-levers/`; use
 | Ground-truth 80 canonicalizer expansion | `specs/ollama-polish-levers/L9-ground-truth80-canonicalizer.md` | implemented+verified | Expanded manifest to 80 inferred rows; added narrow domain/exact canonicalizer aliases that dropped output WER from 0.039 to 0.003 with 18 wins and 0 regressions |
 | Holdout generalization pass | `specs/ollama-polish-levers/L10-holdout-generalization.md` | implemented+verified | Added 34 unseen holdout rows; scoped canonicalizer aliases dropped holdout output WER from 0.067 to 0.024 and combined 114-row output WER from 0.022 to 0.009 with no baseline80 regression |
 | Primary accuracy refresh | `specs/ollama-polish-levers/L11-primary-accuracy-refresh.md` | implemented+verified | Current 114-row scoreboard remains raw/can/out mean WER 0.076/0.011/0.009; remaining headroom is alternatives/reranking, where Apple Speech alternatives contain perfect transcripts for 4 of 10 residual rows |
+| Alternative reranking eval prototype | `specs/ollama-polish-levers/L12-alternative-reranking-eval.md` | implemented+verified | Oracle alternatives can lower canonicalized upper-bound WER from 0.011 to 0.009, but highest-confidence alternative reranking regresses badly at 0.061 canonicalized WER; do not ship confidence-only selection |
 
 ## Read First
 
