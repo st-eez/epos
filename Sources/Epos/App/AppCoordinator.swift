@@ -40,7 +40,8 @@ public final class AppCoordinator: ObservableObject {
     private let permissions: PermissionsGate
     private let assets: AssetManager
     private let recordingIDGenerator: @Sendable () -> String
-    private let observedEditCaptureDelay: TimeInterval
+    public static let defaultObservedEditCaptureDelays: [TimeInterval] = [2, 6, 12, 15]
+    private let observedEditCaptureDelays: [TimeInterval]
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
     /// editor mutates the same instance (the app hands the editor `coordinator.corrections`).
     public let corrections = CorrectionStore()
@@ -53,7 +54,7 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     private var captureFormat: AVAudioFormat?
     private var textInsertionSession: ProgressiveTranscriptInsertionSession?
-    private var observedEditCaptureWorkItem: DispatchWorkItem?
+    private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
     /// Set when a press arrives during the finalize/polish window (state != .idle),
     /// where `startRecording` would otherwise silently drop it. The press also abandons
@@ -81,7 +82,7 @@ public final class AppCoordinator: ObservableObject {
         diagnostics: DiagnosticLogSink = .shared,
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
-        observedEditCaptureDelay: TimeInterval = 1.5,
+        observedEditCaptureDelays: [TimeInterval] = AppCoordinator.defaultObservedEditCaptureDelays,
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
@@ -91,7 +92,7 @@ public final class AppCoordinator: ObservableObject {
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
-        self.observedEditCaptureDelay = observedEditCaptureDelay
+        self.observedEditCaptureDelays = observedEditCaptureDelays
         self.settings = settings
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
@@ -213,6 +214,7 @@ public final class AppCoordinator: ObservableObject {
             log.error("cannot start: capture format unavailable (bootstrap incomplete?)")
             return
         }
+        cancelObservedEditCaptureChecks()
         state = .recording
         let recordingID = recordingIDGenerator()
         currentRecordingID = recordingID
@@ -432,33 +434,42 @@ public final class AppCoordinator: ObservableObject {
         finalInsertedTranscript: String,
         session: ProgressiveTranscriptInsertionSession?
     ) {
+        cancelObservedEditCaptureChecks()
         guard let session else { return }
 
-        observedEditCaptureWorkItem?.cancel()
-        guard observedEditCaptureDelay > 0 else {
-            captureObservedUserEdit(
-                evidenceID: evidenceID,
-                finalInsertedTranscript: finalInsertedTranscript,
-                session: session
-            )
-            return
-        }
+        let delays = observedEditCaptureDelays.isEmpty ? [0] : observedEditCaptureDelays
 
-        let workItem = DispatchWorkItem { [weak self, session, evidenceID, finalInsertedTranscript] in
-            guard let self else { return }
-            _ = MainActor.assumeIsolated {
-                self.captureObservedUserEdit(
+        for delay in delays {
+            guard delay > 0 else {
+                if captureObservedUserEdit(
                     evidenceID: evidenceID,
                     finalInsertedTranscript: finalInsertedTranscript,
                     session: session
-                )
+                ) {
+                    cancelObservedEditCaptureChecks()
+                    return
+                }
+                continue
             }
+
+            let workItem = DispatchWorkItem { [weak self, session, evidenceID, finalInsertedTranscript] in
+                guard let self else { return }
+                MainActor.assumeIsolated {
+                    if self.captureObservedUserEdit(
+                        evidenceID: evidenceID,
+                        finalInsertedTranscript: finalInsertedTranscript,
+                        session: session
+                    ) {
+                        self.cancelObservedEditCaptureChecks()
+                    }
+                }
+            }
+            observedEditCaptureWorkItems.append(workItem)
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + delay,
+                execute: workItem
+            )
         }
-        observedEditCaptureWorkItem = workItem
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + observedEditCaptureDelay,
-            execute: workItem
-        )
     }
 
     @discardableResult
@@ -476,6 +487,11 @@ public final class AppCoordinator: ObservableObject {
             evidenceID: evidenceID,
             userEditedTranscript: observedInsertedText
         )
+    }
+
+    private func cancelObservedEditCaptureChecks() {
+        observedEditCaptureWorkItems.forEach { $0.cancel() }
+        observedEditCaptureWorkItems = []
     }
 
     func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {

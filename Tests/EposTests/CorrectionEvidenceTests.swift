@@ -294,7 +294,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
         let coordinator = AppCoordinator(
             correctionEvidence: evidenceStore,
-            observedEditCaptureDelay: 0,
+            observedEditCaptureDelays: [0],
             autoStart: false
         )
         let evidenceID = evidenceStore.record(.init(
@@ -330,6 +330,113 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         XCTAssertEqual(evidenceStore.evidence.first?.userEditedTranscript, "WidgetPro")
         XCTAssertEqual(evidenceStore.suggestedRecords.map(\.canonical), ["WidgetPro"])
+    }
+
+    @MainActor
+    func testCoordinatorCapturesObservedUserEditAcrossSparseWindow() async throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        let coordinator = AppCoordinator(
+            correctionEvidence: evidenceStore,
+            observedEditCaptureDelays: [0.02, 0.06, 0.10],
+            autoStart: false
+        )
+        let evidenceID = evidenceStore.record(.init(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "widget pro",
+            canonicalizedTranscript: "widget pro",
+            finalInsertedTranscript: "widget pro",
+            userEditedTranscript: nil,
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        ))
+        let observer = EvidenceFakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
+        observer.value = "open widget pro please"
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: EvidenceNoopTextInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptFinalTranscript("widget pro")
+        session.finish()
+        coordinator.scheduleObservedUserEditCapture(
+            evidenceID: evidenceID,
+            finalInsertedTranscript: "widget pro",
+            session: session
+        )
+
+        try await Task.sleep(nanoseconds: 40_000_000)
+        observer.value = "open WidgetPro please"
+        try await Task.sleep(nanoseconds: 40_000_000)
+        observer.value = "open WidgetProX please"
+        try await Task.sleep(nanoseconds: 60_000_000)
+
+        XCTAssertEqual(evidenceStore.evidence.first?.userEditedTranscript, "WidgetPro")
+        XCTAssertEqual(evidenceStore.suggestedRecords.map(\.canonical), ["WidgetPro"])
+    }
+
+    @MainActor
+    func testCoordinatorNilObservedEditSessionCancelsPendingChecks() async throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        let coordinator = AppCoordinator(
+            correctionEvidence: evidenceStore,
+            observedEditCaptureDelays: [0.04],
+            autoStart: false
+        )
+        let evidenceID = evidenceStore.record(.init(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "widget pro",
+            canonicalizedTranscript: "widget pro",
+            finalInsertedTranscript: "widget pro",
+            userEditedTranscript: nil,
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        ))
+        let observer = EvidenceFakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
+        observer.value = "open WidgetPro please"
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: EvidenceNoopTextInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptFinalTranscript("widget pro")
+        session.finish()
+        coordinator.scheduleObservedUserEditCapture(
+            evidenceID: evidenceID,
+            finalInsertedTranscript: "widget pro",
+            session: session
+        )
+        coordinator.scheduleObservedUserEditCapture(
+            evidenceID: evidenceID,
+            finalInsertedTranscript: "widget pro",
+            session: nil
+        )
+
+        try await Task.sleep(nanoseconds: 80_000_000)
+
+        XCTAssertNil(evidenceStore.evidence.first?.userEditedTranscript)
+        XCTAssertTrue(evidenceStore.suggestedRecords.isEmpty)
     }
 }
 

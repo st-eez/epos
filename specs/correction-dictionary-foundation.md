@@ -1,6 +1,6 @@
 # Correction Dictionary Foundation
 
-Status: CD-11 implemented; Milestone A+B verified
+Status: CD-12 implemented; verified
 Created: 2026-06-03
 
 This spec is the handoff guide for improving Epos' correction foundation without
@@ -41,6 +41,9 @@ persisted into the active correction dictionary. The Corrections window now
 surfaces pending suggestions with recurrence/risk/evidence context, supports
 accept/reject, and evidence rows can carry optional insertion target app/window
 context for dogfood review.
+Post-insertion edit capture now uses a sparse 2s/6s/12s/15s same-target
+capture window instead of a single 1.5s check, so real dogfood edits have time
+to be read without continuous polling.
 
 Do not replace Apple `SpeechTranscriber`.
 Do not loosen the LLM polish guard as part of this work.
@@ -930,6 +933,87 @@ swift test
 swiftlint --quiet
 ```
 
+## Slice 12
+
+Slice ID: `CD-12`
+
+Title: Sparse post-insertion edit capture window
+
+Goal: make real dogfood correction capture usable without adding continuous
+watching or slowing dictation.
+
+Behavior under test: after final insertion, Epos schedules a short sparse set of
+same-target edit-capture checks across roughly 10-15 seconds. A user edit within
+that window updates the existing correction evidence row; unchanged, unreadable,
+or moved-focus targets do not record an edit. Pending checks are canceled when a
+new recording starts.
+
+Seam under test:
+
+```
+AppCoordinator.scheduleObservedUserEditCapture(...)
+AppCoordinator.captureObservedUserEdit(...)
+ProgressiveTranscriptInsertionSession.observedInsertedText()
+CorrectionEvidenceStore.recordUserEdit(...)
+```
+
+Boundary:
+
+- No continuous polling or long-lived document watching.
+- No ASR, polish, canonicalizer, or suggestion scoring changes.
+- No automatic promotion.
+- No capture after the short window expires.
+- Do not block insertion/finalization; checks stay delayed and sparse.
+
+Files likely touched:
+
+- `Sources/Epos/App/AppCoordinator.swift`
+- `Tests/EposTests/CorrectionEvidenceTests.swift`
+- `specs/correction-dictionary-foundation.md`
+
+Red tests:
+
+- `CorrectionEvidenceTests.testCoordinatorCapturesObservedUserEditAcrossSparseWindow`
+
+Fixture / harness: unit test with `observedEditCaptureDelays` set to short
+deterministic intervals, a fake insertion target observer, and async waiting
+bounded to the test process.
+
+Isolation rule: no real AX, no mic, no filesystem, no shared defaults.
+
+Determinism rule: test controls delay values and observer values; no reliance on
+wall-clock dogfood state.
+
+Assertion contract: an edit made after the first unchanged check but before a
+later scheduled check updates `userEditedTranscript` exactly once, and a
+subsequent scheduled check after successful capture does not overwrite it.
+
+Green condition:
+
+```
+swift test --filter CorrectionEvidenceTests/testCoordinatorCapturesObservedUserEditAcrossSparseWindow
+swift test --filter CorrectionEvidenceTests
+swift test --filter InsertionTargetGuardTests
+```
+
+Refactor target: keep the scheduling policy explicit and injectable; avoid
+embedding timers in evidence storage or insertion session logic.
+
+Smoke budget: no runtime smoke required unless production app wiring changes
+beyond scheduler defaults.
+
+Verification command:
+
+```
+swift test --filter CorrectionEvidenceTests
+swift test --filter InsertionTargetGuardTests
+swift test --filter SmokeTests
+swift build -Xswiftc -warnings-as-errors
+swift test
+swiftlint --quiet
+git diff --check
+```
+
 ### Later: Rich Corrections UI Upgrade
 
 Expose record status, source, scope, usage, snippets, and suggested corrections
@@ -1109,3 +1193,33 @@ decision.
   `swiftlint --quiet`, `git diff --check`, `scripts/build-signed-app.sh`,
   `scripts/install-signed-app.sh`, `open /Applications/Epos.app`, and
   `codesign --verify --strict --verbose=2 /Applications/Epos.app`.
+- Implemented CD-12 sparse post-insertion edit capture:
+  `AppCoordinator.defaultObservedEditCaptureDelays` now checks at
+  2s/6s/12s/15s by default, `scheduleObservedUserEditCapture(...)` schedules
+  sparse delayed checks instead of one 1.5s read, cancels prior pending checks
+  when a new schedule starts, and cancels remaining checks after the first
+  successful edit capture. `startRecording()` cancels pending capture checks
+  once a new recording can start.
+- Verification for CD-12: red
+  `CorrectionEvidenceTests.testCoordinatorCapturesObservedUserEditAcrossSparseWindow`
+  first failed because the coordinator only accepted a single
+  `observedEditCaptureDelay`, then passed after introducing injectable
+  `observedEditCaptureDelays`. Ran
+  `swift test --filter CorrectionEvidenceTests`,
+  `swift test --filter InsertionTargetGuardTests`,
+  `swift test --filter SmokeTests`, `swift build -Xswiftc -warnings-as-errors`,
+  full `swift test` (187 tests, 7 expected gated skips),
+  `swiftlint --quiet`, `git diff --check`, `scripts/build-signed-app.sh`,
+  `scripts/install-signed-app.sh`, `open /Applications/Epos.app`, and
+  `codesign --verify --strict --verbose=2 /Applications/Epos.app`.
+  Verifier returned PASS and found one low-risk direct-call edge case where
+  `scheduleObservedUserEditCapture(..., session: nil)` did not cancel already
+  pending checks. Moved cancellation before the nil-session return and added
+  `CorrectionEvidenceTests.testCoordinatorNilObservedEditSessionCancelsPendingChecks`.
+  Post-fix verification reran `swift test --filter CorrectionEvidenceTests`,
+  `swift build -Xswiftc -warnings-as-errors`, full `swift test` (188 tests,
+  7 expected gated skips), `swiftlint --quiet`, and `git diff --check`.
+  Focused verifier rerun returned PASS, including an independent harness that
+  confirmed nil-session scheduling cancels pending work without reading the
+  target, sparse reads occur only at configured delays, first successful capture
+  cancels later checks, and a new schedule cancels prior pending work.
