@@ -115,6 +115,69 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertFalse(InsertionTargetFocusSignature.changedWithinSameProcess(from: baseline, to: nil))
     }
 
+    func testOpaqueFocusSignatureToleratesFlakyAttributeReads() {
+        // Signature reads run under a short AX messaging timeout, so any single
+        // attribute can come back nil on one side under momentary load. A
+        // one-sided nil is unknown, not a change — it must never abort the session.
+        let fullBaseline = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: "terminal-input",
+            frame: InsertionTargetFocusFrame(x: 100, y: 200, width: 640, height: 80)
+        )
+        let identifierTimedOut = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: nil,
+            frame: InsertionTargetFocusFrame(x: 100, y: 210, width: 640, height: 80)
+        )
+        let roleTimedOutBaseline = InsertionTargetFocusSignature(
+            role: nil,
+            subrole: nil,
+            identifier: "terminal-input",
+            frame: InsertionTargetFocusFrame(x: 100, y: 200, width: 640, height: 80)
+        )
+        XCTAssertFalse(
+            InsertionTargetFocusSignature.changedWithinSameProcess(
+                from: fullBaseline,
+                to: identifierTimedOut
+            )
+        )
+        XCTAssertFalse(
+            InsertionTargetFocusSignature.changedWithinSameProcess(
+                from: roleTimedOutBaseline,
+                to: fullBaseline
+            )
+        )
+        // A matching identifier is authoritative same-element even when the field
+        // moved beyond the frame tolerance (scrolled, window dragged).
+        let sameIdentifierMovedFar = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: "terminal-input",
+            frame: InsertionTargetFocusFrame(x: 400, y: 600, width: 640, height: 80)
+        )
+        XCTAssertFalse(
+            InsertionTargetFocusSignature.changedWithinSameProcess(
+                from: fullBaseline,
+                to: sameIdentifierMovedFar
+            )
+        )
+        // Two successful, differing identifier reads still count as a move.
+        let differentIdentifier = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: "terminal-search",
+            frame: InsertionTargetFocusFrame(x: 100, y: 200, width: 640, height: 80)
+        )
+        XCTAssertTrue(
+            InsertionTargetFocusSignature.changedWithinSameProcess(
+                from: fullBaseline,
+                to: differentIdentifier
+            )
+        )
+    }
+
     func testEmptyExposedDivergesUnlessNothingExpected() {
         // A text-exposing field that now reads empty diverged; deleting would eat
         // content that isn't ours, so latch append-only.

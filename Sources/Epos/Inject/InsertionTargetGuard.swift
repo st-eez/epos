@@ -144,7 +144,9 @@ public enum InsertionTargetGuard {
 ///
 /// Two checks with very different costs:
 /// - `focusChangedSinceStart()` copies the system-wide focused element and
-///   compares its owning process to the home element's. Cheap — safe per reconcile.
+///   compares its owning process to the home element's. Cheap for text-exposing
+///   targets; AX-opaque targets add up to five attribute reads, each bounded by
+///   a short messaging timeout — bounded, safe per reconcile.
 /// - `observedValue()` reads `kAXValueAttribute` off the LIVE focused element (the
 ///   whole field's text). The expensive call; the session gates it to the
 ///   pre-delete moment only. Reading current focus — not a start-of-session
@@ -152,7 +154,8 @@ public enum InsertionTargetGuard {
 public protocol InsertionTargetObserver: AnyObject {
     /// Record the currently focused element as "home". Call at session start.
     func captureBaseline()
-    /// True if the focused element changed since `captureBaseline()`. Cheap.
+    /// True if the focused element changed since `captureBaseline()`. Cheap for
+    /// text-exposing targets; timeout-bounded signature reads for opaque ones.
     func focusChangedSinceStart() -> Bool
     /// The focused element's full text value, or nil if it can't be read.
     /// Expensive — do not call on every partial.
@@ -275,6 +278,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             return true
         }
         if !homeElementAdvertisesValue,
+           let homeOpaqueFocusSignature,
            InsertionTargetFocusSignature.changedWithinSameProcess(
             from: homeOpaqueFocusSignature,
             to: focusSignature(of: current)

@@ -152,8 +152,9 @@ public final class ProgressiveTranscriptInsertionSession {
     private func reconcile(to newTarget: String, lossProofAppend: Bool = false) -> Bool {
         guard newTarget != committedText else { return false }
 
-        // Cheap, every reconcile: if focus left the home field, no insertion can
-        // land safely. Stop the whole session without backspacing — cleanup
+        // Every reconcile (cheap pid check; opaque targets add timeout-bounded
+        // signature reads): if focus left the home field, no insertion can land
+        // safely. Stop the whole session without backspacing — cleanup
         // backspacing would itself delete the wrong characters.
         if target.focusChangedSinceStart() {
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: .focusChanged)
