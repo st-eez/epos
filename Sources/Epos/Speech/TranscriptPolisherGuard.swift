@@ -568,17 +568,38 @@ extension TranscriptPolisher {
     /// ordinary case differences (sentence-initial capitalization) are fine. A
     /// single letter ("I") is not an acronym, so "I" ↔ "i" still matches.
     private static func acronymCaseAgrees(_ raw: TokenSpan, _ polished: TokenSpan) -> Bool {
-        guard isAcronym(raw.original) || isAcronym(polished.original) else { return true }
+        guard containsAcronymLikeCore(raw.original) || containsAcronymLikeCore(polished.original) else {
+            return true
+        }
         return raw.original == polished.original
+    }
+
+    /// A token carrying an acronym-like CORE is held case-sensitive even when
+    /// digits, connectors, or a lowercase suffix keep `isAcronym` false:
+    /// "GPT-4", "L2", "IT's", "U.S". The scan runs over the connector-stripped
+    /// characters and fires on two consecutive uppercase letters or an uppercase
+    /// letter adjacent to a digit. Lone capitals ("Hello", "iPhone", "McRae")
+    /// never fire, so ordinary sentence-casing stays foldable.
+    private static func containsAcronymLikeCore(_ string: String) -> Bool {
+        var previous: Character?
+        for character in string where !isConnector(character) {
+            if let previous {
+                if character.isUppercase, previous.isUppercase || previous.isNumber { return true }
+                if character.isNumber, previous.isUppercase { return true }
+            }
+            previous = character
+        }
+        return false
     }
 
     /// An all-caps acronym: at least two characters, every character a letter, and
     /// equal to its own uppercase but not its own lowercase (so it is genuinely
     /// upper-cased, ruling out non-cased scripts). Internal connectors the
     /// tokenizer fuses into a single token ("U.S", "AGENTS.MD", "API-KEY") are
-    /// ignored, so a connector-joined all-caps compound is held case-sensitive
-    /// exactly like a pure-letter acronym — otherwise the exact-match arm would
-    /// wave its lowercase fold through while the hyphen-merge arm rejects it.
+    /// ignored. Used to shield filler homographs from dropping and to police
+    /// hyphen merges; the case-agreement arm uses the broader
+    /// `containsAcronymLikeCore`, which also catches digit-bearing and suffixed
+    /// shapes a strict all-caps test misses.
     private static func isAcronym(_ string: String) -> Bool {
         let letters = string.filter { !isConnector($0) }
         return letters.count >= 2

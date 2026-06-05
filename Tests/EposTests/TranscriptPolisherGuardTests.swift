@@ -302,6 +302,14 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             // acronym, not slip through the exact-match arm via a lowercase fold.
             ("Deploy to the U.S", "Deploy to the u.s", false),
             ("open AGENTS.MD now", "open agents.md now", false),
+            // Digit-bearing and suffixed acronym shapes carry the same core and
+            // fold the same way — "GPT-4", "L2", "IT's" are held case-sensitive
+            // even though a strict all-letters test calls none of them acronyms.
+            ("upgrade to GPT-4 now", "upgrade to gpt-4 now", false),
+            ("the L2 cache is cold", "the l2 cache is cold", false),
+            ("IT's broken again", "it's broken again", false),
+            // Control: a lone capital is not a core — sentence-casing still folds.
+            ("ship iPhone builds today", "Ship iPhone builds today.", true),
             // Control: a single letter is not an acronym, so ordinary sentence-initial
             // case folding ("I" → "i") still matches. Keep.
             ("I think", "i think", true),
