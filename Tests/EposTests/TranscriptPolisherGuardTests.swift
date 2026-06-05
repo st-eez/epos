@@ -232,6 +232,12 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("ship it now", "ship it. Now", false),
             ("i ran it again", "i ran it. Again", false),
 
+            // MARK: - the only licensed final-period change is restoring ONE missing
+            // sentence close. A trailing ellipsis-by-periods invents tone the user
+            // never spoke, whether the raw ended bare or with a single period.
+            ("ship it", "ship it...", false),
+            ("And.", "And...", false),
+
             // MARK: - rank 5: a hyphen-merge must not fuse across a dictated sentence
             // boundary into a nonsense compound.
             ("we are done. Ship now", "we are done-ship now", false),

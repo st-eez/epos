@@ -64,6 +64,35 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), json)
     }
 
+    func testBuiltInMigrationDoesNotPersistOverUndecodableRecords() throws {
+        // The common upgrade shape: a stale built-in needing migration PLUS a
+        // record written by a newer schema. The migration must not use its
+        // persistence pass to rewrite the blob — that would destroy the
+        // future-schema record the tolerant decode just preserved on disk.
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let json = """
+        {"version": 1, "records": [
+          {"id": "builtin.yesterday-saying", "kind": "replacement", "canonical": "yesterday, saying", \
+        "aliases": ["history, seeing"], "contexts": [], "source": "builtIn", "status": "disabled"},
+          {"id": "future.unknown", "kind": "some-future-kind", "canonical": "x", \
+        "aliases": ["y"], "contexts": [], "source": "manual", "status": "active"}
+        ]}
+        """
+        defaults.set(json, forKey: CorrectionDictionary.recordsDefaultsKey)
+
+        let loaded = CorrectionDictionary.load(from: defaults)
+
+        // In-memory records still migrate to the current built-in definition…
+        let record = try XCTUnwrap(loaded.records.first)
+        XCTAssertEqual(record.id, "builtin.yesterday-saying")
+        XCTAssertEqual(record.aliases, ["history seeing"])
+        // …but the blob on disk is untouched, future record included.
+        XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), json)
+    }
+
     func testDictionaryDropsPersistedRetiredBuiltInRecords() throws {
         struct StoredDictionary: Codable {
             var version: Int

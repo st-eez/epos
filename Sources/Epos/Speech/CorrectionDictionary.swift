@@ -278,10 +278,16 @@ public struct CorrectionDictionary: Equatable, Sendable {
                 )
             }
             let migrated = migratingStoredBuiltInRecords(storedDictionary.records)
+            // Never rewrite the stored blob when undecodable records were dropped:
+            // a built-in migration in the same load would otherwise persist the
+            // stripped set, destroying the future-schema records the tolerant
+            // decode just promised to leave intact. The in-memory records still
+            // migrate; persistence waits for the user's own next save.
+            let canPersistMigration = storedDictionary.undecodableRecordCount == 0
             return StoredRecordsResult(
                 records: migrated.records,
-                migratedRecords: migrated.didChange ? migrated.records : nil,
-                shouldRemoveLegacyRules: migrated.didChange
+                migratedRecords: migrated.didChange && canPersistMigration ? migrated.records : nil,
+                shouldRemoveLegacyRules: migrated.didChange && canPersistMigration
             )
         }
 

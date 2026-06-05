@@ -760,11 +760,23 @@ extension TranscriptPolisher {
         return true
     }
 
+    /// The only licensed final-period change is restoring ONE missing sentence
+    /// close when the raw had none. An existing trailing run is preserved
+    /// exactly — "And." → "And..." invents trailing tone the user never spoke,
+    /// and neither the symbol pass (excludes '.') nor the sentence-boundary
+    /// pass (stops at the last matched token) would catch it.
     private static func finalPeriodUsageIsJustified(raw: String, polished: String) -> Bool {
-        let rawTrimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard rawTrimmed.last == "." else { return true }
-        let polishedTrimmed = polished.trimmingCharacters(in: .whitespacesAndNewlines)
-        return polishedTrimmed.last == "."
+        let rawTrailing = trailingPeriodCount(raw)
+        let polishedTrailing = trailingPeriodCount(polished)
+        if rawTrailing == 0 { return polishedTrailing <= 1 }
+        return polishedTrailing == rawTrailing
+    }
+
+    private static func trailingPeriodCount(_ text: String) -> Int {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .reversed()
+            .prefix { $0 == "." }
+            .count
     }
 
     /// All comma policy, positional and PER-GAP. The matched content tokens partition
