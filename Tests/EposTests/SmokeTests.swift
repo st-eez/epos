@@ -14,6 +14,31 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(coordinator.displayText, "")
     }
 
+    @MainActor
+    func testCoordinatorPromotesPartialAsFallbackFinalWhenNoFinalArrives() {
+        let coordinator = AppCoordinator(autoStart: false)
+
+        coordinator.handlePartialTranscript("volatile words")
+        coordinator.promotePartialTranscriptAsFallbackFinalIfNeeded()
+
+        XCTAssertEqual(coordinator.finalText, "volatile words")
+        XCTAssertEqual(coordinator.partial, "")
+        XCTAssertEqual(coordinator.displayText, "volatile words")
+    }
+
+    @MainActor
+    func testCoordinatorFoldsTrailingPartialIntoFallbackFinal() {
+        let coordinator = AppCoordinator(autoStart: false)
+
+        coordinator.handleFinalTranscriptSegment("settled words")
+        coordinator.handlePartialTranscript(" volatile tail")
+        coordinator.promotePartialTranscriptAsFallbackFinalIfNeeded()
+
+        XCTAssertEqual(coordinator.finalText, "settled words volatile tail")
+        XCTAssertEqual(coordinator.partial, "")
+        XCTAssertEqual(coordinator.displayText, "settled words volatile tail")
+    }
+
     func testPermissionsSnapshotReturns() {
         let snapshot = PermissionsGate().snapshot()
         _ = snapshot.microphone

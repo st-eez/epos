@@ -758,6 +758,46 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
+    func testAppendOnlyFallbackFinalAppendsSafePrefixExtension() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("the door")
+        observer.value = ""
+        session.acceptPartialTranscript("the do")
+        let committed = session.acceptFallbackFinalTranscript("the door is open")
+
+        XCTAssertEqual(committed, "the door is open")
+        XCTAssertEqual(backend.fieldText, "the door is open")
+        XCTAssertEqual(backend.operations, [.insert("the door"), .insert(" is open")])
+    }
+
+    func testAppendOnlyFallbackFinalDoesNotGraftUnsafeNonPrefixTail() {
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("the door")
+        observer.value = ""
+        session.acceptPartialTranscript("the do")
+        let committed = session.acceptFallbackFinalTranscript("the window is open")
+
+        XCTAssertEqual(committed, "the door")
+        XCTAssertEqual(backend.fieldText, "the door")
+        XCTAssertEqual(backend.operations, [.insert("the door")])
+    }
+
     func testAppendOnlyRawFinalDoesNotGraftMidWordCorrectionTail() {
         // Real dogfood regression: the recognizer emitted a partial ending in
         // "bched.", then final-corrected it to "batched.". If the AX guard latches

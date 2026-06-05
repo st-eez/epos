@@ -206,6 +206,7 @@ public final class Transcriber: @unchecked Sendable {
                 // A failed finalize can leave `transcriber.results` dangling;
                 // force-close the event stream and cancel the drain so the
                 // `await drainTask.value` below cannot hang.
+                session.eventContinuation.yield(.failed(message))
                 session.eventContinuation.finish()
                 session.drainTask.cancel()
             }

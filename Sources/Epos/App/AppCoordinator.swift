@@ -316,6 +316,7 @@ public final class AppCoordinator: ObservableObject {
             return
         }
 
+        var hadTranscriptionFailure = false
         for await event in events {
             switch event {
             case .partial(let text):
@@ -325,11 +326,15 @@ public final class AppCoordinator: ObservableObject {
                 handleFinalTranscriptSegment(text)
                 logTranscriptTiming(kind: .final, eventText: text)
             case .failed(let message):
+                hadTranscriptionFailure = true
                 log.error("transcription failed: \(message)")
             }
         }
 
         audio.stop()
+        if !hadTranscriptionFailure {
+            promotePartialTranscriptAsFallbackFinalIfNeeded()
+        }
 
         let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
@@ -404,6 +409,18 @@ public final class AppCoordinator: ObservableObject {
         finalText += text
         partial = ""
         textInsertionSession?.acceptFinalTranscript(finalText)
+    }
+
+    func promotePartialTranscriptAsFallbackFinalIfNeeded() {
+        guard !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return
+        }
+
+        let fallbackFinalText = finalText + partial
+        partial = ""
+        _ = textInsertionSession?.acceptFallbackFinalTranscript(fallbackFinalText)
+        finalText = fallbackFinalText
+        log.info("recording promoted partial fallback finalChars=\(self.finalText.count)")
     }
 
     /// Insert the final (already-canonicalized, already-guard-validated) text and

@@ -62,6 +62,19 @@ public final class ProgressiveTranscriptInsertionSession {
         reconcile(to: canonicalize(text), lossProofAppend: true)
     }
 
+    /// End-of-stream fallback for a remaining volatile partial. It is more authoritative
+    /// than a live partial because the recognizer produced no later final, but less
+    /// trustworthy than a real final segment. In append-only mode, allow clean prefix
+    /// extensions to land while suppressing non-prefix revisions that would graft a
+    /// hybrid tail onto stale on-screen text.
+    @discardableResult
+    public func acceptFallbackFinalTranscript(_ text: String) -> String {
+        guard !didFinish else { return committedText }
+        let target = canonicalize(text)
+        _ = reconcile(to: target, lossProofAppend: target.hasPrefix(committedText))
+        return committedText
+    }
+
     /// Reconcile to the already-canonicalized, already-guard-validated final
     /// transcript (the polish output). Does NOT canonicalize again, so the string
     /// the guard validated is byte-for-byte the string typed. Returns true iff
