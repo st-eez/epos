@@ -93,7 +93,7 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), json)
     }
 
-    func testDictionaryDropsPersistedRetiredBuiltInRecords() throws {
+    func testDictionaryConvertsPersistedRetiredBuiltInRecordsToManualRecords() throws {
         struct StoredDictionary: Codable {
             var version: Int
             var records: [CorrectionRecord]
@@ -125,32 +125,34 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
 
         let loaded = CorrectionDictionary.load(from: defaults)
 
-        XCTAssertEqual(loaded.records, [manual])
+        var expectedRetiredRecord = retiredBuiltIn
+        expectedRetiredRecord.source = .manual
+        XCTAssertEqual(loaded.records, [expectedRetiredRecord, manual])
         XCTAssertNil(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey))
 
         let persistedRaw = try XCTUnwrap(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
         let persistedData = try XCTUnwrap(persistedRaw.data(using: .utf8))
         let persisted = try JSONDecoder().decode(StoredDictionary.self, from: persistedData)
-        XCTAssertEqual(persisted.records, [manual])
+        XCTAssertEqual(persisted.records, [expectedRetiredRecord, manual])
     }
 
-    func testCurrentManualSaveCanPersistRuleMatchingRetiredBuiltInFingerprint() throws {
+    func testCurrentManualSavePersistsNonDefaultRulesAsManualRecords() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let rule = TranscriptCanonicalizer.Rule(
-            canonical: "NetSuite",
-            aliases: ["NetSuite", "net suite", "net sweet", "net suit"]
+            canonical: "WidgetPro",
+            aliases: ["widget pro"]
         )
 
         TranscriptCanonicalizer.saveRules([rule], to: defaults)
 
         let record = try XCTUnwrap(CorrectionDictionary.load(from: defaults).records.first)
         XCTAssertEqual(record.source, .manual)
-        XCTAssertEqual(record.canonical, "NetSuite")
-        XCTAssertEqual(record.aliases, ["NetSuite", "net suite", "net sweet", "net suit"])
-        XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open net suite"), "open NetSuite")
+        XCTAssertEqual(record.canonical, "WidgetPro")
+        XCTAssertEqual(record.aliases, ["widget pro"])
+        XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open widget pro"), "open WidgetPro")
     }
 
     @MainActor

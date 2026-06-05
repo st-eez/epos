@@ -33,24 +33,11 @@ public struct CorrectionDictionary: Equatable, Sendable {
     }
 
     public static func records(from rules: [TranscriptCanonicalizer.Rule]) -> [CorrectionRecord] {
-        records(from: rules, droppingRetiredBuiltInRules: false)
-    }
-
-    private static func records(
-        from rules: [TranscriptCanonicalizer.Rule],
-        droppingRetiredBuiltInRules: Bool
-    ) -> [CorrectionRecord] {
         var defaultPairs = builtInRuleMigrationPairs()
-        var retiredRuleFingerprints = retiredBuiltInRuleFingerprints
 
-        return rules.enumerated().compactMap { index, rule in
+        return rules.enumerated().map { index, rule in
             if let defaultIndex = defaultPairs.firstIndex(where: { $0.rule == rule }) {
                 return defaultPairs.remove(at: defaultIndex).record
-            }
-
-            if droppingRetiredBuiltInRules,
-               retiredRuleFingerprints.remove(stableFingerprint(for: rule)) != nil {
-                return nil
             }
 
             return manualRecord(index: index, rule: rule)
@@ -250,18 +237,6 @@ public struct CorrectionDictionary: Equatable, Sendable {
         defaultRecords.first { $0.id == id }
     }
 
-    private static let retiredBuiltInRuleFingerprints: Set<UInt64> = [
-        0xab54e6a7b06ae3ea,
-        0x880e5bfe356bdcd7,
-        0x8d111dd13f408a8d,
-        0xdfc520acecfb2a37,
-        0x96c5274ee69e5f60,
-        0x41f1ad858d9bf0c4,
-        0x8513df9086d030ef,
-        0x35d8512aab83f241,
-        0x34ac243f843c0f42
-    ]
-
     private static func storedRecords(from defaults: UserDefaults) -> StoredRecordsResult {
         if let rawDictionary = defaults.string(forKey: recordsDefaultsKey),
            let data = rawDictionary.data(using: .utf8),
@@ -292,10 +267,7 @@ public struct CorrectionDictionary: Equatable, Sendable {
         }
 
         let migratedRules = migratedRulesFromFlatStorage(defaults)
-        let migratedRecords = records(
-            from: migratedRules.rules,
-            droppingRetiredBuiltInRules: migratedRules.shouldPersist
-        )
+        let migratedRecords = records(from: migratedRules.rules)
         return StoredRecordsResult(
             records: migratedRecords,
             migratedRecords: migratedRules.shouldPersist ? migratedRecords : nil,
@@ -333,8 +305,10 @@ public struct CorrectionDictionary: Equatable, Sendable {
             guard record.source == .builtIn else { return record }
 
             guard var current = defaultsByID[record.id] else {
+                var manual = record
+                manual.source = .manual
                 didChange = true
-                return nil
+                return manual
             }
 
             guard current != record else {
@@ -367,16 +341,6 @@ public struct CorrectionDictionary: Equatable, Sendable {
             .joined(separator: "-")
         let suffix = slug.isEmpty ? "replacement" : slug
         return "manual.\(index).\(suffix)"
-    }
-
-    private static func stableFingerprint(for rule: TranscriptCanonicalizer.Rule) -> UInt64 {
-        var fingerprint = StableFingerprint()
-        fingerprint.append(rule.canonical)
-        fingerprint.append("aliases")
-        rule.aliases.forEach { fingerprint.append($0) }
-        fingerprint.append("contexts")
-        rule.contexts.forEach { fingerprint.append($0) }
-        return fingerprint.value
     }
 
 }
@@ -434,21 +398,6 @@ private extension CorrectionDictionary {
         var shouldPersist: Bool
     }
 
-    struct StableFingerprint {
-        private(set) var value: UInt64 = 0xcbf29ce484222325
-
-        mutating func append(_ text: String) {
-            for byte in text.utf8 {
-                append(byte)
-            }
-            append(0xff)
-        }
-
-        private mutating func append(_ byte: UInt8) {
-            value ^= UInt64(byte)
-            value = value &* 0x100000001b3
-        }
-    }
 }
 
 public struct CorrectionRecord: Codable, Equatable, Identifiable, Sendable {
