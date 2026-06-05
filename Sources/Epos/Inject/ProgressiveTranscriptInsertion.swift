@@ -320,6 +320,12 @@ public final class ProgressiveTranscriptInsertionSession {
         ), boundary < target.endIndex else {
             return ""
         }
+        // The length-offset slice is only valid when the prefix is a re-RENDERING
+        // (re-casing) of what's already on screen. An interior re-wording keeps the
+        // boundary aligned by count but not by content ("I saw a cat" vs
+        // "I saw a big| cat") — grafting that tail duplicates the last word and
+        // drops the revision, so suppress it instead.
+        guard String(target[..<boundary]).lowercased() == committed.lowercased() else { return "" }
         guard !isInsideWord(in: target, at: boundary) else { return "" }
         return String(target[boundary...])
     }

@@ -40,6 +40,31 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(InsertionTargetObservation.read("hello", exposesText: false), .value("hello"))
     }
 
+    func testFocusFrameFailsSoftOnNonFiniteAXComponents() {
+        // AX is a system boundary: a transitioning AX server can return NaN or
+        // infinite frame components. Int(_: Double) traps on those, so the init
+        // must fail to nil ("frame unreadable") instead of crashing mid-reconcile.
+        XCTAssertNil(InsertionTargetFocusFrame(
+            position: CGPoint(x: CGFloat.nan, y: 200),
+            size: CGSize(width: 640, height: 80)
+        ))
+        XCTAssertNil(InsertionTargetFocusFrame(
+            position: CGPoint(x: 100, y: 200),
+            size: CGSize(width: CGFloat.infinity, height: 80)
+        ))
+        XCTAssertNil(InsertionTargetFocusFrame(
+            position: CGPoint(x: 100, y: 200),
+            size: CGSize(width: 640, height: 1e300)
+        ))
+        XCTAssertEqual(
+            InsertionTargetFocusFrame(
+                position: CGPoint(x: 100.4, y: 200),
+                size: CGSize(width: 640, height: 80)
+            ),
+            InsertionTargetFocusFrame(x: 100, y: 200, width: 640, height: 80)
+        )
+    }
+
     func testOpaqueFocusSignatureDetectsSameAppFieldMoveWithoutElementIdentity() {
         let baseline = InsertionTargetFocusSignature(
             role: "AXTextArea",
@@ -793,6 +818,39 @@ final class InsertionTargetGuardTests: XCTestCase {
         // Casing of the already-typed prefix can't be fixed under the latch (no delete),
         // but the new words must land.
         XCTAssertEqual(backend.fieldText, "hello world foo bar baz qux")
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
+    }
+
+    func testAppendOnlyRawFinalSuppressesMisalignedTailAfterInteriorRewording() {
+        // Under the latch a raw final that re-words the INTERIOR ("a cat" ->
+        // "a big cat") keeps the length-offset boundary on a word boundary by
+        // coincidence ("I saw a big| cat"). Grafting that tail would render
+        // "I saw a cat cat" — last word duplicated, revision dropped. The
+        // committed prefix is not a re-cased rendering of the target's prefix,
+        // so the append must be suppressed (do no harm: freeze, never garble).
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("I saw a cat")
+        // A divergent read latches append-only as the partial shrinks.
+        observer.value = ""
+        session.acceptPartialTranscript("I saw a")
+        session.acceptFinalTranscript("I saw a big cat")
+        session.finish()
+
+        XCTAssertEqual(
+            backend.fieldText, "I saw a cat",
+            "append-only must not graft a misaligned tail after interior re-wording"
+        )
         XCTAssertFalse(
             backend.operations.contains { if case .delete = $0 { true } else { false } },
             "append-only latch must never backspace"

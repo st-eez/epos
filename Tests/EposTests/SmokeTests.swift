@@ -227,6 +227,24 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(draft.rule.contexts, ["open", "launch"])
     }
 
+    func testNewDraftsMergeAcceptedSuggestionWithoutTouchingUnsavedEdits() {
+        // Accepting a suggestion mid-edit must surface ONLY the newly accepted
+        // rule; a full reload here would discard the user's unsaved rows.
+        let saved = CorrectionDraft.fromRules([
+            .init(canonical: "WidgetPro", aliases: ["widget pro"])
+        ])
+        let loadedAfterAccept = CorrectionDraft.fromRules([
+            .init(canonical: "WidgetPro", aliases: ["widget pro"]),
+            .init(canonical: "cmux", aliases: ["seamux"])
+        ])
+
+        let accepted = CorrectionDraft.newDrafts(in: loadedAfterAccept, notIn: saved)
+
+        XCTAssertEqual(accepted.map(\.canonical), ["cmux"])
+        // Content already present appends nothing on a repeat merge.
+        XCTAssertTrue(CorrectionDraft.newDrafts(in: loadedAfterAccept, notIn: saved + accepted).isEmpty)
+    }
+
     @MainActor
     func testSuggestionReviewItemsBackCorrectionsEditorActions() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"

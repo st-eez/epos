@@ -40,6 +40,17 @@ struct CorrectionDraft: Identifiable, Equatable {
         }
     }
 
+    /// Drafts present in `loaded` but absent (by content) from `existing` — the
+    /// rows a just-accepted suggestion added to the store. Lets the editor merge
+    /// an accepted suggestion into both `rows` and `savedRows` without a full
+    /// reload, which would discard the user's unsaved edits and reorders.
+    static func newDrafts(
+        in loaded: [CorrectionDraft],
+        notIn existing: [CorrectionDraft]
+    ) -> [CorrectionDraft] {
+        loaded.filter { draft in !existing.contains(draft) }
+    }
+
     private static func parseList(_ text: String) -> [String] {
         text.split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

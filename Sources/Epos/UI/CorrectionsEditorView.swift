@@ -211,7 +211,20 @@ struct CorrectionsEditorView: View {
 
     private func acceptSuggestion(_ item: CorrectionSuggestionReviewItem) {
         guard store.acceptPromotion(item.assessment) else { return }
-        reload()
+        guard hasUnsavedChanges else {
+            reload()
+            return
+        }
+        // Mid-edit a full reload() would clobber the user's unsaved rows and
+        // reorders (rule precedence is order-dependent). Merge just the accepted
+        // rule into both lists so the unsaved diff stays exactly the user's edits.
+        let accepted = CorrectionDraft.newDrafts(
+            in: CorrectionDraft.fromRules(store.rules),
+            notIn: savedRows
+        )
+        rows.append(contentsOf: accepted)
+        savedRows.append(contentsOf: accepted)
+        reloadSuggestions()
     }
 
     private func rejectSuggestion(_ item: CorrectionSuggestionReviewItem) {

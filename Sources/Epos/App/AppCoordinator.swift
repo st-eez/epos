@@ -316,7 +316,6 @@ public final class AppCoordinator: ObservableObject {
             return
         }
 
-        var hadTranscriptionFailure = false
         for await event in events {
             switch event {
             case .partial(let text):
@@ -326,15 +325,18 @@ public final class AppCoordinator: ObservableObject {
                 handleFinalTranscriptSegment(text)
                 logTranscriptTiming(kind: .final, eventText: text)
             case .failed(let message):
-                hadTranscriptionFailure = true
                 log.error("transcription failed: \(message)")
             }
         }
 
         audio.stop()
-        if !hadTranscriptionFailure {
-            promotePartialTranscriptAsFallbackFinalIfNeeded()
-        }
+        // Promote unconditionally — including after a `.failed` event. The trailing
+        // partial is already typed on screen; on the success path finals clear
+        // `partial`, so this only fires when no `.final` settled it. Gating it on
+        // failure made the empty-`finalText` branch below RETRACT (backspace) the
+        // words the user just watched land, which is worse than committing the
+        // best-effort partial.
+        promotePartialTranscriptAsFallbackFinalIfNeeded()
 
         let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)

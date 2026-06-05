@@ -16,11 +16,20 @@ struct InsertionTargetFocusFrame: Equatable {
         self.height = height
     }
 
-    init(position: CGPoint, size: CGSize) {
-        x = Int(position.x.rounded())
-        y = Int(position.y.rounded())
-        width = Int(size.width.rounded())
-        height = Int(size.height.rounded())
+    /// AX is a system boundary: a transitioning AX server can hand back
+    /// non-finite frame components, and `Int(_: Double)` traps on NaN/±inf.
+    /// Fail soft to nil — "frame unreadable" — like every other AX read here.
+    init?(position: CGPoint, size: CGSize) {
+        guard let x = Int(exactly: position.x.rounded()),
+              let y = Int(exactly: position.y.rounded()),
+              let width = Int(exactly: size.width.rounded()),
+              let height = Int(exactly: size.height.rounded()) else {
+            return nil
+        }
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
     }
 
     func hasSameApproximateOrigin(as other: InsertionTargetFocusFrame) -> Bool {
