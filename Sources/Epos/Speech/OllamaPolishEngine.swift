@@ -131,7 +131,7 @@ public struct OllamaPolishEngine: PolishEngine {
         }
 
         func polish(_ raw: String) async throws -> String {
-            await prewarmTask?.value
+            prewarmTask?.cancel()
             let result = try await client.polish(OllamaPolishRequest(
                 model: model,
                 instructions: instructions,
@@ -140,6 +140,10 @@ public struct OllamaPolishEngine: PolishEngine {
                 keepAlive: keepAlive
             ))
             return result.cleaned
+        }
+
+        deinit {
+            prewarmTask?.cancel()
         }
     }
 }

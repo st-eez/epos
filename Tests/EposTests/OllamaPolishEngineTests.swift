@@ -42,13 +42,43 @@ final class OllamaPolishEngineTests: XCTestCase {
         let client = FakeOllamaPolishClient(cleaned: "Ship it.")
         let engine = OllamaPolishEngine(client: client, prewarmKeepAlive: "30s", polishKeepAlive: "0")
         let session = engine.makeSession(knownTerms: [])
+        guard let prewarmRequest = await client.waitForRequest(raw: "prewarm") else {
+            XCTFail("Expected prewarm request")
+            return
+        }
 
         let output = try await session.polish("ship it")
 
         XCTAssertEqual(output, "Ship it.")
         let requests = client.requests
-        XCTAssertEqual(requests.map(\.raw), ["prewarm", "ship it"])
-        XCTAssertEqual(requests.map(\.keepAlive), ["30s", "0"])
+        let polishRequest = try XCTUnwrap(requests.first { $0.raw == "ship it" })
+        XCTAssertEqual(prewarmRequest.keepAlive, "30s")
+        XCTAssertEqual(polishRequest.keepAlive, "0")
+    }
+
+    func testSlowPrewarmDoesNotConsumeFinalPolishTimeout() async throws {
+        let client = FakeOllamaPolishClient(cleaned: "Ship it.", prewarmDelayNanoseconds: 1_000_000_000)
+        let engine = OllamaPolishEngine(client: client, prewarmKeepAlive: "30s", polishKeepAlive: "0")
+        let session = engine.makeSession(knownTerms: [])
+
+        let output = try await withThrowingTaskGroup(of: String.self) { group in
+            group.addTask {
+                try await session.polish("ship it")
+            }
+            group.addTask {
+                try await Task.sleep(nanoseconds: 200_000_000)
+                throw FakeTimeoutError()
+            }
+
+            guard let firstResult = try await group.next() else {
+                throw FakeTimeoutError()
+            }
+            group.cancelAll()
+            return firstResult
+        }
+
+        XCTAssertEqual(output, "Ship it.")
+        XCTAssertTrue(client.requests.contains { $0.raw == "ship it" && $0.keepAlive == "0" })
     }
 
     func testTranscriptPolisherFallsBackSafelyWhenOllamaFails() async {
@@ -127,6 +157,7 @@ final class OllamaPolishEngineTests: XCTestCase {
 }
 
 private struct FakeOllamaError: Error {}
+private struct FakeTimeoutError: Error {}
 
 private struct RawCandidateFakePolishSession: PolishSession {
     let candidate: String
@@ -140,19 +171,34 @@ private final class FakeOllamaPolishClient: OllamaPolishClient, @unchecked Senda
     private let lock = NSLock()
     private let cleaned: String
     private let error: Error?
+    private let prewarmDelayNanoseconds: UInt64
     private var storedRequests: [OllamaPolishRequest] = []
 
-    init(cleaned: String = "", error: Error? = nil) {
+    init(cleaned: String = "", error: Error? = nil, prewarmDelayNanoseconds: UInt64 = 0) {
         self.cleaned = cleaned
         self.error = error
+        self.prewarmDelayNanoseconds = prewarmDelayNanoseconds
     }
 
     var requests: [OllamaPolishRequest] {
         lock.withLock { storedRequests }
     }
 
+    func waitForRequest(raw: String) async -> OllamaPolishRequest? {
+        for _ in 0..<50 {
+            if let request = requests.first(where: { $0.raw == raw }) {
+                return request
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000)
+        }
+        return nil
+    }
+
     func polish(_ request: OllamaPolishRequest) async throws -> OllamaPolishResponse {
         lock.withLock { storedRequests.append(request) }
+        if request.raw == "prewarm", prewarmDelayNanoseconds > 0 {
+            try await Task.sleep(nanoseconds: prewarmDelayNanoseconds)
+        }
         if let error { throw error }
         return OllamaPolishResponse(cleaned: cleaned)
     }

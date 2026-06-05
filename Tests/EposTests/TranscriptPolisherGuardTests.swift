@@ -120,9 +120,12 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("basically ship the feature", "Basically ship the feature.", true),
             // Possessive/hyphen normalization of the same words. Keep.
             ("the well known issue", "the well-known issue", true),
-            // Abbreviation/version dot removed (next token not capitalized, so it
-            // was never a sentence boundary). Keep.
-            ("see fig. 3 now", "see fig 3 now", true),
+            // A spaced period is conservatively treated as a boundary even before a
+            // lowercase word or digit. This can false-reject abbreviation cleanup, but
+            // it prevents the model from collapsing dictated sentence boundaries.
+            ("send it. then wait", "send it then wait", false),
+            ("send it. then wait", "send it. then wait", true),
+            ("see fig. 3 now", "see fig 3 now", false),
             // A standalone recognizer ordinal formatting artifact preserves content
             // when converted to the matching spoken word.
             ("test 1st thing", "Test first thing.", true),

@@ -896,14 +896,11 @@ extension TranscriptPolisher {
             guard left.polishedIndex != right.polishedIndex else { continue }
 
             let rawGap = raw[rawSpans[left.rawIndex].range.upperBound..<rawSpans[right.rawIndex].range.lowerBound]
-            let rawNextFirst = raw[rawSpans[right.rawIndex].range.lowerBound]
             let polishedGap = polished[
                 polishedSpans[left.polishedIndex].range.upperBound..<polishedSpans[right.polishedIndex].range.lowerBound
             ]
-            let polishedNextFirst = polished[polishedSpans[right.polishedIndex].range.lowerBound]
-
-            let rawBoundary = sentenceBoundaryGlyph(rawGap, nextTokenFirstChar: rawNextFirst)
-            let polishedBoundary = sentenceBoundaryGlyph(polishedGap, nextTokenFirstChar: polishedNextFirst)
+            let rawBoundary = sentenceBoundaryGlyph(rawGap)
+            let polishedBoundary = sentenceBoundaryGlyph(polishedGap)
 
             if let rawBoundary {
                 // A dictated boundary must survive ("...do this. You..." must not
@@ -929,12 +926,11 @@ extension TranscriptPolisher {
 
     /// The first sentence-boundary glyph in `separator` (`?`/`!`/`.`), or nil if
     /// none. A `?`/`!` followed by whitespace (or ending the gap) is a boundary; a
-    /// `.` is a boundary only when followed by whitespace AND the next token is
-    /// capitalized — so an abbreviation/version dot ("fig. 3", "v1.2") is not a false
-    /// boundary, and a `.` with no following space ("this.Next") never is. Returning
-    /// the glyph (not just a bool) lets the caller reject a `?`↔`!` mood swap that
-    /// keeps the per-glyph counts balanced.
-    private static func sentenceBoundaryGlyph(_ separator: Substring, nextTokenFirstChar: Character) -> Character? {
+    /// `.` followed by whitespace is also a boundary, including lowercase sentence
+    /// starts ("do this. then wait"). A `.` with no following space ("this.Next") never
+    /// is. Returning the glyph (not just a bool) lets the caller reject a `?`↔`!` mood
+    /// swap that keeps the per-glyph counts balanced.
+    private static func sentenceBoundaryGlyph(_ separator: Substring) -> Character? {
         var index = separator.startIndex
         while index < separator.endIndex {
             let character = separator[index]
@@ -943,7 +939,7 @@ extension TranscriptPolisher {
             if character == "?" || character == "!" {
                 if followedByWhitespace || after == separator.endIndex { return character }
             } else if character == "." {
-                if followedByWhitespace && nextTokenFirstChar.isUppercase { return character }
+                if followedByWhitespace { return character }
             }
             index = after
         }
