@@ -159,6 +159,7 @@ struct SpeechContextEvalRow: Codable {
     let applicationMode: SpeechContextApplicationMode
     let includeAlternatives: Bool
     let contextReadbackCount: Int
+    let contextReadbackTerms: [String]
     let contextReadbackMatches: Bool
     let baselineText: String
     let variantText: String

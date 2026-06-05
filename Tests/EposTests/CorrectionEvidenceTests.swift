@@ -372,6 +372,31 @@ final class CorrectionEvidenceTests: XCTestCase {
         XCTAssertEqual(dictionary.appliedRecordIDs(in: "message to Esther"), ["ctx"])
     }
 
+    func testAppliedRuleIDsRespectPersonNameSlotRules() {
+        let dictionary = CorrectionDictionary(records: [
+            CorrectionRecord(
+                id: "person",
+                kind: .lexicon,
+                canonical: "Test Person",
+                aliases: ["test person", "tas"],
+                ambiguousAliases: ["steph", "step"],
+                lexiconClass: .person,
+                source: .manual,
+                status: .active
+            )
+        ])
+
+        XCTAssertEqual(dictionary.appliedRecordIDs(in: "ask Steph to review"), ["person"])
+        XCTAssertEqual(
+            TranscriptCanonicalizer(
+                rules: CorrectionRuleCompiler.compile(records: dictionary.records)
+            ).canonicalize("message to Step"),
+            "message to Test Person"
+        )
+        XCTAssertEqual(dictionary.appliedRecordIDs(in: "message to Step"), ["person"])
+        XCTAssertEqual(dictionary.appliedRecordIDs(in: "next step"), [String]())
+    }
+
     func testAppliedRuleIDsIncludeCascadedRules() {
         let dictionary = CorrectionDictionary(records: [
             CorrectionRecord(

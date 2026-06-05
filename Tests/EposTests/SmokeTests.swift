@@ -163,10 +163,41 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("Open next feed and check tickets."), "Open next feed and check tickets.")
         XCTAssertEqual(canonicalizer.canonicalize("Open up CMUX and send a team's message to staff."), "Open up CMUX and send a team's message to staff.")
         XCTAssertEqual(canonicalizer.canonicalize("Stuff instructions, please."), "Stuff instructions, please.")
-        XCTAssertEqual(canonicalizer.canonicalize("Ask Stas to review the CMUX changes."), "Ask Stas to review the CMUX changes.")
+        XCTAssertEqual(canonicalizer.canonicalize("Ask Tas to review the CMUX changes."), "Ask Tas to review the CMUX changes.")
 
         XCTAssertEqual(canonicalizer.canonicalize("visit netsuitehq dot com"), "visit netsuitehq dot com")
         XCTAssertEqual(canonicalizer.canonicalize("Talk about that suite later."), "Talk about that suite later.")
+    }
+
+    func testPersonLexiconAmbiguousAliasesRequireNameSlots() {
+        let records = [
+            CorrectionRecord(
+                id: "manual.person",
+                kind: .lexicon,
+                canonical: "Test Person",
+                aliases: ["test person", "tas"],
+                ambiguousAliases: ["steph", "step", "stuff"],
+                lexiconClass: .person,
+                source: .manual,
+                status: .active
+            )
+        ]
+        let canonicalizer = TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: records))
+
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Open up Teams and send a message to Step"),
+            "Open up Teams and send a message to Test Person"
+        )
+        XCTAssertEqual(canonicalizer.canonicalize("Ping stuff about the CMUX issue"), "Ping Test Person about the CMUX issue")
+        XCTAssertEqual(canonicalizer.canonicalize("Ask Steph to review it"), "Ask Test Person to review it")
+        XCTAssertEqual(canonicalizer.canonicalize("Tas said the branch is ready"), "Test Person said the branch is ready")
+
+        XCTAssertEqual(canonicalizer.canonicalize("What is the next step?"), "What is the next step?")
+        XCTAssertEqual(canonicalizer.canonicalize("Step one is done."), "Step one is done.")
+        XCTAssertEqual(canonicalizer.canonicalize("Stuff instructions, please."), "Stuff instructions, please.")
+        XCTAssertEqual(canonicalizer.canonicalize("Stuff was already handled."), "Stuff was already handled.")
+        XCTAssertEqual(canonicalizer.canonicalize("Stuff should stay as a common word."), "Stuff should stay as a common word.")
+        XCTAssertEqual(canonicalizer.canonicalize("Step should remain unchanged."), "Step should remain unchanged.")
     }
 
     func testCanonicalizerFixesCurrentDefaultCustomEntries() {

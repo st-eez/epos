@@ -122,4 +122,57 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
             ]
         )
     }
+
+    func testPersonLexiconCompilesAmbiguousAliasesAsNameSlotRules() {
+        let records = [
+            CorrectionRecord(
+                id: "person",
+                kind: .lexicon,
+                canonical: "Test Person",
+                aliases: ["test person", "tas"],
+                ambiguousAliases: ["steph", "step", "stuff"],
+                lexiconClass: .person,
+                source: .manual,
+                status: .active
+            )
+        ]
+
+        XCTAssertEqual(
+            CorrectionRuleCompiler.compile(records: records),
+            [
+                TranscriptCanonicalizer.Rule(
+                    canonical: "Test Person",
+                    aliases: ["test person", "tas"]
+                ),
+                TranscriptCanonicalizer.Rule(
+                    canonical: "Test Person",
+                    aliases: ["steph", "step", "stuff"],
+                    matchStrategy: .personNameSlot
+                )
+            ]
+        )
+    }
+
+    func testPersonLexiconDoesNotBiasRecognizerTowardAmbiguousAliases() {
+        let canonicalizer = TranscriptCanonicalizer(
+            rules: CorrectionRuleCompiler.compile(records: [
+                CorrectionRecord(
+                    id: "person",
+                    kind: .lexicon,
+                    canonical: "Test Person",
+                    aliases: ["test person", "tas"],
+                    ambiguousAliases: ["steph", "step", "stuff"],
+                    lexiconClass: .person,
+                    source: .manual,
+                    status: .active
+                )
+            ])
+        )
+
+        XCTAssertTrue(canonicalizer.speechContextualStrings.contains("Test Person"))
+        XCTAssertTrue(canonicalizer.speechContextualStrings.contains("tas"))
+        XCTAssertFalse(canonicalizer.speechContextualStrings.contains("steph"))
+        XCTAssertFalse(canonicalizer.speechContextualStrings.contains("step"))
+        XCTAssertFalse(canonicalizer.speechContextualStrings.contains("stuff"))
+    }
 }

@@ -15,6 +15,8 @@ import XCTest
 /// - `EPOS_EVAL_RECORDINGS_DIR`: defaults to `~/Library/Caches/Epos/recordings`
 /// - `EPOS_EVAL_LIMIT`: number of recordings to replay
 /// - `EPOS_EVAL_LATEST=1`: newest-first selection instead of oldest-first
+/// - `EPOS_EVAL_DEFAULTS_DOMAIN`: UserDefaults domain to load correction records from,
+///   such as the installed app's bundle identifier.
 /// - `EPOS_EVAL_GROUND_TRUTH_ONLY=1`: limit selection to recordings with
 ///   human-intended transcripts in the ground-truth manifest.
 /// - `EPOS_EVAL_OUTPUT`: defaults to `.build/evals/speech-context-eval.jsonl`
@@ -49,7 +51,7 @@ final class SpeechContextEvalTests: XCTestCase {
         )
         try XCTSkipIf(selectedRecordings.isEmpty, "No .wav recordings found at \(recordingsDirectory.path)")
 
-        let canonicalizer = TranscriptCanonicalizer.load()
+        let canonicalizer = Self.canonicalizer(environment: environment)
         let variants = Self.contextVariants(canonicalizer: canonicalizer)
         let baselineVariant = variants[0]
         try SavedRecordingEvalSupport.prepareOutput(outputURL)
@@ -150,6 +152,7 @@ final class SpeechContextEvalTests: XCTestCase {
                     applicationMode: result.applicationMode,
                     includeAlternatives: result.includeAlternatives,
                     contextReadbackCount: result.contextReadback.count,
+                    contextReadbackTerms: result.contextReadback,
                     contextReadbackMatches: contextReadbackMatches,
                     baselineText: baseline.text,
                     variantText: result.text,
@@ -199,6 +202,19 @@ final class SpeechContextEvalTests: XCTestCase {
             return recordings
         }
         return recordings.filter { manifest.transcript(for: $0) != nil }
+    }
+
+    private static func canonicalizer(environment: [String: String]) -> TranscriptCanonicalizer {
+        let domain = environment["EPOS_EVAL_DEFAULTS_DOMAIN"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let domain, !domain.isEmpty else {
+            return TranscriptCanonicalizer.load()
+        }
+
+        guard let defaults = UserDefaults(suiteName: domain) else {
+            return TranscriptCanonicalizer.load()
+        }
+        return TranscriptCanonicalizer.load(from: defaults)
     }
 
     private static func alternativeReranking(

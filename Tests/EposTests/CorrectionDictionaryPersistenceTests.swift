@@ -210,6 +210,38 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("open siemux"), "open siemux")
     }
 
+    func testTranscriptCanonicalizerLoadsPersistedPersonLexiconRecords() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        CorrectionDictionary.saveRecords(
+            [
+                CorrectionRecord(
+                    id: "manual.person",
+                    kind: .lexicon,
+                    canonical: "Test Person",
+                    aliases: ["test person", "tas"],
+                    ambiguousAliases: ["steph", "step"],
+                    lexiconClass: .person,
+                    source: .manual,
+                    status: .active
+                )
+            ],
+            to: defaults
+        )
+
+        let dictionary = CorrectionDictionary.load(from: defaults)
+        let record = try XCTUnwrap(dictionary.records.first)
+        let canonicalizer = TranscriptCanonicalizer.load(from: defaults)
+
+        XCTAssertEqual(record.ambiguousAliases, ["steph", "step"])
+        XCTAssertEqual(record.lexiconClass, .person)
+        XCTAssertEqual(canonicalizer.canonicalize("ask Steph to review"), "ask Test Person to review")
+        XCTAssertEqual(canonicalizer.canonicalize("message to Step"), "message to Test Person")
+        XCTAssertEqual(canonicalizer.canonicalize("next step"), "next step")
+    }
+
     func testDictionaryMigratesVersionedFlatRulesAsReplacementRecords() throws {
         struct StoredRules: Codable {
             var version: Int

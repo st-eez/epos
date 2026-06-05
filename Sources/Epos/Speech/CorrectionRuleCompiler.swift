@@ -2,18 +2,40 @@ import Foundation
 
 public enum CorrectionRuleCompiler {
     public static func compile(records: [CorrectionRecord]) -> [TranscriptCanonicalizer.Rule] {
-        records.compactMap { record in
-            guard record.status == .active, record.kind.compilesToCanonicalizer else { return nil }
+        records.flatMap { record -> [TranscriptCanonicalizer.Rule] in
+            guard record.status == .active, record.kind.compilesToCanonicalizer else { return [] }
 
             let canonical = record.canonical.trimmingCharacters(in: .whitespacesAndNewlines)
             let aliases = record.aliases.trimmingNonEmpty()
-            guard !canonical.isEmpty, !aliases.isEmpty else { return nil }
+            let ambiguousAliases = record.ambiguousAliases.trimmingNonEmpty()
+            let contexts = record.contexts.trimmingNonEmpty()
+            guard !canonical.isEmpty else { return [] }
 
-            return TranscriptCanonicalizer.Rule(
-                canonical: canonical,
-                aliases: aliases,
-                contexts: record.contexts.trimmingNonEmpty()
-            )
+            var rules: [TranscriptCanonicalizer.Rule] = []
+            if !aliases.isEmpty {
+                rules.append(
+                    TranscriptCanonicalizer.Rule(
+                        canonical: canonical,
+                        aliases: aliases,
+                        contexts: contexts
+                    )
+                )
+            }
+
+            if record.kind == .lexicon,
+               record.lexiconClass == .person,
+               !ambiguousAliases.isEmpty {
+                rules.append(
+                    TranscriptCanonicalizer.Rule(
+                        canonical: canonical,
+                        aliases: ambiguousAliases,
+                        contexts: contexts,
+                        matchStrategy: .personNameSlot
+                    )
+                )
+            }
+
+            return rules
         }
     }
 }

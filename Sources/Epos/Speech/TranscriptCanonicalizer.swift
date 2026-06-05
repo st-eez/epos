@@ -12,20 +12,33 @@ public struct TranscriptCanonicalizer: Sendable {
     private static let storedRulesVersion = 1
 
     public struct Rule: Codable, Equatable, Sendable {
+        public enum MatchStrategy: String, Codable, Equatable, Sendable {
+            case literal
+            case personNameSlot
+        }
+
         public var canonical: String
         public var aliases: [String]
         public var contexts: [String]
+        public var matchStrategy: MatchStrategy
 
-        public init(canonical: String, aliases: [String] = [], contexts: [String] = []) {
+        public init(
+            canonical: String,
+            aliases: [String] = [],
+            contexts: [String] = [],
+            matchStrategy: MatchStrategy = .literal
+        ) {
             self.canonical = canonical
             self.aliases = aliases
             self.contexts = contexts
+            self.matchStrategy = matchStrategy
         }
 
         private enum CodingKeys: String, CodingKey {
             case canonical
             case aliases
             case contexts
+            case matchStrategy
         }
 
         public init(from decoder: any Decoder) throws {
@@ -33,6 +46,7 @@ public struct TranscriptCanonicalizer: Sendable {
             canonical = try container.decode(String.self, forKey: .canonical)
             aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
             contexts = try container.decodeIfPresent([String].self, forKey: .contexts) ?? []
+            matchStrategy = try container.decodeIfPresent(MatchStrategy.self, forKey: .matchStrategy) ?? .literal
         }
     }
 
@@ -47,6 +61,7 @@ public struct TranscriptCanonicalizer: Sendable {
         let canonical: String
         let regex: NSRegularExpression
         let contexts: [String]
+        let matchStrategy: Rule.MatchStrategy
     }
 
     public static let defaultRules: [Rule] = CorrectionRuleCompiler.compile(
@@ -114,12 +129,15 @@ public struct TranscriptCanonicalizer: Sendable {
 
         for rule in rules {
             let candidates = [rule.canonical]
-                + (includingAliases && rule.contexts.isEmpty ? Self.allAliases(for: rule) : [])
+                + (
+                    includingAliases && rule.contexts.isEmpty && rule.matchStrategy == .literal ?
+                        Self.allAliases(for: rule) : []
+                )
             for candidate in candidates {
                 let phrase = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
                 guard Self.isUsefulSpeechContext(phrase) else { continue }
 
-                let key = Self.normalizedPhrase(phrase)
+                let key = CorrectionMatchContext.normalizedPhrase(phrase)
                 guard seen.insert(key).inserted else { continue }
 
                 phrases.append(phrase)
@@ -141,7 +159,13 @@ private extension TranscriptCanonicalizer {
         rules.enumerated()
             .flatMap { ruleOrder, rule in
                 allAliases(for: rule).map {
-                    (canonical: rule.canonical, alias: $0, contexts: rule.contexts, ruleOrder: ruleOrder)
+                    (
+                        canonical: rule.canonical,
+                        alias: $0,
+                        contexts: rule.contexts,
+                        matchStrategy: rule.matchStrategy,
+                        ruleOrder: ruleOrder
+                    )
                 }
             }
             .sorted { lhs, rhs in
@@ -151,8 +175,13 @@ private extension TranscriptCanonicalizer {
                 return lhs.alias.count > rhs.alias.count
             }
             .compactMap { spec in
-                regex(forAlias: spec.alias).map {
-                    CompiledSpec(canonical: spec.canonical, regex: $0, contexts: spec.contexts)
+                CorrectionMatchContext.regex(forAlias: spec.alias).map {
+                    CompiledSpec(
+                        canonical: spec.canonical,
+                        regex: $0,
+                        contexts: spec.contexts,
+                        matchStrategy: spec.matchStrategy
+                    )
                 }
             }
     }
@@ -160,7 +189,7 @@ private extension TranscriptCanonicalizer {
     static func allAliases(for rule: Rule) -> [String] {
         var seen: Set<String> = []
         return rule.aliases.filter { alias in
-            let key = normalizedPhrase(alias)
+            let key = CorrectionMatchContext.normalizedPhrase(alias)
             guard !key.isEmpty, !seen.contains(key) else { return false }
             seen.insert(key)
             return true
@@ -178,7 +207,12 @@ private extension TranscriptCanonicalizer {
 
         for match in matches {
             guard match.range.location >= cursor else { continue }
-            guard spec.contexts.isEmpty || hasContext(spec.contexts, before: match.range, in: nsText) else {
+            guard CorrectionMatchContext.allows(
+                matchStrategy: spec.matchStrategy,
+                contexts: spec.contexts,
+                before: match.range,
+                in: nsText
+            ) else {
                 continue
             }
 
@@ -191,32 +225,6 @@ private extension TranscriptCanonicalizer {
 
         output += nsText.substring(from: cursor)
         return output
-    }
-
-    static func regex(forAlias alias: String) -> NSRegularExpression? {
-        let parts = alias
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
-
-        guard !parts.isEmpty else { return nil }
-
-        let body = parts
-            .map(NSRegularExpression.escapedPattern(for:))
-            .joined(separator: #"(?:[\s,\-\.']+)"#)
-        let pattern = #"(?<![A-Za-z0-9])"# + body + #"(?![A-Za-z0-9])"#
-        return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
-    }
-
-    static func hasContext(_ contexts: [String], before range: NSRange, in text: NSString) -> Bool {
-        let windowLength = 64
-        let start = max(0, range.location - windowLength)
-        let prefix = text.substring(with: NSRange(location: start, length: range.location - start))
-        let normalizedPrefix = normalizedPhrase(prefix)
-
-        return contexts.contains { context in
-            let normalizedContext = normalizedPhrase(context)
-            return !normalizedContext.isEmpty && normalizedPrefix.contains(normalizedContext)
-        }
     }
 
     /// `dash dash <flag>` -> `--<flag>`. The one shorthand the alias->canonical engine
@@ -236,13 +244,6 @@ private extension TranscriptCanonicalizer {
         pattern: #"(?<![A-Za-z0-9])dash\s+dash\s+([A-Za-z][A-Za-z0-9_-]*)"#,
         options: [.caseInsensitive]
     )
-
-    static func normalizedPhrase(_ phrase: String) -> String {
-        phrase
-            .lowercased()
-            .split { !$0.isLetter && !$0.isNumber }
-            .joined(separator: " ")
-    }
 
     /// A canonical worth biasing the recognizer toward carries at least one letter
     /// or digit; pure punctuation (`--`, `/`) has nothing for the model to match.

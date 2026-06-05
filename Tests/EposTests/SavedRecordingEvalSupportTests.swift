@@ -259,6 +259,7 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
             applicationMode: .setContextBeforeStart,
             includeAlternatives: bestAlternativeTranscript != nil,
             contextReadbackCount: 1,
+            contextReadbackTerms: ["sample"],
             contextReadbackMatches: true,
             baselineText: baselineText,
             variantText: variantText,
