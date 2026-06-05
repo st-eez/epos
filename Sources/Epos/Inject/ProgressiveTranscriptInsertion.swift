@@ -229,7 +229,13 @@ public final class ProgressiveTranscriptInsertionSession {
         }
 
         // Append-only: never delete, only type new tail past what we last committed,
-        // so we can't corrupt the field's own edits. WHICH tail depends on the source:
+        // so we can't corrupt the field's own edits. No caret revalidation here by
+        // design: the latch fired BECAUSE value/caret reads proved unreliable for
+        // this field, so consulting them again would either be noise or convert
+        // do-no-harm into kill-the-dictation. Keystrokes land at the live caret —
+        // inherent to synthesis; a mid-utterance caret move while holding fn is
+        // rare and the misplaced tail is bounded, visible, and never destructive.
+        // WHICH tail depends on the source:
         //
         // - A raw final (`lossProofAppend`) is the recognizer's authoritative end-
         //   state. When the final only extends the commit, append that extension. When
