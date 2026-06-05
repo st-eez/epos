@@ -230,6 +230,11 @@ public final class AppCoordinator: ObservableObject {
             log.error("cannot start: capture format unavailable (bootstrap incomplete?)")
             return
         }
+        // Drop the prior recording's pending edit-capture polls: once new dictation
+        // types into the field, a span read can no longer be attributed to the prior
+        // transcript as a user edit. Burst dictation therefore under-collects
+        // correction evidence by design — precision over recall; extending capture
+        // past this point would record unrelated typing as an "edit".
         cancelObservedEditCaptureChecks()
         state = .recording
         let recordingID = recordingIDGenerator()
