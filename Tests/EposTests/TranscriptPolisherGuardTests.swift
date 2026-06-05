@@ -142,7 +142,11 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             // Zero-content: a conversion introducing no new characters is fine; an
             // unrelated symbol rewrite is not.
             ("...", ".", true),
+            ("...", "..", false),
             ("...", "???", false),
+            ("--", "--", true),
+            ("--", "-", false),
+            ("--", "---", false),
 
             // MARK: - rejected meaning changes (every word kept, meaning altered)
 

@@ -93,6 +93,38 @@ final class CorrectionEvidenceTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("open widget pro."), "open WidgetPro.")
     }
 
+    func testEditedMissEvidenceTrimsEditedOnlySentencePunctuationFromSuggestedRecord() throws {
+        let evidence = CorrectionEvidence(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "open widget pro",
+            canonicalizedTranscript: "open widget pro",
+            finalInsertedTranscript: "open widget pro",
+            userEditedTranscript: "open WidgetPro.",
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        )
+
+        let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
+
+        XCTAssertEqual(suggested.canonical, "WidgetPro")
+        XCTAssertEqual(suggested.aliases, ["widget pro"])
+
+        let accepted = CorrectionRecord(
+            id: suggested.id,
+            kind: suggested.kind,
+            canonical: suggested.canonical,
+            aliases: suggested.aliases,
+            source: suggested.source,
+            status: .active
+        )
+        let canonicalizer = TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: [accepted]))
+        XCTAssertEqual(canonicalizer.canonicalize("launch widget pro now"), "launch WidgetPro now")
+    }
+
     func testEditedMissEvidencePreservesInternalCanonicalPunctuation() throws {
         let evidence = CorrectionEvidence(
             id: "evidence-1",
@@ -180,6 +212,75 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         XCTAssertEqual(suggested.canonical, ".gitignore")
         XCTAssertEqual(suggested.aliases, [".git ignore"])
+    }
+
+    func testEditedMissEvidencePreservesPurePunctuationCanonical() throws {
+        let evidence = CorrectionEvidence(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "question mark",
+            canonicalizedTranscript: "question mark",
+            finalInsertedTranscript: "question mark",
+            userEditedTranscript: "?",
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        )
+
+        let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
+
+        XCTAssertEqual(suggested.canonical, "?")
+        XCTAssertEqual(suggested.aliases, ["question mark"])
+    }
+
+    func testEditedMissEvidencePreservesSpokenPunctuationAttachedToWord() throws {
+        let suggestions = CorrectionCandidateSuggester.suggestedRecords(from: [
+            CorrectionEvidence(
+                id: "evidence-1",
+                observedAt: Date(timeIntervalSince1970: 1),
+                recordingID: "rec-1",
+                rawTranscript: "are you sure question mark",
+                canonicalizedTranscript: "are you sure question mark",
+                finalInsertedTranscript: "are you sure question mark",
+                userEditedTranscript: "are you sure?",
+                appliedRuleIDs: [],
+                polishOutcome: "disabled",
+                engineOutcome: nil,
+                guardRejectionReason: nil
+            ),
+            CorrectionEvidence(
+                id: "evidence-2",
+                observedAt: Date(timeIntervalSince1970: 2),
+                recordingID: "rec-2",
+                rawTranscript: "are you sure exclamation point",
+                canonicalizedTranscript: "are you sure exclamation point",
+                finalInsertedTranscript: "are you sure exclamation point",
+                userEditedTranscript: "are you sure!",
+                appliedRuleIDs: [],
+                polishOutcome: "disabled",
+                engineOutcome: nil,
+                guardRejectionReason: nil
+            )
+        ])
+
+        XCTAssertEqual(suggestions.map(\.canonical), ["sure?", "sure!"])
+        XCTAssertEqual(suggestions.map(\.aliases), [["sure question mark"], ["sure exclamation point"]])
+
+        let accepted = suggestions.map { suggested in
+            CorrectionRecord(
+                id: suggested.id,
+                kind: suggested.kind,
+                canonical: suggested.canonical,
+                aliases: suggested.aliases,
+                source: suggested.source,
+                status: .active
+            )
+        }
+        let canonicalizer = TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: accepted))
+        XCTAssertEqual(canonicalizer.canonicalize("are you sure question mark"), "are you sure?")
+        XCTAssertEqual(canonicalizer.canonicalize("are you sure exclamation point"), "are you sure!")
     }
 
     func testEvidenceStoreUpdatesExistingRowWithObservedUserEdit() throws {

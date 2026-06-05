@@ -2,6 +2,41 @@ import XCTest
 @testable import Epos
 
 final class CorrectionDictionaryPersistenceTests: XCTestCase {
+    func testDictionaryMigratesPersistedBuiltInRecordsToCurrentDefinitions() throws {
+        struct StoredDictionary: Codable {
+            var version: Int
+            var records: [CorrectionRecord]
+        }
+
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let staleBuiltIn = CorrectionRecord(
+            id: "builtin.yesterday-saying",
+            kind: .replacement,
+            canonical: "yesterday, saying",
+            aliases: ["history, seeing"],
+            source: .builtIn,
+            status: .disabled
+        )
+        let data = try JSONEncoder().encode(StoredDictionary(version: 1, records: [staleBuiltIn]))
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: CorrectionDictionary.recordsDefaultsKey)
+
+        let loaded = CorrectionDictionary.load(from: defaults)
+        let record = try XCTUnwrap(loaded.records.first)
+
+        XCTAssertEqual(record.id, "builtin.yesterday-saying")
+        XCTAssertEqual(record.aliases, ["history seeing"])
+        XCTAssertEqual(record.status, .disabled)
+
+        let persistedRaw = try XCTUnwrap(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
+        let persistedData = try XCTUnwrap(persistedRaw.data(using: .utf8))
+        let persisted = try JSONDecoder().decode(StoredDictionary.self, from: persistedData)
+        XCTAssertEqual(persisted.records.first?.aliases, ["history seeing"])
+        XCTAssertEqual(persisted.records.first?.status, .disabled)
+    }
+
     @MainActor
     func testCorrectionStoreSavesRulesAsDictionaryRecords() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
@@ -83,6 +118,43 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(dictionary.records.map(\.source), [.manual])
         XCTAssertEqual(canonicalizer.canonicalize("open widget pro"), "open WidgetPro")
         XCTAssertEqual(canonicalizer.canonicalize("open siemux"), "open siemux")
+    }
+
+    func testDictionaryMigratesLegacyFlatBuiltInRulesToCurrentDefinitions() throws {
+        struct StoredRules: Codable {
+            var version: Int
+            var rules: [TranscriptCanonicalizer.Rule]
+        }
+        struct StoredDictionary: Codable {
+            var version: Int
+            var records: [CorrectionRecord]
+        }
+
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let legacyPayload = StoredRules(
+            version: 1,
+            rules: [
+                .init(canonical: "yesterday, saying", aliases: ["history, seeing"])
+            ]
+        )
+        let data = try JSONEncoder().encode(legacyPayload)
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: TranscriptCanonicalizer.rulesDefaultsKey)
+
+        let dictionary = CorrectionDictionary.load(from: defaults)
+        let record = try XCTUnwrap(dictionary.records.first)
+
+        XCTAssertEqual(record.id, "builtin.yesterday-saying")
+        XCTAssertEqual(record.source, .builtIn)
+        XCTAssertEqual(record.aliases, ["history seeing"])
+
+        let persistedRaw = try XCTUnwrap(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
+        let persistedData = try XCTUnwrap(persistedRaw.data(using: .utf8))
+        let persisted = try JSONDecoder().decode(StoredDictionary.self, from: persistedData)
+        XCTAssertEqual(persisted.records.first?.id, "builtin.yesterday-saying")
+        XCTAssertEqual(persisted.records.first?.aliases, ["history seeing"])
     }
 
     func testDictionaryMigratesLegacyFlatRulesBeforeDefaults() throws {

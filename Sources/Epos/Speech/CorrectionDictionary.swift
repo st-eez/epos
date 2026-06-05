@@ -29,10 +29,7 @@ public struct CorrectionDictionary: Equatable, Sendable {
     }
 
     public static func records(from rules: [TranscriptCanonicalizer.Rule]) -> [CorrectionRecord] {
-        var defaultPairs = zip(
-            CorrectionRuleCompiler.compile(records: defaultRecords),
-            defaultRecords
-        ).map { (rule: $0.0, record: $0.1) }
+        var defaultPairs = builtInRuleMigrationPairs()
 
         return rules.enumerated().map { index, rule in
             if let defaultIndex = defaultPairs.firstIndex(where: { $0.rule == rule }) {
@@ -91,7 +88,7 @@ public struct CorrectionDictionary: Equatable, Sendable {
             aliases: ["foundation models", "foundational models", "the foundation models"]
         ),
         defaultRecord(id: "builtin.saying-deprecate", canonical: "saying deprecate", aliases: ["seeing deprecate"]),
-        defaultRecord(id: "builtin.yesterday-saying", canonical: "yesterday, saying", aliases: ["history, seeing"]),
+        defaultRecord(id: "builtin.yesterday-saying", canonical: "yesterday, saying", aliases: ["history seeing"]),
         defaultRecord(
             id: "builtin.not-working-properly",
             canonical: "not working properly",
@@ -110,7 +107,7 @@ public struct CorrectionDictionary: Equatable, Sendable {
         defaultRecord(
             id: "builtin.text-is-redundant",
             canonical: "text is redundant and what you can remove",
-            aliases: ["text is redundant, and you can remove"]
+            aliases: ["text is redundant and you can remove"]
         ),
         defaultRecord(
             id: "builtin.three-letter-code",
@@ -247,11 +244,48 @@ public struct CorrectionDictionary: Equatable, Sendable {
         )
     }
 
+    private static func builtInRuleMigrationPairs() -> [
+        (rule: TranscriptCanonicalizer.Rule, record: CorrectionRecord)
+    ] {
+        let currentPairs = zip(
+            CorrectionRuleCompiler.compile(records: defaultRecords),
+            defaultRecords
+        ).map { (rule: $0.0, record: $0.1) }
+        let legacyPairs = zip(
+            CorrectionRuleCompiler.compile(records: legacyBuiltInRecordsForMigration),
+            legacyBuiltInRecordsForMigration.compactMap { currentDefaultRecord(for: $0.id) }
+        ).map { (rule: $0.0, record: $0.1) }
+        return currentPairs + legacyPairs
+    }
+
+    private static var legacyBuiltInRecordsForMigration: [CorrectionRecord] {
+        defaultRecords.map { record in
+            var record = record
+            switch record.id {
+            case "builtin.yesterday-saying":
+                record.aliases = ["history, seeing"]
+            case "builtin.text-is-redundant":
+                record.aliases = ["text is redundant, and you can remove"]
+            default:
+                break
+            }
+            return record
+        }
+    }
+
+    private static func currentDefaultRecord(for id: String) -> CorrectionRecord? {
+        defaultRecords.first { $0.id == id }
+    }
+
     private static func storedRecords(from defaults: UserDefaults) -> StoredRecordsResult {
         if let rawDictionary = defaults.string(forKey: recordsDefaultsKey),
            let data = rawDictionary.data(using: .utf8),
            let storedDictionary = try? JSONDecoder().decode(StoredDictionary.self, from: data) {
-            return StoredRecordsResult(records: storedDictionary.records)
+            let migrated = migratingStoredBuiltInRecords(storedDictionary.records)
+            return StoredRecordsResult(
+                records: migrated.records,
+                migratedRecords: migrated.didChange ? migrated.records : nil
+            )
         }
 
         let migratedRules = migratedRulesFromFlatStorage(defaults)
@@ -280,6 +314,25 @@ public struct CorrectionDictionary: Equatable, Sendable {
         }
 
         return MigratedRules(rules: TranscriptCanonicalizer.defaultRules, shouldPersist: false)
+    }
+
+    private static func migratingStoredBuiltInRecords(_ records: [CorrectionRecord]) -> (
+        records: [CorrectionRecord],
+        didChange: Bool
+    ) {
+        let defaultsByID = Dictionary(uniqueKeysWithValues: defaultRecords.map { ($0.id, $0) })
+        var didChange = false
+        let migratedRecords = records.map { record -> CorrectionRecord in
+            guard record.source == .builtIn,
+                  var current = defaultsByID[record.id],
+                  current != record else {
+                return record
+            }
+            current.status = record.status
+            didChange = true
+            return current
+        }
+        return (migratedRecords, didChange)
     }
 
     private static func manualRecord(index: Int, rule: TranscriptCanonicalizer.Rule) -> CorrectionRecord {

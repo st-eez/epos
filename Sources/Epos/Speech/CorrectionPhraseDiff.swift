@@ -48,7 +48,7 @@ enum CorrectionPhraseDiff {
 
         let observedEnd = observedWords.count - suffixCount
         let editedEnd = editedWords.count - suffixCount
-        let phrase = trimmingSharedTrailingPunctuation(
+        let phrase = trimmingTrailingSentencePunctuation(
             alias: observedWords[prefixCount..<observedEnd].joined(separator: " "),
             canonical: editedWords[prefixCount..<editedEnd].joined(separator: " ")
         )
@@ -82,23 +82,52 @@ enum CorrectionPhraseDiff {
         text.split { $0.isWhitespace }.map(String.init)
     }
 
-    private static func trimmingSharedTrailingPunctuation(
+    private static func trimmingTrailingSentencePunctuation(
         alias: String,
         canonical: String
     ) -> (alias: String, canonical: String) {
-        var alias = alias
-        var canonical = canonical
-
-        while let aliasLast = alias.last,
-              let canonicalLast = canonical.last,
-              aliasLast == canonicalLast,
-              trailingSentencePunctuation.contains(aliasLast) {
-            alias.removeLast()
-            canonical.removeLast()
+        var alias = alias.trimmingTrailingSentencePunctuation()
+        var canonical = canonical.trimmingTrailingSentencePunctuation { punctuation in
+            aliasSpellsTrailingPunctuation(alias, punctuation: punctuation)
         }
 
-        return (alias.trimmingCharacters(in: .whitespaces), canonical.trimmingCharacters(in: .whitespaces))
+        alias = alias.trimmingCharacters(in: .whitespaces)
+        canonical = canonical.trimmingCharacters(in: .whitespaces)
+        return (alias, canonical)
     }
 
-    private static let trailingSentencePunctuation: Set<Character> = [".", ",", "!", "?"]
+    fileprivate static let trailingSentencePunctuation: Set<Character> = [".", ",", "!", "?"]
+
+    private static let spokenPunctuationSuffixes: [Character: [String]] = [
+        ".": ["period", "dot"],
+        ",": ["comma"],
+        "!": ["exclamation mark", "exclamation point"],
+        "?": ["question mark"]
+    ]
+
+    private static func aliasSpellsTrailingPunctuation(_ alias: String, punctuation: Character) -> Bool {
+        guard let suffixes = spokenPunctuationSuffixes[punctuation] else { return false }
+        let normalizedAlias = normalizedPhrase(alias)
+        return suffixes.contains { suffix in
+            normalizedAlias == suffix || normalizedAlias.hasSuffix(" \(suffix)")
+        }
+    }
+}
+
+private extension String {
+    func trimmingTrailingSentencePunctuation(
+        preserving shouldPreserve: (Character) -> Bool = { _ in false }
+    ) -> String {
+        let original = self
+        var text = self
+        while let last = text.last,
+              CorrectionPhraseDiff.trailingSentencePunctuation.contains(last) {
+            if shouldPreserve(last) { break }
+            text.removeLast()
+        }
+        if text.trimmingCharacters(in: .whitespaces).isEmpty {
+            return original
+        }
+        return text
+    }
 }

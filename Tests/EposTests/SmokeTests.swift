@@ -200,6 +200,15 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalize("edit project.yml"), "edit project.yml")
     }
 
+    func testDefaultCorrectionAliasesAreEditorSafe() {
+        for record in CorrectionDictionary.defaultRecords {
+            XCTAssertFalse(
+                record.aliases.contains { $0.contains(",") },
+                "\(record.id) has an alias containing a comma"
+            )
+        }
+    }
+
     func testCanonicalizerOnlyAppliesListedAliases() {
         let canonicalizer = TranscriptCanonicalizer(rules: [
             .init(canonical: "WidgetPro", aliases: ["widget pro"])

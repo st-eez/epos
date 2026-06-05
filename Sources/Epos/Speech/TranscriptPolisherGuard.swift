@@ -59,16 +59,16 @@ extension TranscriptPolisher {
                     )
                 )
             }
-            let rawScalars = nonWhitespaceScalars(raw)
-            let polishedScalars = nonWhitespaceScalars(polished)
-            guard polishedScalars.isSubset(of: rawScalars) else {
+            let rawScalars = nonWhitespaceScalarCounts(raw)
+            let polishedScalars = nonWhitespaceScalarCounts(polished)
+            guard zeroContentSymbolUsageIsJustified(rawScalars: rawScalars, polishedScalars: polishedScalars) else {
                 return rejectedPolish(
                     reason: .zeroContentRewrite,
                     polished: polished,
                     diff: [
-                        "rawNonWhitespaceScalars=\(rawScalars.count)",
-                        "polishedNonWhitespaceScalars=\(polishedScalars.count)",
-                        "introducedScalars=\(polishedScalars.subtracting(rawScalars).count)"
+                        "rawNonWhitespaceScalars=\(rawScalars.values.reduce(0, +))",
+                        "polishedNonWhitespaceScalars=\(polishedScalars.values.reduce(0, +))",
+                        "introducedScalars=\(introducedScalarCount(raw: rawScalars, polished: polishedScalars))"
                     ].joined(separator: " ")
                 )
             }
@@ -231,8 +231,32 @@ extension TranscriptPolisher {
         character == "'" || character == "\u{2019}" || character == "-" || character == "."
     }
 
-    private static func nonWhitespaceScalars(_ text: String) -> Set<Unicode.Scalar> {
-        Set(text.unicodeScalars.filter { !CharacterSet.whitespacesAndNewlines.contains($0) })
+    private static func nonWhitespaceScalarCounts(_ text: String) -> [Unicode.Scalar: Int] {
+        text.unicodeScalars.reduce(into: [:]) { counts, scalar in
+            guard !CharacterSet.whitespacesAndNewlines.contains(scalar) else { return }
+            counts[scalar, default: 0] += 1
+        }
+    }
+
+    private static func zeroContentSymbolUsageIsJustified(
+        rawScalars: [Unicode.Scalar: Int],
+        polishedScalars: [Unicode.Scalar: Int]
+    ) -> Bool {
+        if rawScalars == polishedScalars { return true }
+        let period: Unicode.Scalar = "."
+        return rawScalars.keys.allSatisfy { $0 == period } &&
+            polishedScalars.keys.allSatisfy { $0 == period } &&
+            (rawScalars[period] ?? 0) > 1 &&
+            polishedScalars[period] == 1
+    }
+
+    private static func introducedScalarCount(
+        raw: [Unicode.Scalar: Int],
+        polished: [Unicode.Scalar: Int]
+    ) -> Int {
+        polished.reduce(0) { partial, entry in
+            partial + max(0, entry.value - (raw[entry.key] ?? 0))
+        }
     }
 
     private static func acceptedPolish() -> PolishRetentionEvaluation {
