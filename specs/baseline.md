@@ -220,5 +220,6 @@ Tracked here so we do not lose them, in rough priority order:
 9. Agent-specific modes (Codex / Claude Code / Cursor).
 10. Custom hotkey binding UI.
 11. ~~Target-aware insertion guards for fields where backspace-retract can misalign — autocomplete/autocorrect fields (search boxes, iMessage, IntelliSense editors): focused-element verification, and stop/fallback when on-screen text diverges from what was typed or focus changes mid-recording.~~ **Shipped** (see "Shipped Since Baseline").
+12. Built-in correction re-seed on upgrade. Once a saved dictionary blob exists, `CorrectionDictionary.migratingStoredBuiltInRecords` updates or retires stored built-ins by ID but never *adds* `defaultRecords` entries absent from the blob, so upgraded installs silently never receive built-ins added after their first save. The fix needs deletion-as-status: a built-in the user deleted must persist as a deleted-status record rather than by absence, so re-seeding can distinguish "user removed this" from "this didn't exist yet". Interim dogfood mitigation: "Restore Defaults" in the Corrections window re-adopts current built-ins but discards custom rules — note customs first, then re-add.
 
 Each is a separate spec when its turn comes. None block the baseline.
