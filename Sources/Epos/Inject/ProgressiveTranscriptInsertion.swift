@@ -158,7 +158,7 @@ public final class ProgressiveTranscriptInsertionSession {
         // backspacing would itself delete the wrong characters.
         if target.focusChangedSinceStart() {
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: .focusChanged)
-            log.info("insertion guard decision \(evaluation.logFields) action=abort")
+            logGuardDecision(evaluation, action: "abort")
             cancel()
             return false
         }
@@ -182,12 +182,12 @@ public final class ProgressiveTranscriptInsertionSession {
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
             switch evaluation.decision {
             case .abort:
-                log.info("insertion guard decision \(evaluation.logFields) action=abort")
+                logGuardDecision(evaluation, action: "abort")
                 cancel()
                 return false
             case .stopAppendOnly:
                 appendOnly = true
-                log.info("insertion guard decision \(evaluation.logFields) action=appendOnly")
+                logGuardDecision(evaluation, action: "appendOnly")
             case .proceed:
                 break
             }
@@ -204,22 +204,24 @@ public final class ProgressiveTranscriptInsertionSession {
             let observation = targetObservation()
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
             // When the focus check proves same-element identity (CFEqual passed at
-            // the top of this reconcile), a divergent non-empty value is same-field
-            // mutation (autocorrect, IME normalization), not a field move — latch
-            // append-only like the delete branch instead of killing the rest of the
-            // dictation. Without identity proof the value read is the last backstop
-            // against typing into another same-app field, so divergence still cancels.
-            let identityPinnedMutation = target.verifiesFocusIdentity()
-                && (evaluation.observedChars ?? 0) > 0
+            // the top of this reconcile), a divergent value cannot be a field move:
+            // non-empty means same-field mutation (autocorrect, IME normalization),
+            // empty means the pinned field reads as unreadable-or-cleared
+            // (Electron-style inputs advertise AXValue but return nothing). Both
+            // latch append-only like the delete branch instead of killing the rest
+            // of the dictation. Without identity proof the value read is the last
+            // backstop against typing into another same-app field, so divergence
+            // there still cancels.
+            let identityPinnedDivergence = target.verifiesFocusIdentity()
             switch evaluation.decision {
             case .proceed:
                 break
             case .stopAppendOnly where !committedText.isEmpty
-                && (evaluation.caretMatches == true || identityPinnedMutation):
+                && (evaluation.caretMatches == true || identityPinnedDivergence):
                 appendOnly = true
-                log.info("insertion guard decision \(evaluation.logFields) action=appendOnly")
+                logGuardDecision(evaluation, action: "appendOnly")
             case .stopAppendOnly, .abort:
-                log.info("insertion guard decision \(evaluation.logFields) action=abortAppend")
+                logGuardDecision(evaluation, action: "abortAppend")
                 cancel()
                 return false
             }
@@ -285,18 +287,18 @@ public final class ProgressiveTranscriptInsertionSession {
         }
         if target.focusChangedSinceStart() {
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: .focusChanged)
-            log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
+            logGuardDecision(evaluation, action: "skipRetract")
             return
         }
 
         let observation = targetObservation()
         let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
         guard evaluation.decision == .proceed else {
-            log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
+            logGuardDecision(evaluation, action: "skipRetract")
             return
         }
         guard canRetractCommittedText(for: observation) else {
-            log.info("insertion guard decision \(evaluation.logFields) action=skipRetract")
+            logGuardDecision(evaluation, action: "skipRetract")
             return
         }
 
@@ -317,6 +319,17 @@ public final class ProgressiveTranscriptInsertionSession {
         case .focusChanged, .emptyExposed, .notRead:
             return false
         }
+    }
+
+    /// Every guard decision logs the target's identity-verification capability and
+    /// owning app alongside the evaluation: the 2026-06-05 word-one cancel regression
+    /// was only diagnosable by inferring these from `reason=emptyExposed`, so they
+    /// are recorded directly for the next field class that misbehaves.
+    private func logGuardDecision(_ evaluation: InsertionGuardEvaluation, action: String) {
+        let app = target.targetApplicationBundleIdentifier() ?? "nil"
+        log.info(
+            "insertion guard decision \(evaluation.logFields) identity=\(target.verifiesFocusIdentity()) app=\(app) action=\(action)"
+        )
     }
 
     private func targetObservation() -> InsertionTargetObservation {

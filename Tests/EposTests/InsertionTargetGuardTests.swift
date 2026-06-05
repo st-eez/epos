@@ -495,6 +495,39 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
+    func testIdentityVerifiedPureAppendLatchesWhenValueReadsAlwaysEmpty() {
+        // A field that advertises AXValue but never returns text (Electron-style
+        // web inputs): every read comes back empty, so the first pure append after
+        // typing begins observes emptyExposed divergence. The focus check has
+        // already pinned the same element via CFEqual, so the empty read cannot
+        // mean a field move — unreadable-or-cleared on the home field. The session
+        // must latch append-only and keep the dictation flowing, not cancel at
+        // word one and silently drop everything after it.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.verifiesIdentity = true
+        observer.value = ""
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("i")
+        session.acceptPartialTranscript("i want")
+        session.acceptFinalTranscript("i want this to keep flowing")
+        session.finish()
+
+        XCTAssertEqual(backend.fieldText, "i want this to keep flowing")
+        XCTAssertEqual(backend.cancelCount, 0)
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
+        XCTAssertEqual(backend.finishCount, 1)
+    }
+
     func testPureAppendStillCancelsOnDivergenceWithoutIdentityProof() {
         // A target that became text-exposing only via a later non-empty read
         // (everReadNonEmptyValue) has NO element-identity check — the value read is
