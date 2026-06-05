@@ -44,6 +44,29 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
         XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
     }
 
+    func testDropsCommaTrailingARemovedFillerInsteadOfTransplantingIt() {
+        // The comma after "um" punctuated the disfluency. Whitespace normalization
+        // used to snap it onto the kept word ("let's eat, grandma"), inventing a
+        // vocative; it must die with the filler instead.
+        let raw = "let's eat um, grandma"
+
+        let cleaned = TranscriptDeterministicCleaner.clean(raw)
+
+        XCTAssertEqual(cleaned, "let's eat grandma")
+        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
+    }
+
+    func testKeepsCommaOwnedByTheKeptWordWhenALaterFillerDrops() {
+        // The comma before "um" belongs to "want"; only the disfluency's own
+        // trailing comma is dropped.
+        let raw = "I want, um apples"
+
+        let cleaned = TranscriptDeterministicCleaner.clean(raw)
+
+        XCTAssertEqual(cleaned, "I want, apples")
+        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
+    }
+
     func testConvertsStandaloneNumericOrdinals() {
         let first = "What should we test 1st to ensure that it's still working properly?"
         let twentyFirst = "ship the 21st build after the 3rd smoke test"

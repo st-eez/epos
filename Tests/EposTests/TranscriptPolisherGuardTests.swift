@@ -276,6 +276,14 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             // the content comma → reject, while the correct "buy milk, eggs" is kept.
             ("buy milk, um, eggs", "buy milk eggs", false),
             ("buy milk, um, eggs", "buy milk, eggs", true),
+            // Within-gap, count-neutral TRANSPLANT: the comma that delimited the
+            // dropped "um" survives attached to the kept word, inventing a vocative
+            // ("eat, grandma") the user never spoke. Counts match per gap (1→1), so
+            // both count rules wave it through; the owned-by-anchor check sees the
+            // raw gap had no comma before its first dropped filler → reject. The
+            // correct cleanup drops the disfluency's comma with it.
+            ("let's eat um, grandma", "let's eat, grandma", false),
+            ("let's eat um, grandma", "let's eat grandma", true),
 
             // MARK: - finding 5: an all-caps acronym must not silently fold to/from a
             // lowercase homograph, in EITHER direction (the fold changes meaning).

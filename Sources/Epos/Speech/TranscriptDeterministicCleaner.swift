@@ -30,11 +30,26 @@ enum TranscriptDeterministicCleaner {
         }
 
         guard !removed.isEmpty || !replacements.isEmpty else { return text }
+        // A comma directly trailing a removed filler punctuated the disfluency, not
+        // the preceding kept word — drop it with the filler. Leaving it would let
+        // whitespace normalization transplant it onto the kept word ("let's eat um,
+        // grandma" → "let's eat, grandma"), inventing a pause the user never spoke.
+        // A comma BEFORE the filler belongs to the kept word and stays
+        // ("I want, um, apples" → "I want, apples").
+        var gapReplacements: [Int: String] = [:]
+        for index in removed {
+            let gapIndex = segments.index(after: index)
+            guard gapIndex < segments.endIndex, !segments[gapIndex].isWord else { continue }
+            let gapText = gapReplacements[gapIndex] ?? segments[gapIndex].text
+            if let comma = gapText.firstIndex(of: ",") {
+                gapReplacements[gapIndex] = String(gapText[..<comma]) + String(gapText[gapText.index(after: comma)...])
+            }
+        }
         let stripped = segments
             .enumerated()
             .map { index, segment in
                 if removed.contains(index) { return "" }
-                return replacements[index] ?? segment.text
+                return gapReplacements[index] ?? replacements[index] ?? segment.text
             }
             .joined()
         return normalizeWhitespaceAndCommas(stripped)

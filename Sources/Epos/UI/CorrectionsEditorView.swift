@@ -222,7 +222,11 @@ struct CorrectionsEditorView: View {
             in: CorrectionDraft.fromRules(store.rules),
             notIn: savedRows
         )
-        rows.append(contentsOf: accepted)
+        // A user may have already typed the same correction as an unsaved row —
+        // appending it again would show (and later persist) a duplicate. The row
+        // still joins savedRows: the store now owns that rule, so the matching
+        // unsaved row correctly stops counting as an edit.
+        rows.append(contentsOf: accepted.filter { !rows.contains($0) })
         savedRows.append(contentsOf: accepted)
         reloadSuggestions()
     }

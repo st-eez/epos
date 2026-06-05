@@ -243,6 +243,14 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(accepted.map(\.canonical), ["cmux"])
         // Content already present appends nothing on a repeat merge.
         XCTAssertTrue(CorrectionDraft.newDrafts(in: loadedAfterAccept, notIn: saved + accepted).isEmpty)
+        // An identical UNSAVED row is invisible to the savedRows diff, so the
+        // accepted draft still surfaces — the editor's rows-filter must drop it
+        // before appending or the user sees (and later persists) a duplicate.
+        let rowsWithUnsavedDuplicate = saved + CorrectionDraft.fromRules([
+            .init(canonical: "cmux", aliases: ["seamux"])
+        ])
+        XCTAssertEqual(accepted.map(\.canonical), ["cmux"])
+        XCTAssertTrue(accepted.filter { !rowsWithUnsavedDuplicate.contains($0) }.isEmpty)
     }
 
     @MainActor

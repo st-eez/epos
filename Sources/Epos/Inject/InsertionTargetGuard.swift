@@ -165,6 +165,13 @@ public protocol InsertionTargetObserver: AnyObject {
     /// True once this element has exposed real (non-empty) text this session, so an
     /// empty read can be told apart from an app that never exposes text. Cheap.
     func exposesTextValue() -> Bool
+    /// True when `focusChangedSinceStart()` proves same-ELEMENT identity for the home
+    /// field (a text-exposing native control compared via `CFEqual`). A passing focus
+    /// check then pins the field, so a divergent value during a pure append is
+    /// same-field mutation (autocorrect, IME), not a same-app field move. False when
+    /// only the pid/opaque-signature checks ran — there the value read is the last
+    /// backstop against typing into another field.
+    func verifiesFocusIdentity() -> Bool
     /// The original text split around the insertion selection at session start.
     func baselineInsertionContext() -> InsertionTargetContext?
     /// The bundle identifier for the app that owned the insertion target at baseline.
@@ -183,6 +190,7 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
     public func observedValue() -> String? { nil }
     public func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     public func exposesTextValue() -> Bool { false }
+    public func verifiesFocusIdentity() -> Bool { false }
     public func baselineInsertionContext() -> InsertionTargetContext? { nil }
     public func targetApplicationBundleIdentifier() -> String? { nil }
     public func targetWindowTitle() -> String? { nil }
@@ -309,6 +317,8 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     }
 
     public func exposesTextValue() -> Bool { homeElementAdvertisesValue || everReadNonEmptyValue }
+
+    public func verifiesFocusIdentity() -> Bool { homeElementAdvertisesValue && homeElement != nil }
 
     public func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
 

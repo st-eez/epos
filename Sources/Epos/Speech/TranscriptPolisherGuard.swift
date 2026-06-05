@@ -779,12 +779,18 @@ extension TranscriptPolisher {
     ///     licenses one comma drop — a content list/vocative comma that merely SHARES
     ///     a gap with a filler is not licensed ("buy milk, um, eggs" → "buy milk eggs"
     ///     rejects; the correct "buy milk, eggs" is accepted), and a comma stranded by
-    ///     a *kept* word never drops ("a, b" → "a b" rejects).
+    ///     a *kept* word never drops ("a, b" → "a b" rejects); and
+    ///   • a SURVIVING comma must be owned by the kept anchor, not transplanted from
+    ///     a dropped filler: the polished commas in a gap may not exceed the raw
+    ///     commas that appear BEFORE the gap's first dropped filler. A within-gap,
+    ///     count-neutral relocation changes meaning ("let's eat um, grandma" →
+    ///     "let's eat, grandma" invents a vocative and rejects; "buy milk, um, eggs"
+    ///     → "buy milk, eggs" keeps milk's own comma and is accepted).
     ///
     /// Comparing per gap, not per total, also rejects a count-neutral RELOCATION
-    /// ("let's eat, grandma" → "let's, eat grandma") and stops a licensed drop in one
-    /// gap from masking an illicit drop or addition in another ("a, b um, c" →
-    /// "a b, c" rejects).
+    /// across gaps ("let's eat, grandma" → "let's, eat grandma") and stops a licensed
+    /// drop in one gap from masking an illicit drop or addition in another
+    /// ("a, b um, c" → "a b, c" rejects).
     private static func commaUsageIsJustified(
         raw: String,
         polished: String,
@@ -832,6 +838,15 @@ extension TranscriptPolisher {
 
             if polishedCommas > rawCommas { return false }
             if (rawCommas - polishedCommas) > droppedFillers { return false }
+
+            // A comma that survives a filler drop must already belong to the kept
+            // anchor: count only the raw commas before the first dropped filler.
+            // Commas that trailed the disfluency die with it — surviving as a comma
+            // on the kept word would be a meaning-changing transplant.
+            let rawCommasOwnedByAnchor = droppedFillers == 0
+                ? rawCommas
+                : commaCount(raw[rawLower..<rawSpans[firstDropped].range.lowerBound])
+            if polishedCommas > rawCommasOwnedByAnchor { return false }
         }
         return true
     }

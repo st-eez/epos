@@ -37,6 +37,33 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(persisted.records.first?.status, .disabled)
     }
 
+    func testDictionaryKeepsReadableRecordsWhenOneRecordIsUndecodable() throws {
+        // One record carrying an unknown enum case (written by a future build that
+        // was then downgraded) must not fail the whole array decode — that silently
+        // reset every user correction to defaults, and the next save made the reset
+        // permanent. The readable records survive; the bad one is dropped.
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let json = """
+        {"version": 1, "records": [
+          {"id": "manual.cmux", "kind": "replacement", "canonical": "cmux", \
+        "aliases": ["seamux"], "contexts": [], "source": "manual", "status": "active"},
+          {"id": "future.unknown", "kind": "some-future-kind", "canonical": "x", \
+        "aliases": ["y"], "contexts": [], "source": "manual", "status": "active"}
+        ]}
+        """
+        defaults.set(json, forKey: CorrectionDictionary.recordsDefaultsKey)
+
+        let loaded = CorrectionDictionary.load(from: defaults)
+
+        XCTAssertEqual(loaded.records.map(\.id), ["manual.cmux"])
+        // The stripped set is not persisted by the load — the original blob stays
+        // intact until the user's own next save.
+        XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), json)
+    }
+
     func testDictionaryDropsPersistedRetiredBuiltInRecords() throws {
         struct StoredDictionary: Codable {
             var version: Int

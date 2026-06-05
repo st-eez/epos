@@ -171,6 +171,12 @@ public final class ProgressiveTranscriptInsertionSession {
         // (this field has shown text before → divergence) or `.notRead` (an
         // AX-opaque app such as cmux → uninformative, keep self-correcting).
         // Divergence before a delete forces append-only.
+        //
+        // On the `.value` path (no baseline context) the suffix check is the
+        // deliberate ours-ness proxy for these incremental, self-correcting
+        // deletes; only the bulk retract demands the stricter caret-at-end read
+        // (`canRetractCommittedText`) because a wrong retract is catastrophic
+        // while a wrong revision delete is bounded and immediately retyped.
         if deleteCount > 0, !appendOnly {
             let observation = targetObservation()
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
@@ -197,10 +203,19 @@ public final class ProgressiveTranscriptInsertionSession {
             target.exposesTextValue() {
             let observation = targetObservation()
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
+            // When the focus check proves same-element identity (CFEqual passed at
+            // the top of this reconcile), a divergent non-empty value is same-field
+            // mutation (autocorrect, IME normalization), not a field move — latch
+            // append-only like the delete branch instead of killing the rest of the
+            // dictation. Without identity proof the value read is the last backstop
+            // against typing into another same-app field, so divergence still cancels.
+            let identityPinnedMutation = target.verifiesFocusIdentity()
+                && (evaluation.observedChars ?? 0) > 0
             switch evaluation.decision {
             case .proceed:
                 break
-            case .stopAppendOnly where !committedText.isEmpty && evaluation.caretMatches == true:
+            case .stopAppendOnly where !committedText.isEmpty
+                && (evaluation.caretMatches == true || identityPinnedMutation):
                 appendOnly = true
                 log.info("insertion guard decision \(evaluation.logFields) action=appendOnly")
             case .stopAppendOnly, .abort:

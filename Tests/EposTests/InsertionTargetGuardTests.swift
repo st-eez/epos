@@ -463,6 +463,64 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.finishCount, 0)
     }
 
+    func testIdentityVerifiedPureAppendLatchesInsteadOfCancellingOnSameFieldMutation() {
+        // The home element advertised AXValue at baseline, so the focus check proves
+        // same-element identity via CFEqual on every reconcile. A divergent non-empty
+        // value during a pure append is then same-field mutation (the app
+        // auto-corrected an earlier word), NOT a field move — the session must latch
+        // append-only and keep the dictation flowing, not cancel and silently drop
+        // every later word.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.verifiesIdentity = true
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello wrold")
+        // The app autocorrects the typed text; the field no longer ends with the commit.
+        observer.value = "hello world"
+        session.acceptPartialTranscript("hello wrold again")
+        session.acceptFinalTranscript("hello wrold again and again")
+        session.finish()
+
+        XCTAssertEqual(backend.fieldText, "hello wrold again and again")
+        XCTAssertEqual(backend.cancelCount, 0)
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
+    }
+
+    func testPureAppendStillCancelsOnDivergenceWithoutIdentityProof() {
+        // A target that became text-exposing only via a later non-empty read
+        // (everReadNonEmptyValue) has NO element-identity check — the value read is
+        // the last backstop against a same-app field move the signature check
+        // missed. Divergence there must still cancel, not latch, or the session
+        // would keep typing into the wrong field.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.verifiesIdentity = false
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        // Focus slid to another field whose text doesn't end with the commit.
+        observer.value = "grocery list"
+        session.acceptPartialTranscript("hello world")
+        session.acceptFinalTranscript("hello world")
+
+        XCTAssertEqual(backend.operations, [.insert("hello")])
+        XCTAssertEqual(backend.cancelCount, 1)
+    }
+
     func testSessionKeepsPureAppendingWhenSameTargetMutatesCommittedTextAtCaret() {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
@@ -1234,6 +1292,7 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     var focusChanged = false
     var value: String?
     var exposesText = false
+    var verifiesIdentity = false
     var insertionContext: InsertionTargetContext?
     var selectedRange: InsertionTargetTextRange?
     var applicationBundleIdentifier: String?
@@ -1245,6 +1304,7 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     func observedValue() -> String? { value }
     func observedSelectedRange() -> InsertionTargetTextRange? { selectedRange }
     func exposesTextValue() -> Bool { exposesText }
+    func verifiesFocusIdentity() -> Bool { verifiesIdentity }
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
     func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }
     func targetWindowTitle() -> String? { windowTitle }
@@ -1259,6 +1319,7 @@ private final class MovingTargetObserver: InsertionTargetObserver {
     func observedValue() -> String? { nil }
     func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     func exposesTextValue() -> Bool { false }
+    func verifiesFocusIdentity() -> Bool { false }
     func baselineInsertionContext() -> InsertionTargetContext? { nil }
     func targetApplicationBundleIdentifier() -> String? { nil }
     func targetWindowTitle() -> String? { nil }

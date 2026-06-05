@@ -767,6 +767,7 @@ private final class EvidenceFakeTargetObserver: InsertionTargetObserver {
     func observedValue() -> String? { value }
     func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     func exposesTextValue() -> Bool { exposesText }
+    func verifiesFocusIdentity() -> Bool { false }
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
     func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }
     func targetWindowTitle() -> String? { windowTitle }

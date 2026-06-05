@@ -3,6 +3,7 @@ import Foundation
 public struct CorrectionDictionary: Equatable, Sendable {
     public static let recordsDefaultsKey = "settings.correctionDictionary.recordsJSON"
     private static let storedDictionaryVersion = 1
+    private static let log = EposLogger(category: "corrections")
 
     public var records: [CorrectionRecord]
 
@@ -264,7 +265,18 @@ public struct CorrectionDictionary: Equatable, Sendable {
     private static func storedRecords(from defaults: UserDefaults) -> StoredRecordsResult {
         if let rawDictionary = defaults.string(forKey: recordsDefaultsKey),
            let data = rawDictionary.data(using: .utf8),
-           let storedDictionary = try? JSONDecoder().decode(StoredDictionary.self, from: data) {
+           let storedDictionary = try? JSONDecoder().decode(TolerantStoredDictionary.self, from: data) {
+            // Per-record tolerance: one record carrying an unknown enum case or a
+            // future-added field must not throw away the WHOLE dictionary — that
+            // silently reset every user correction to defaults, and the next save
+            // made the reset permanent. Keep the readable records, log the rest;
+            // the stripped set is NOT persisted here, so nothing is lost until the
+            // user's own next save.
+            if storedDictionary.undecodableRecordCount > 0 {
+                log.error(
+                    "correction dictionary dropped \(storedDictionary.undecodableRecordCount) undecodable record(s) on load"
+                )
+            }
             let migrated = migratingStoredBuiltInRecords(storedDictionary.records)
             return StoredRecordsResult(
                 records: migrated.records,
@@ -367,6 +379,37 @@ private extension CorrectionDictionary {
     struct StoredDictionary: Codable {
         var version: Int
         var records: [CorrectionRecord]
+    }
+
+    /// Load-side counterpart of `StoredDictionary` that decodes records one by one,
+    /// keeping the readable ones instead of letting a single bad record (an unknown
+    /// enum case written by a future build, say) fail the whole array and silently
+    /// reset the user's dictionary to defaults.
+    struct TolerantStoredDictionary: Decodable {
+        var version: Int
+        var records: [CorrectionRecord]
+        var undecodableRecordCount: Int
+
+        private struct FailableRecord: Decodable {
+            let record: CorrectionRecord?
+
+            init(from decoder: Decoder) throws {
+                record = try? CorrectionRecord(from: decoder)
+            }
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case version
+            case records
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            version = try container.decode(Int.self, forKey: .version)
+            let failableRecords = try container.decode([FailableRecord].self, forKey: .records)
+            records = failableRecords.compactMap(\.record)
+            undecodableRecordCount = failableRecords.count - records.count
+        }
     }
 
     struct StoredRules: Codable {
