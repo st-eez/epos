@@ -188,6 +188,8 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
 /// Live Accessibility-backed observer. Uses the same trust the keystroke backend
 /// already requires; reads only the focused element, never walks the tree.
 public final class AXInsertionTargetObserver: InsertionTargetObserver {
+    private static let focusedElementMessagingTimeout: Float = 0.05
+
     private let systemWide: AXUIElement
     /// The process that owned the focused element at session start. Focus moving to a
     /// different app changes this; an element-handle churn within the same app (a
@@ -197,6 +199,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private var homePid: pid_t?
     private var homeApplicationBundleIdentifier: String?
     private var homeWindowTitle: String?
+    private var homeOpaqueFocusSignature: InsertionTargetFocusSignature?
     /// True when the home element advertises `kAXValueAttribute` at session start.
     /// Set once at `captureBaseline`, before any delete, so the FIRST delete cycle
     /// already knows a text-exposing field is text-exposing — without it, the
@@ -234,6 +237,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         }
         homeWindowTitle = windowTitle(of: baseline)
         homeElementAdvertisesValue = advertisesValueAttribute(baseline)
+        homeOpaqueFocusSignature = homeElementAdvertisesValue ? nil : focusSignature(of: baseline)
         if let value = textValue(of: baseline), let selectedRange = selectedTextRange(of: baseline) {
             insertionContext = Self.context(in: value, selectedRange: selectedRange)
         }
@@ -268,6 +272,14 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
            let homeElement,
            !CFEqual(current, homeElement) {
             log.info("insertion guard: focused text element changed within app pid \(homePid)")
+            return true
+        }
+        if !homeElementAdvertisesValue,
+           InsertionTargetFocusSignature.changedWithinSameProcess(
+            from: homeOpaqueFocusSignature,
+            to: focusSignature(of: current)
+           ) {
+            log.info("insertion guard: focused opaque element signature changed within app pid \(homePid)")
             return true
         }
         return false
@@ -351,6 +363,57 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         // attribute succeeds.
         // swiftlint:disable:next force_cast
         return (window as! AXUIElement)
+    }
+
+    private func focusSignature(of element: AXUIElement) -> InsertionTargetFocusSignature? {
+        AXUIElementSetMessagingTimeout(element, Self.focusedElementMessagingTimeout)
+        let signature = InsertionTargetFocusSignature(
+            role: stringAttribute(of: element, kAXRoleAttribute as String),
+            subrole: stringAttribute(of: element, kAXSubroleAttribute as String),
+            identifier: stringAttribute(of: element, kAXIdentifierAttribute as String),
+            frame: focusFrame(of: element)
+        )
+        return signature.isInformative ? signature : nil
+    }
+
+    private func focusFrame(of element: AXUIElement) -> InsertionTargetFocusFrame? {
+        guard let position = pointValue(of: element, kAXPositionAttribute as String),
+              let size = sizeValue(of: element, kAXSizeAttribute as String) else {
+            return nil
+        }
+        return InsertionTargetFocusFrame(position: position, size: size)
+    }
+
+    private func stringAttribute(of element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success, let text = value as? String else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private func pointValue(of element: AXUIElement, _ attribute: String) -> CGPoint? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success, let axValue = value else { return nil }
+        var point = CGPoint.zero
+        // CFTypeRef of an AXValue; force-cast is safe after the point attribute succeeds
+        // and `AXValueGetValue` validates the wrapped type.
+        // swiftlint:disable:next force_cast
+        guard AXValueGetValue((axValue as! AXValue), .cgPoint, &point) else { return nil }
+        return point
+    }
+
+    private func sizeValue(of element: AXUIElement, _ attribute: String) -> CGSize? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success, let axValue = value else { return nil }
+        var size = CGSize.zero
+        // CFTypeRef of an AXValue; force-cast is safe after the size attribute succeeds
+        // and `AXValueGetValue` validates the wrapped type.
+        // swiftlint:disable:next force_cast
+        guard AXValueGetValue((axValue as! AXValue), .cgSize, &size) else { return nil }
+        return size
     }
 
     private static func context(

@@ -116,6 +116,7 @@ public enum PolishGuardRejectionReason: String, Sendable, Equatable {
     case emptyPolished = "empty-polished"
     case zeroContentRewrite = "zero-content-rewrite"
     case contentTokensChanged = "content-tokens-changed"
+    case controlWhitespaceChanged = "control-whitespace-changed"
     case symbolUsageChanged = "symbol-usage-changed"
     case commaUsageChanged = "comma-usage-changed"
     case sentenceBoundaryChanged = "sentence-boundary-changed"

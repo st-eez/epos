@@ -74,6 +74,14 @@ final class TranscriptPolisherGuardTests: XCTestCase {
                 true
             ),
             ("I like uh tacos.", "I like tacos.", true),
+            // Model-created control whitespace can change behavior at the insertion
+            // target (for example submitting a chat/terminal line), so it rejects
+            // even when the content tokens are unchanged.
+            ("ship it now", "ship it\nnow", false),
+            ("ship it now", "ship\tit now", false),
+            ("ship\nit now", "ship it\nnow", false),
+            ("ship\nit now", "ship it now", false),
+            ("ship it\nnow", "ship it\nnow", true),
             // "I think" is meaningful per the prompt. Dropping it is content loss.
             ("um so like i think we should uh ship it you know", "we should ship it", false),
             // Near-identical cleanup (just casing/punctuation) retains everything.

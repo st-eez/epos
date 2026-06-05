@@ -10,7 +10,8 @@ import Foundation
 /// the raw text had none, allowing a comma to drop ONLY when stranded beside a
 /// removed filler (never added, never dropped beside a kept word), holding
 /// all-caps acronyms case-sensitive so they cannot fold to/from a lowercase
-/// homograph, and neither collapsing nor inventing a sentence boundary.
+/// homograph, rejecting model-introduced control whitespace such as tabs and
+/// line breaks, and neither collapsing nor inventing a sentence boundary.
 /// Everything else (mishearing "fixes", word substitution, spoken-symbol
 /// conversion) is rejected: the guard cannot tell a legitimate one from a
 /// corruption, so it keeps the user's raw words. Symbol conversion and known-term
@@ -38,6 +39,13 @@ extension TranscriptPolisher {
                 reason: .emptyPolished,
                 polished: polished,
                 diff: "rawChars=\(raw.count) polishedChars=\(polished.count)"
+            )
+        }
+        guard controlWhitespaceUsageIsJustified(raw: raw, polished: polished) else {
+            return rejectedPolish(
+                reason: .controlWhitespaceChanged,
+                polished: polished,
+                diff: controlWhitespaceDiffSummary(raw: raw, polished: polished)
             )
         }
 
@@ -229,6 +237,45 @@ extension TranscriptPolisher {
 
     private static func isConnector(_ character: Character) -> Bool {
         character == "'" || character == "\u{2019}" || character == "-" || character == "."
+    }
+
+    private static func controlWhitespaceUsageIsJustified(raw: String, polished: String) -> Bool {
+        let rawCounts = controlWhitespaceCounts(raw)
+        let polishedCounts = controlWhitespaceCounts(polished)
+        guard !rawCounts.isEmpty || !polishedCounts.isEmpty else { return true }
+        return raw == polished
+    }
+
+    private static func controlWhitespaceCounts(_ text: String) -> [Unicode.Scalar: Int] {
+        text.unicodeScalars.reduce(into: [:]) { counts, scalar in
+            guard scalar.value != 0x20,
+                  CharacterSet.whitespacesAndNewlines.contains(scalar) else { return }
+            counts[scalar, default: 0] += 1
+        }
+    }
+
+    private static func controlWhitespaceDiffSummary(raw: String, polished: String) -> String {
+        let rawCounts = controlWhitespaceCounts(raw)
+        let polishedCounts = controlWhitespaceCounts(polished)
+        let introduced = polishedCounts.keys
+            .filter { polishedCounts[$0, default: 0] > rawCounts[$0, default: 0] }
+            .sorted { $0.value < $1.value }
+        let labels = introduced.prefix(6).map {
+            "\(controlWhitespaceLabel($0)):\(rawCounts[$0, default: 0])->\(polishedCounts[$0, default: 0])"
+        }
+        return [
+            "changedControlWhitespace=\(introduced.count)",
+            "controlWhitespaceDiffs=\(labels.joined(separator: ","))"
+        ].joined(separator: " ")
+    }
+
+    private static func controlWhitespaceLabel(_ scalar: Unicode.Scalar) -> String {
+        switch scalar {
+        case "\n": return "\\n"
+        case "\r": return "\\r"
+        case "\t": return "\\t"
+        default: return "U+\(String(scalar.value, radix: 16, uppercase: true))"
+        }
     }
 
     private static func nonWhitespaceScalarCounts(_ text: String) -> [Unicode.Scalar: Int] {

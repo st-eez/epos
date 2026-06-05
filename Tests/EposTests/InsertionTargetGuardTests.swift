@@ -40,6 +40,81 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(InsertionTargetObservation.read("hello", exposesText: false), .value("hello"))
     }
 
+    func testOpaqueFocusSignatureDetectsSameAppFieldMoveWithoutElementIdentity() {
+        let baseline = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: "terminal-input",
+            frame: InsertionTargetFocusFrame(x: 100, y: 200, width: 640, height: 80)
+        )
+        let sameTargetFreshElement = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: "terminal-input",
+            frame: InsertionTargetFocusFrame(x: 100, y: 220, width: 640, height: 100)
+        )
+        let movedTarget = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: "terminal-search",
+            frame: InsertionTargetFocusFrame(x: 100, y: 80, width: 640, height: 40)
+        )
+        let roleOnlyBaseline = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: nil,
+            frame: InsertionTargetFocusFrame(x: 100, y: 200, width: 640, height: 80)
+        )
+        let roleOnlyMovedTarget = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: nil,
+            frame: InsertionTargetFocusFrame(x: 100, y: 80, width: 640, height: 40)
+        )
+        let roleOnlyResizedTarget = InsertionTargetFocusSignature(
+            role: "AXTextArea",
+            subrole: nil,
+            identifier: nil,
+            frame: InsertionTargetFocusFrame(x: 100, y: 212, width: 640, height: 160)
+        )
+        let frameOnlyBaseline = InsertionTargetFocusSignature(
+            role: nil,
+            subrole: nil,
+            identifier: nil,
+            frame: InsertionTargetFocusFrame(x: 100, y: 200, width: 640, height: 80)
+        )
+        let frameOnlyMovedTarget = InsertionTargetFocusSignature(
+            role: nil,
+            subrole: nil,
+            identifier: nil,
+            frame: InsertionTargetFocusFrame(x: 100, y: 80, width: 640, height: 40)
+        )
+
+        XCTAssertFalse(
+            InsertionTargetFocusSignature.changedWithinSameProcess(from: baseline, to: sameTargetFreshElement)
+        )
+        XCTAssertTrue(InsertionTargetFocusSignature.changedWithinSameProcess(from: baseline, to: movedTarget))
+        XCTAssertTrue(
+            InsertionTargetFocusSignature.changedWithinSameProcess(
+                from: roleOnlyBaseline,
+                to: roleOnlyMovedTarget
+            )
+        )
+        XCTAssertFalse(
+            InsertionTargetFocusSignature.changedWithinSameProcess(
+                from: roleOnlyBaseline,
+                to: roleOnlyResizedTarget
+            )
+        )
+        XCTAssertTrue(
+            InsertionTargetFocusSignature.changedWithinSameProcess(
+                from: frameOnlyBaseline,
+                to: frameOnlyMovedTarget
+            )
+        )
+        XCTAssertFalse(InsertionTargetFocusSignature.changedWithinSameProcess(from: baseline, to: nil))
+    }
+
     func testEmptyExposedDivergesUnlessNothingExpected() {
         // A text-exposing field that now reads empty diverged; deleting would eat
         // content that isn't ours, so latch append-only.
