@@ -59,22 +59,6 @@ final class SmokeTests: XCTestCase {
             "So you're saying deprecate Foundation Models altogether?"
         )
         XCTAssertEqual(
-            canonicalizer.canonicalize("Stuff instructions, please."),
-            "Stath instructions, please."
-        )
-        XCTAssertEqual(
-            canonicalizer.canonicalize("Ask Stas to review the CMUX changes."),
-            "Ask Stath to review the CMUX changes."
-        )
-        XCTAssertEqual(
-            canonicalizer.canonicalize("Edit CLAUDE.md, then ping stuff."),
-            "Edit CLAUDE.md, then ping Stath."
-        )
-        XCTAssertEqual(
-            canonicalizer.canonicalize("CMUX keeps crashing when stuff runs it."),
-            "CMUX keeps crashing when Stath runs it."
-        )
-        XCTAssertEqual(
             canonicalizer.canonicalize("Claude, I want to add something to our Ipos app."),
             "Claude, I want to add something to our Epos app."
         )
@@ -146,29 +130,16 @@ final class SmokeTests: XCTestCase {
         )
     }
 
-    func testCanonicalizerNormalizesNetSuiteAliases() {
+    func testCanonicalizerDoesNotShipWorkplaceAliases() {
         let canonicalizer = TranscriptCanonicalizer()
 
-        // Two-word decomposition, the capitalized form the recognizer emits, the
-        // homophone, and the already-correct no-space form all fold to "NetSuite".
-        XCTAssertEqual(canonicalizer.canonicalize("open net suite today"), "open NetSuite today")
-        XCTAssertEqual(canonicalizer.canonicalize("Is your net, suite, login set up?"), "Is your NetSuite login set up?")
-        XCTAssertEqual(canonicalizer.canonicalize("Is your next week login set up?"), "Is your NetSuite login set up?")
-        XCTAssertEqual(
-            canonicalizer.canonicalize("Didn't you make a next week ticket about this?"),
-            "Didn't you make a NetSuite ticket about this?"
-        )
-        XCTAssertEqual(canonicalizer.canonicalize("Open that suite and check tickets."), "Open NetSuite and check tickets.")
-        XCTAssertEqual(canonicalizer.canonicalize("Open next feed and check tickets."), "Open NetSuite and check tickets.")
-        XCTAssertEqual(canonicalizer.canonicalize("Net Suite"), "NetSuite")
-        XCTAssertEqual(canonicalizer.canonicalize("our net sweet account"), "our NetSuite account")
-        XCTAssertEqual(canonicalizer.canonicalize("netsuite"), "NetSuite")
-        XCTAssertEqual(
-            canonicalizer.canonicalize("Open up CMUX and send a team's message to staff."),
-            "Open up CMUX and send a Teams message to Stath."
-        )
+        XCTAssertEqual(canonicalizer.canonicalize("open net suite today"), "open net suite today")
+        XCTAssertEqual(canonicalizer.canonicalize("Is your next week login set up?"), "Is your next week login set up?")
+        XCTAssertEqual(canonicalizer.canonicalize("Open next feed and check tickets."), "Open next feed and check tickets.")
+        XCTAssertEqual(canonicalizer.canonicalize("Open up CMUX and send a team's message to staff."), "Open up CMUX and send a team's message to staff.")
+        XCTAssertEqual(canonicalizer.canonicalize("Stuff instructions, please."), "Stuff instructions, please.")
+        XCTAssertEqual(canonicalizer.canonicalize("Ask Stas to review the CMUX changes."), "Ask Stas to review the CMUX changes.")
 
-        // Substring guard: a longer word that merely contains "netsuite" is untouched.
         XCTAssertEqual(canonicalizer.canonicalize("visit netsuitehq dot com"), "visit netsuitehq dot com")
         XCTAssertEqual(canonicalizer.canonicalize("Talk about that suite later."), "Talk about that suite later.")
     }
@@ -176,10 +147,10 @@ final class SmokeTests: XCTestCase {
     func testCanonicalizerFixesCurrentDefaultCustomEntries() {
         let canonicalizer = TranscriptCanonicalizer()
 
-        let raw = "message steph and type slash"
+        let raw = "type slash"
         let cleaned = canonicalizer.canonicalize(raw)
 
-        XCTAssertEqual(cleaned, "message Stath and type /")
+        XCTAssertEqual(cleaned, "type /")
     }
 
     func testCanonicalizerAppliesExposedAcronymAliases() {
@@ -318,6 +289,7 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertEqual(canonicalizer.canonicalize("open simux"), "open MUX")
         XCTAssertEqual(canonicalizer.canonicalize("edit agents dot md"), "edit AGENTS.md")
+        XCTAssertNil(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey))
     }
 
     func testCanonicalizerSavesEmptyRuleList() {
@@ -968,11 +940,10 @@ final class SmokeTests: XCTestCase {
             " Epos ",
             "epos",
             "CMUX",
-            "cmux",
-            "NetSuite"
+            "cmux"
         ]))
 
-        XCTAssertEqual(context.contextualStrings[.general], ["Epos", "CMUX", "NetSuite"])
+        XCTAssertEqual(context.contextualStrings[.general], ["Epos", "CMUX"])
     }
 
     /// Regression: pre-fix, `Transcriber.finish()` hung in `await drain?.value`
