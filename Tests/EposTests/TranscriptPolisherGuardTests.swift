@@ -291,6 +291,11 @@ final class TranscriptPolisherGuardTests: XCTestCase {
             ("escalate to IT now", "escalate to it now", false),
             // Model uppercased a word into an acronym ("us" → "US"). Symmetric. Reject.
             ("log in to us", "log in to US", false),
+            // A connector-joined all-caps compound is one fused token ("U.S",
+            // "AGENTS.MD") — it must be held case-sensitive like a pure-letter
+            // acronym, not slip through the exact-match arm via a lowercase fold.
+            ("Deploy to the U.S", "Deploy to the u.s", false),
+            ("open AGENTS.MD now", "open agents.md now", false),
             // Control: a single letter is not an acronym, so ordinary sentence-initial
             // case folding ("I" → "i") still matches. Keep.
             ("I think", "i think", true),

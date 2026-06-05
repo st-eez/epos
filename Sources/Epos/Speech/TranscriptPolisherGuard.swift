@@ -574,12 +574,17 @@ extension TranscriptPolisher {
 
     /// An all-caps acronym: at least two characters, every character a letter, and
     /// equal to its own uppercase but not its own lowercase (so it is genuinely
-    /// upper-cased, ruling out non-cased scripts).
+    /// upper-cased, ruling out non-cased scripts). Internal connectors the
+    /// tokenizer fuses into a single token ("U.S", "AGENTS.MD", "API-KEY") are
+    /// ignored, so a connector-joined all-caps compound is held case-sensitive
+    /// exactly like a pure-letter acronym — otherwise the exact-match arm would
+    /// wave its lowercase fold through while the hyphen-merge arm rejects it.
     private static func isAcronym(_ string: String) -> Bool {
-        string.count >= 2
-            && string.allSatisfy(\.isLetter)
-            && string == string.uppercased()
-            && string != string.lowercased()
+        let letters = string.filter { !isConnector($0) }
+        return letters.count >= 2
+            && letters.allSatisfy(\.isLetter)
+            && letters == letters.uppercased()
+            && letters != letters.lowercased()
     }
 
     /// A polished hyphenated token (e.g. "well-known") that exactly spans the next
