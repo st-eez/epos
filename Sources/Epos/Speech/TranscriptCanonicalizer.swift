@@ -12,7 +12,7 @@ public struct TranscriptCanonicalizer: Sendable {
     private static let storedRulesVersion = 1
 
     public struct Rule: Codable, Equatable, Sendable {
-        public enum MatchStrategy: String, Codable, Equatable, Sendable {
+        public enum MatchStrategy: String, Codable, Equatable, Hashable, Sendable {
             case literal
             case personNameSlot
         }

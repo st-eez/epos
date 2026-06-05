@@ -5,6 +5,7 @@ struct CorrectionDraft: Identifiable, Equatable {
     var aliasesText: String
     var canonical: String
     var contextsText: String
+    var matchStrategy: TranscriptCanonicalizer.Rule.MatchStrategy = .literal
 
     var trimmedCanonical: String {
         canonical.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -23,7 +24,12 @@ struct CorrectionDraft: Identifiable, Equatable {
     }
 
     var rule: TranscriptCanonicalizer.Rule {
-        TranscriptCanonicalizer.Rule(canonical: trimmedCanonical, aliases: aliases, contexts: contexts)
+        TranscriptCanonicalizer.Rule(
+            canonical: trimmedCanonical,
+            aliases: aliases,
+            contexts: contexts,
+            matchStrategy: matchStrategy
+        )
     }
 
     static func empty() -> CorrectionDraft {
@@ -35,7 +41,8 @@ struct CorrectionDraft: Identifiable, Equatable {
             CorrectionDraft(
                 aliasesText: rule.aliases.joined(separator: ", "),
                 canonical: rule.canonical,
-                contextsText: rule.contexts.joined(separator: ", ")
+                contextsText: rule.contexts.joined(separator: ", "),
+                matchStrategy: rule.matchStrategy
             )
         }
     }
@@ -60,6 +67,7 @@ struct CorrectionDraft: Identifiable, Equatable {
     static func == (lhs: CorrectionDraft, rhs: CorrectionDraft) -> Bool {
         lhs.aliasesText == rhs.aliasesText &&
             lhs.canonical == rhs.canonical &&
-            lhs.contextsText == rhs.contextsText
+            lhs.contextsText == rhs.contextsText &&
+            lhs.matchStrategy == rhs.matchStrategy
     }
 }

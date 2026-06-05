@@ -258,6 +258,109 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(draft.rule.contexts, ["open", "launch"])
     }
 
+    func testCorrectionDraftKeepsMatchStrategyWhenEdited() throws {
+        var draft = try XCTUnwrap(CorrectionDraft.fromRules([
+            TranscriptCanonicalizer.Rule(
+                canonical: "Test Person",
+                aliases: ["steph", "step"],
+                matchStrategy: .personNameSlot
+            )
+        ]).first)
+
+        XCTAssertEqual(draft.rule.matchStrategy, .personNameSlot)
+
+        draft.aliasesText = "widget pro"
+        draft.canonical = "WidgetPro"
+
+        XCTAssertEqual(draft.rule.matchStrategy, .personNameSlot)
+        XCTAssertEqual(
+            TranscriptCanonicalizer(rules: [draft.rule]).canonicalize("open widget pro"),
+            "open widget pro"
+        )
+    }
+
+    func testCorrectionDraftKeepsMatchStrategyAcrossFormattingOnlyEdits() throws {
+        var draft = try XCTUnwrap(CorrectionDraft.fromRules([
+            TranscriptCanonicalizer.Rule(
+                canonical: "Test Person",
+                aliases: ["steph", "step"],
+                contexts: ["message to", "ping"],
+                matchStrategy: .personNameSlot
+            )
+        ]).first)
+
+        draft.aliasesText = "steph,step"
+        draft.canonical = " Test Person "
+        draft.contextsText = "message to,ping"
+
+        XCTAssertEqual(draft.rule.matchStrategy, .personNameSlot)
+        XCTAssertEqual(draft.rule.canonical, "Test Person")
+        XCTAssertEqual(draft.rule.aliases, ["steph", "step"])
+        XCTAssertEqual(draft.rule.contexts, ["message to", "ping"])
+    }
+
+    func testCorrectionDraftKeepsMatchStrategyWhenPersonAliasesChange() throws {
+        var draft = try XCTUnwrap(CorrectionDraft.fromRules([
+            TranscriptCanonicalizer.Rule(
+                canonical: "Test Person",
+                aliases: ["steph", "step"],
+                matchStrategy: .personNameSlot
+            )
+        ]).first)
+
+        draft.aliasesText = "step"
+
+        XCTAssertEqual(draft.rule.matchStrategy, .personNameSlot)
+        let canonicalizer = TranscriptCanonicalizer(rules: [draft.rule])
+        XCTAssertEqual(canonicalizer.canonicalize("message to Step"), "message to Test Person")
+        XCTAssertEqual(canonicalizer.canonicalize("next step"), "next step")
+    }
+
+    @MainActor
+    func testCorrectionDraftSaveRebaseKeepsMatchStrategy() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        var draft = try XCTUnwrap(CorrectionDraft.fromRules([
+            TranscriptCanonicalizer.Rule(
+                canonical: "Test Person",
+                aliases: ["steph", "step"],
+                matchStrategy: .personNameSlot
+            )
+        ]).first)
+        draft.aliasesText = "widget pro"
+        draft.canonical = "WidgetPro"
+
+        let store = CorrectionStore(defaults: defaults)
+        var savedDraft = try XCTUnwrap(saveCorrectionDrafts([draft], to: store).first)
+        savedDraft.aliasesText = "step"
+        savedDraft.canonical = "Test Person"
+
+        XCTAssertEqual(savedDraft.rule.matchStrategy, .personNameSlot)
+        let canonicalizer = TranscriptCanonicalizer(rules: [savedDraft.rule])
+        XCTAssertEqual(canonicalizer.canonicalize("message to Step"), "message to Test Person")
+        XCTAssertEqual(canonicalizer.canonicalize("next step"), "next step")
+    }
+
+    func testCorrectionDraftCanExplicitlySwitchPersonNameRuleToLiteral() throws {
+        var draft = try XCTUnwrap(CorrectionDraft.fromRules([
+            TranscriptCanonicalizer.Rule(
+                canonical: "Test Person",
+                aliases: ["steph", "step"],
+                matchStrategy: .personNameSlot
+            )
+        ]).first)
+
+        draft.matchStrategy = .literal
+        draft.aliasesText = "widget pro"
+        draft.canonical = "WidgetPro"
+
+        XCTAssertEqual(draft.rule.matchStrategy, .literal)
+        let canonicalizer = TranscriptCanonicalizer(rules: [draft.rule])
+        XCTAssertEqual(canonicalizer.canonicalize("open widget pro"), "open WidgetPro")
+    }
+
     func testNewDraftsMergeAcceptedSuggestionWithoutTouchingUnsavedEdits() {
         // Accepting a suggestion mid-edit must surface ONLY the newly accepted
         // rule; a full reload here would discard the user's unsaved rows.

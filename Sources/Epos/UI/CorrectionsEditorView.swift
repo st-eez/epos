@@ -27,7 +27,7 @@ struct CorrectionsEditorView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 860, minHeight: 460)
+        .frame(minWidth: 980, minHeight: 460)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear(perform: reload)
     }
@@ -87,9 +87,11 @@ struct CorrectionsEditorView: View {
             headerLabel("Heard phrases")
                 .frame(minWidth: 330, maxWidth: .infinity, alignment: .leading)
             headerLabel("Use")
-                .frame(width: 190, alignment: .leading)
+                .frame(width: 170, alignment: .leading)
+            headerLabel("Mode")
+                .frame(width: 116, alignment: .leading)
             headerLabel("Context")
-                .frame(width: 190, alignment: .leading)
+                .frame(width: 170, alignment: .leading)
             headerLabel("")
                 .frame(width: 32)
         }
@@ -197,8 +199,9 @@ struct CorrectionsEditorView: View {
 
     private func saveRules() {
         guard !hasInvalidRows else { return }
-        store.save(rows.map(\.rule))
-        savedRows = rows
+        let loadedRows = saveCorrectionDrafts(rows, to: store)
+        rows = loadedRows
+        savedRows = loadedRows
         reloadSuggestions()
     }
 
@@ -235,4 +238,13 @@ struct CorrectionsEditorView: View {
         guard store.rejectSuggestion(item.assessment) else { return }
         reloadSuggestions()
     }
+}
+
+@MainActor
+func saveCorrectionDrafts(
+    _ drafts: [CorrectionDraft],
+    to store: CorrectionStore
+) -> [CorrectionDraft] {
+    store.save(drafts.map(\.rule))
+    return CorrectionDraft.fromRules(store.rules)
 }

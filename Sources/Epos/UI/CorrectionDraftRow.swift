@@ -16,9 +16,11 @@ struct CorrectionDraftRow: View {
             correctionField("spoken phrase, another phrase", text: $row.aliasesText, isInvalid: row.aliases.isEmpty)
                 .frame(minWidth: 330, maxWidth: .infinity)
             correctionField("replacement", text: $row.canonical, isInvalid: row.trimmedCanonical.isEmpty)
-                .frame(width: 190)
+                .frame(width: 170)
+            matchStrategyPicker
+                .frame(width: 116)
             correctionField("optional", text: $row.contextsText, isInvalid: false)
-                .frame(width: 190)
+                .frame(width: 170)
             Button(role: .destructive, action: remove) {
                 Image(systemName: "trash")
                     .frame(width: 18, height: 18)
@@ -49,6 +51,16 @@ struct CorrectionDraftRow: View {
             .disabled(!canMoveDown)
             .help("Move down")
         }
+    }
+
+    private var matchStrategyPicker: some View {
+        Picker("", selection: $row.matchStrategy) {
+            Text("Literal").tag(TranscriptCanonicalizer.Rule.MatchStrategy.literal)
+            Text("Name").tag(TranscriptCanonicalizer.Rule.MatchStrategy.personNameSlot)
+        }
+        .labelsHidden()
+        .pickerStyle(.segmented)
+        .help("Match mode")
     }
 
     private func correctionField(_ placeholder: String, text: Binding<String>, isInvalid: Bool) -> some View {
