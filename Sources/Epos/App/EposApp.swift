@@ -8,7 +8,6 @@ public struct EposApp: App {
     public var body: some Scene {
         MenuBarExtra("Epos", image: "EposMenuBarIcon") {
             MenuBarView(coordinator: coordinator)
-                .task { await coordinator.bootstrap() }
         }
         .menuBarExtraStyle(.window)
 

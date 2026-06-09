@@ -63,6 +63,13 @@ public final class AppCoordinator: ObservableObject {
     /// replayed at the `.finalizing → .idle` transition if fn is still physically held —
     /// so a back-to-back utterance isn't lost to the polish-widened window.
     private var pendingStartWhileFinalizing = false
+    /// Set when a press arrives before `bootstrap()` has cached `captureFormat` —
+    /// the launch window, where `startRecording` would otherwise silently drop the
+    /// dictation (23 real occurrences in 12 days of dogfood logs, each one a press
+    /// 2–5s before "bootstrap begin"). Replayed at bootstrap completion if fn is
+    /// still physically held, same contract as `pendingStartWhileFinalizing`.
+    /// Internal (not private) so tests can pin the latch behavior.
+    var pendingStartAwaitingBootstrap = false
     /// The current recording's polisher, held so a re-press during finalize can abandon
     /// its in-flight polish. Set at `startRecording`, cleared before returning to idle.
     /// (Distinct from threading it into `runSession`, which is what actually runs the polish.)
@@ -106,6 +113,11 @@ public final class AppCoordinator: ObservableObject {
         self.transcriber = Transcriber(locale: settings.locale)
         if autoStart {
             bindHotkey()
+            // Bootstrap at launch, not on first menu-icon click. This used to hang
+            // off `.task` on the MenuBarExtra content view, which SwiftUI builds
+            // only when the popover first opens — so `captureFormat` stayed nil and
+            // every fn press was dropped until the user happened to open the menu.
+            Task { await self.bootstrap() }
         }
     }
 
@@ -209,6 +221,26 @@ public final class AppCoordinator: ObservableObject {
         _ = await assets.prepare()
         captureFormat = await transcriber.bestAudioFormat()
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
+        replayPendingStartAfterBootstrapIfNeeded()
+    }
+
+    /// Replay, at bootstrap completion, a press that arrived during the launch
+    /// window. Mirrors `replayPendingStartIfNeeded`: only while fn is still
+    /// physically held — a key released during bootstrap is dropped.
+    /// Internal (not private) so tests can pin the latch behavior.
+    func replayPendingStartAfterBootstrapIfNeeded() {
+        guard pendingStartAwaitingBootstrap else { return }
+        pendingStartAwaitingBootstrap = false
+        guard captureFormat != nil else {
+            log.error("pending start dropped: capture format unavailable after bootstrap")
+            return
+        }
+        guard hotkey.isFunctionKeyDown else {
+            log.info("pending start dropped: fn released before bootstrap completed")
+            return
+        }
+        log.info("replaying start: fn still held after bootstrap")
+        startRecording()
     }
 
     private func bindHotkey() {
@@ -233,7 +265,12 @@ public final class AppCoordinator: ObservableObject {
             return
         }
         guard let format = captureFormat else {
-            log.error("cannot start: capture format unavailable (bootstrap incomplete?)")
+            // The launch window: fn pressed before bootstrap cached the format.
+            // Latch the press instead of dropping it; `bootstrap()` replays it on
+            // completion if fn is still held (the edge-triggered hotkey emits no
+            // new press for a key that's already down).
+            pendingStartAwaitingBootstrap = true
+            log.info("start requested before bootstrap completed; will replay when capture format is ready")
             return
         }
         // Drop the prior recording's pending edit-capture polls: once new dictation
