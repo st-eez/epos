@@ -219,7 +219,11 @@ private extension TranscriptCanonicalizer {
             output += nsText.substring(
                 with: NSRange(location: cursor, length: match.range.location - cursor)
             )
-            output += spec.canonical
+            output += CorrectionMatchContext.sentenceCasedCanonical(
+                spec.canonical,
+                forMatch: match.range,
+                in: nsText
+            )
             cursor = match.range.location + match.range.length
         }
 

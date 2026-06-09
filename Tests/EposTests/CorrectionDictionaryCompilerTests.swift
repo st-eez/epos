@@ -44,6 +44,48 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
         }
     }
 
+    func testSentenceInitialMatchPreservesRecognizerCapital() {
+        let canonicalizer = TranscriptCanonicalizer()
+
+        // String-start match: the lowercase canonical "codebase" keeps the capital.
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Code base needs a refactor."),
+            "Codebase needs a refactor."
+        )
+        // Second-sentence match after ". " also counts as sentence-initial.
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Done. Code base next."),
+            "Done. Codebase next."
+        )
+        // Mid-sentence lowercase source stays lowercase.
+        XCTAssertEqual(
+            canonicalizer.canonicalize("the code base is"),
+            "the codebase is"
+        )
+        // Uppercase-by-design canonical ("Epos app") is unaffected by the recasing.
+        XCTAssertEqual(
+            canonicalizer.canonicalize("Ipos app crashed."),
+            "Epos app crashed."
+        )
+    }
+
+    func testAliasBoundariesAreUnicodeAware() {
+        let canonicalizer = TranscriptCanonicalizer(
+            rules: [.init(canonical: "Epos", aliases: ["epos"])]
+        )
+
+        // An accented letter neighbor is still mid-word; the alias must not fire.
+        XCTAssertEqual(
+            canonicalizer.canonicalize("caféepos thing"),
+            "caféepos thing"
+        )
+        // Plain ASCII word boundaries still fire.
+        XCTAssertEqual(
+            canonicalizer.canonicalize("cafe epos thing"),
+            "cafe Epos thing"
+        )
+    }
+
     func testCompiledVocabularyMatchesDefaultVocabulary() {
         let defaultCanonicalizer = TranscriptCanonicalizer()
         let compiledCanonicalizer = TranscriptCanonicalizer(

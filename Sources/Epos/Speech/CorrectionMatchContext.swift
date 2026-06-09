@@ -11,7 +11,9 @@ enum CorrectionMatchContext {
         let body = parts
             .map(NSRegularExpression.escapedPattern(for:))
             .joined(separator: #"(?:[\s,\-\.']+)"#)
-        let pattern = #"(?<![A-Za-z0-9])"# + body + #"(?![A-Za-z0-9])"#
+        // Unicode-aware boundaries: an accented letter neighbor (e.g. "caféepos")
+        // is still mid-word, so ASCII-only [A-Za-z0-9] classes are too narrow.
+        let pattern = #"(?<![\p{L}\p{N}])"# + body + #"(?![\p{L}\p{N}])"#
         return try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
     }
 
@@ -33,6 +35,19 @@ enum CorrectionMatchContext {
         }
     }
 
+    /// Preserves a recognizer-emitted sentence-initial capital when a lowercase
+    /// canonical replaces it: only when the match opens a sentence (string start,
+    /// or sentence-ending punctuation plus whitespace, or a newline) AND the
+    /// matched source began uppercase AND the canonical begins lowercase.
+    /// Canonicals that are uppercase by design (proper nouns) and mid-sentence
+    /// or lowercase-source matches pass through untouched.
+    static func sentenceCasedCanonical(_ canonical: String, forMatch range: NSRange, in text: NSString) -> String {
+        guard let canonicalFirst = canonical.first, canonicalFirst.isLowercase else { return canonical }
+        guard let sourceFirst = text.substring(with: range).first, sourceFirst.isUppercase else { return canonical }
+        guard isSentenceInitial(before: range.location, in: text) else { return canonical }
+        return canonicalFirst.uppercased() + String(canonical.dropFirst())
+    }
+
     static func hasContext(_ contexts: [String], before range: NSRange, in text: NSString) -> Bool {
         let prefix = normalizedWindow(before: range, in: text, maxLength: 64)
         return contexts.contains { context in
@@ -46,6 +61,29 @@ enum CorrectionMatchContext {
             .lowercased()
             .split { !$0.isLetter && !$0.isNumber }
             .joined(separator: " ")
+    }
+
+    /// UTF-16 scan back from `location`: skip whitespace/newlines, then require
+    /// string start, a newline among the skipped separators, or sentence-ending
+    /// punctuation. All probed characters (space, newline, `.?!`) are BMP, so
+    /// unichar comparisons are safe; surrogate halves match neither set.
+    private static func isSentenceInitial(before location: Int, in text: NSString) -> Bool {
+        var index = location
+        var sawNewline = false
+        var sawSeparator = false
+        while index > 0 {
+            let unit = text.character(at: index - 1)
+            guard let scalar = Unicode.Scalar(unit), CharacterSet.whitespacesAndNewlines.contains(scalar) else {
+                break
+            }
+            sawSeparator = true
+            sawNewline = sawNewline || CharacterSet.newlines.contains(scalar)
+            index -= 1
+        }
+        if index == 0 || sawNewline { return true }
+        guard sawSeparator else { return false }
+        guard let previous = Unicode.Scalar(text.character(at: index - 1)) else { return false }
+        return previous == "." || previous == "?" || previous == "!"
     }
 
     private static func isPersonNameSlot(range: NSRange, in text: NSString) -> Bool {
