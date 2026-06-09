@@ -29,8 +29,17 @@ public struct DiagnosticLogConfiguration: Equatable, Sendable {
     public static func load(
         from environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> DiagnosticLogConfiguration {
-        DiagnosticLogConfiguration(
-            enabled: environment["EPOS_DIAGNOSTIC_LOGS"] != "0",
+        // `swift test` shares `~/Library/Caches/Epos/logs/` with the installed app
+        // through `DiagnosticLogSink.shared`, so test fixtures (deliberate decode
+        // failures, synthetic guard decisions) used to land in the dogfood log and
+        // read as real-usage failures during triage. Test runners advertise
+        // themselves in the environment — SWIFT_TESTING_ENABLED under `swift test`,
+        // XCTest* keys under Xcode — stay silent there. Tests that assert on sink
+        // output build their own sink with an explicit configuration.
+        let isTestProcess = environment["SWIFT_TESTING_ENABLED"] != nil
+            || environment.keys.contains { $0.hasPrefix("XCTest") }
+        return DiagnosticLogConfiguration(
+            enabled: environment["EPOS_DIAGNOSTIC_LOGS"] != "0" && !isTestProcess,
             maxFileBytes: positiveUInt64(
                 environment["EPOS_DIAGNOSTIC_MAX_FILE_BYTES"],
                 defaultValue: 10_000_000

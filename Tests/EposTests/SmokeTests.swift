@@ -830,6 +830,20 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(configuration.maxMessageCharacters, 20_000)
     }
 
+    func testDiagnosticLogConfigurationDisablesDogfoodLogInTestProcesses() {
+        // Test runs share the dogfood log directory with the installed app; fixture
+        // errors and synthetic guard decisions logged from `swift test` read as
+        // real-usage failures during triage. The default sink must stay silent
+        // whenever a test runner's XCTest* environment is present.
+        let configuration = DiagnosticLogConfiguration.load(from: [
+            "XCTestConfigurationFilePath": "/tmp/whatever.xctestconfiguration"
+        ])
+
+        XCTAssertFalse(configuration.enabled)
+        // And the live process running this very test must be detected too.
+        XCTAssertFalse(DiagnosticLogConfiguration.load().enabled)
+    }
+
     func testDiagnosticLogConfigurationReadsDogfoodLimitOverrides() {
         let configuration = DiagnosticLogConfiguration.load(from: [
             "EPOS_DIAGNOSTIC_MAX_FILE_BYTES": "123456",
