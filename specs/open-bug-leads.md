@@ -2,6 +2,50 @@
 
 Date: 2026-06-09. Author: dogfood-log triage session.
 
+## Resolution (2026-06-09, follow-up session) — all leads closed
+
+The evidence base of this doc was itself contaminated: `swift test` wrote through
+`DiagnosticLogSink.shared` into the same `~/Library/Caches/Epos/logs/` files as the
+installed app. Excluding test bursts (≥3 "audio engine created" within a few seconds),
+**92% of all "insertion guard decision" lines (2,812 of 3,060) and 100% of the
+"dropped undecodable record" errors were synthetic test output**, not real usage.
+
+Per-lead outcomes:
+
+- **#1 correction-record data loss — FALSE ALARM.** The live blob in
+  `com.steez.Epos` defaults decodes 35/35 with the exact production decoder logic.
+  Every error line came from `CorrectionDictionaryPersistenceTests` fixtures that
+  deliberately persist a `"kind": "some-future-kind"` record to exercise the
+  tolerant decode. No user corrections were ever lost.
+- **#2 recording fails to start — REAL, root-caused and FIXED (two bugs).**
+  All 23 real occurrences were a press before "bootstrap begin". Root cause:
+  `bootstrap()` hung off `.task` on the MenuBarExtra content view, which SwiftUI
+  builds only when the popover first opens — so after every launch, dictation was
+  dead until the user happened to click the menu icon (the "bootstrap begin 2–5s
+  after the failed press" pattern is the user clicking the icon to investigate).
+  Fixes: (a) bootstrap now starts from `AppCoordinator.init` at launch (completes
+  in ~160ms, verified live); (b) a press landing inside that window now latches
+  (`pendingStartAwaitingBootstrap`) and replays at bootstrap completion if fn is
+  still held, mirroring the finalize-window latch. Not a stale-format/sleep issue —
+  all 40 logged bootstraps produced a format. Tests: `CoordinatorBootstrapLatchTests`.
+- **#3/#4 guard drops — ~92% SYNTHETIC.** Real residue after excluding test bursts:
+  98 cmux `emptyExposed` + 6 Teams `caretMismatch` (both covered by the committed
+  fixes `3fa8c39`/`5634fbf`), 5 `focusChanged`, 2 `positionedTextMismatch`. Nothing
+  actionable remains.
+- **#5 zero-output sessions — NOT A BUG.** All 74 real `finalChars=0` recordings
+  were under 1.4s: accidental fn taps, `hadInput=false` or `results=0`. No speech
+  was lost.
+
+The contamination itself is fixed: `DiagnosticLogConfiguration.load` now disables
+the file sink when the environment marks a test process (`SWIFT_TESTING_ENABLED`
+under `swift test`, `XCTest*` keys under Xcode). When mining logs written **before
+2026-06-09**, still exclude test bursts first.
+
+The original doc follows for the record. Its counts are pre-decontamination —
+do not re-triage from them.
+
+---
+
 Purpose: a starting map for a fresh session to auto-review and fix bugs. Every lead
 below is **evidence-backed** by the app's own diagnostic logs (12 days of real usage),
 not speculation. Investigate from the evidence; do not trust this doc over the code.
