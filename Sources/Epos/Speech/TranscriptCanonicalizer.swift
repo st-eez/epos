@@ -240,8 +240,13 @@ private extension TranscriptCanonicalizer {
     /// (it does not depend on `rules`), and `canonicalize` runs per streamed partial, so
     /// recompiling it each call was pure waste. Optional to mirror the alias-regex path
     /// (`regex(forAlias:)`); the literal always compiles, so the `nil` branch never trips.
+    // The recognizer punctuates the spoken command "dash dash fix" as "Dash, dash, fix."
+    // — a comma after each token. Tolerate commas (and whitespace) between the tokens so
+    // this pre-pass still consumes the whole "dash dash <flag>" run and yields "--fix".
+    // Without the comma tolerance the pre-pass missed, and the bare `dash dash`->`--` alias
+    // matched only "Dash, dash" and stranded the trailing comma as "--, fix".
     static let flagPrefixRegex = try? NSRegularExpression(
-        pattern: #"(?<![A-Za-z0-9])dash\s+dash\s+([A-Za-z][A-Za-z0-9_-]*)"#,
+        pattern: #"(?<![A-Za-z0-9])dash[\s,]+dash[\s,]+([A-Za-z][A-Za-z0-9_-]*)"#,
         options: [.caseInsensitive]
     )
 

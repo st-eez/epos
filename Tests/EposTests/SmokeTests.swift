@@ -438,6 +438,18 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(cleaned, "pass --verbose then use $HOME and /goal")
     }
 
+    func testCanonicalizerNormalizesRecognizerPunctuatedDashDashCommand() {
+        // The recognizer punctuates the spoken command "dash dash fix" as
+        // "Dash, dash, fix." (verified by replaying the saved audio). The flag-prefix
+        // pre-pass must consume the whole run despite the commas, or the bare
+        // `dash dash`->`--` alias matches only "Dash, dash" and strands the comma as
+        // "--, fix". The trailing period is the recognizer's sentence punctuation.
+        let canonicalizer = TranscriptCanonicalizer()
+        XCTAssertEqual(canonicalizer.canonicalize("Dash, dash, fix."), "--fix.")
+        XCTAssertEqual(canonicalizer.canonicalize("dash dash fix"), "--fix")
+        XCTAssertEqual(canonicalizer.canonicalize("dash dash, fix"), "--fix")
+    }
+
     func testCanonicalizerLoadsSavedRulesFromUserDefaults() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
