@@ -1189,6 +1189,37 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.operations, [.insert("the door")])
     }
 
+    func testAppendOnlyFallbackFinalRecoversReCasedExtensionInsteadOfFreezing() {
+        // Mirror of testAppendOnlyRawFinalRecoversReCasedExtensionInsteadOfFreezing
+        // for the fallback-final path: a fallback that re-cased the already-typed
+        // prefix AND extended it must still land the new words. Pre-fix the
+        // byte-prefix gate at the call site froze and dropped the tail.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello world foo")
+        // A divergent value read on the next guarded delete latches append-only.
+        observer.value = ""
+        session.acceptPartialTranscript("hello world")
+        // Fallback final re-cases the prefix (H) and extends past the commit.
+        let committed = session.acceptFallbackFinalTranscript("Hello world foo bar baz qux")
+        session.finish()
+
+        XCTAssertEqual(committed, "hello world foo bar baz qux")
+        XCTAssertEqual(backend.fieldText, "hello world foo bar baz qux")
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
+    }
+
     func testLiveFillerStripKeepsFillerOffAppendOnlyTarget() {
         // The cmux regression: the recognizer floats "uh" in a volatile partial, the
         // final drops it, but on an append-only target the stray "uh" can't be deleted
@@ -1298,6 +1329,34 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.fieldText, "hello cot world cot")
         XCTAssertEqual(backend.finishCount, 0)
         XCTAssertEqual(backend.cancelCount, 1)
+    }
+
+    func testFieldBackedFakeDeletesGraphemesLikeProductionKeyPresses() {
+        // Production `deleteBackward(count:)` presses the delete key `count` times,
+        // each press removing one GRAPHEME (TextInsertionBackend). The fake's field
+        // model must match for multi-UTF-16-unit graphemes: revising "👍" (2 UTF-16
+        // units, 1 grapheme) away must delete the whole emoji, not half a surrogate
+        // pair. Pre-fix the fake stepped back in UTF-16 units and modeled a field
+        // state production keystrokes could never produce.
+        let backend = FieldBackedRecordingBackend(initialText: "", caretOffset: 0)
+        let observer = FakeTargetObserver()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("ship it 👍")
+        session.acceptFinalTranscript("ship it 🚀 now")
+        session.finish()
+
+        XCTAssertEqual(
+            backend.operations,
+            [.insert("ship it 👍"), .delete(1), .insert("🚀 now")],
+            "minimal edit deletes one grapheme (the emoji), one keypress"
+        )
+        XCTAssertEqual(backend.fieldText, "ship it 🚀 now")
+        XCTAssertEqual(backend.caretOffset, "ship it 🚀 now".utf16.count)
     }
 
     func testIdentityPinnedAppendSurvivesStaleElectronCaretRead() {
@@ -1671,17 +1730,20 @@ private final class FieldBackedRecordingBackend: TextInsertionBackend {
 
     fileprivate func recordDelete(_ count: Int) {
         operations.append(.delete(count))
-        let utf16 = field.utf16
+        // Production presses the delete key `count` times; each press removes one
+        // GRAPHEME before the caret (TextInsertionBackend.deleteBackward), so the
+        // fake must model graphemes, not UTF-16 units.
         guard
-            let endUTF16 = utf16.index(utf16.startIndex, offsetBy: caretOffset, limitedBy: utf16.endIndex),
-            let startUTF16 = utf16.index(endUTF16, offsetBy: -count, limitedBy: utf16.startIndex),
-            let start = String.Index(startUTF16, within: field),
-            let end = String.Index(endUTF16, within: field)
+            let caretUTF16 = field.utf16.index(
+                field.utf16.startIndex, offsetBy: caretOffset, limitedBy: field.utf16.endIndex
+            ),
+            let caret = String.Index(caretUTF16, within: field),
+            let start = field.index(caret, offsetBy: -count, limitedBy: field.startIndex)
         else {
             return
         }
-        field.removeSubrange(start..<end)
-        caretOffset -= count
+        caretOffset -= field[start..<caret].utf16.count
+        field.removeSubrange(start..<caret)
     }
 
     fileprivate func finishSession() { finishCount += 1 }
