@@ -635,13 +635,17 @@ public final class AppCoordinator: ObservableObject {
         session: ProgressiveTranscriptInsertionSession
     ) -> Bool {
         guard let observedInsertedText = session.observedInsertedText(),
-              observedInsertedText != finalInsertedTranscript else {
+              observedInsertedText != finalInsertedTranscript,
+              let validatedEdit = ObservedUserEditFilter.validatedEdit(
+                observed: observedInsertedText,
+                final: finalInsertedTranscript
+              ) else {
             return false
         }
 
         return correctionEvidence.recordUserEdit(
             evidenceID: evidenceID,
-            userEditedTranscript: observedInsertedText
+            userEditedTranscript: validatedEdit
         )
     }
 

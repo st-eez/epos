@@ -119,6 +119,52 @@ private extension CorrectionEvidenceStore {
     }
 }
 
+/// Boundary validation for AX read-backs before they are stored as user edits.
+/// The observe-window timer can read the target field while it is cleared, while
+/// focus has moved, or while the user is mid-edit; storing those reads pollutes
+/// the evidence store (bug-hunt 2026-06-09 P2 #3/#4). The gate is deliberately
+/// conservative: false-rejecting a real correction only delays alias promotion
+/// (recurrence >= 2 is required anyway), while false-accepting writes garbage.
+public enum ObservedUserEditFilter {
+    public static func validatedEdit(observed: String, final: String) -> String? {
+        // Splitting on Unicode whitespace (which includes U+00A0 NBSP, seen in
+        // real record 7dae3556) normalizes whitespace so it can't defeat the
+        // prefix test below.
+        let observedWords = whitespaceSeparatedWords(in: observed)
+
+        // An observed text that trims to empty means the field was cleared,
+        // focus moved, or the target is AX-opaque — "not read", not "edited
+        // to empty". Storing it would destroy the nil "no edit observed" signal.
+        guard !observedWords.isEmpty else { return nil }
+
+        let finalWords = whitespaceSeparatedWords(in: final)
+
+        // A read whose words are a leading prefix of the final's words is a
+        // deletion-in-progress (or a whitespace-only echo), not a correction.
+        if observedWords.count <= finalWords.count,
+           Array(finalWords.prefix(observedWords.count)) == observedWords {
+            return nil
+        }
+
+        // A read with fewer than half the final's words is far more likely a
+        // mid-edit snapshot than a correction: corrections observed in real
+        // evidence swap or fuse words roughly in place, while the one real
+        // mid-edit capture (7 of 16 words, with a typo that defeats the strict
+        // prefix test) lost over half the text. Half is the loosest threshold
+        // that rejects that record while keeping spoken-punctuation
+        // corrections like "are you sure question mark" -> "are you sure?".
+        if observedWords.count * 2 < finalWords.count {
+            return nil
+        }
+
+        return observed
+    }
+
+    private static func whitespaceSeparatedWords(in text: String) -> [String] {
+        text.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+}
+
 public enum CorrectionCandidateSuggester {
     public static func suggestedRecords(from evidence: [CorrectionEvidence]) -> [CorrectionRecord] {
         var suggestions: [CorrectionRecord] = []

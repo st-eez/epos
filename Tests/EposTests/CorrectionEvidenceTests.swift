@@ -777,6 +777,106 @@ final class CorrectionEvidenceTests: XCTestCase {
         XCTAssertNil(evidenceStore.evidence.first?.userEditedTranscript)
         XCTAssertTrue(evidenceStore.suggestedRecords.isEmpty)
     }
+
+    func testObservedEditFilterRejectsEmptyObservedText() {
+        XCTAssertNil(ObservedUserEditFilter.validatedEdit(
+            observed: "",
+            final: "open widget pro"
+        ))
+    }
+
+    func testObservedEditFilterRejectsWhitespaceOnlyObservedText() {
+        XCTAssertNil(ObservedUserEditFilter.validatedEdit(
+            observed: " \n\t\u{00A0} ",
+            final: "open widget pro"
+        ))
+    }
+
+    func testObservedEditFilterRejectsStrictTruncationPrefixOfFinal() {
+        // Deletion-in-progress read; trailing NBSP mirrors real record 7dae3556
+        // and must not defeat the prefix comparison.
+        XCTAssertNil(ObservedUserEditFilter.validatedEdit(
+            observed: "is using the on-hand quantity of\u{00A0}",
+            final: "is using the on-hand quantity of today / live so the numbers stay current"
+        ))
+    }
+
+    func testObservedEditFilterRejectsMidEditReadShorterThanHalfTheFinal() {
+        // Real record 7dae3556: a mid-edit typo defeats the strict prefix test,
+        // so the word-count gate has to catch it (7 of 16 words).
+        XCTAssertNil(ObservedUserEditFilter.validatedEdit(
+            observed: "is using the onh hand quantity of\u{00A0}",
+            final: "is using the on-hand quantity of today / live so the numbers stay current and correct"
+        ))
+    }
+
+    func testObservedEditFilterAcceptsGenuineWordCorrection() {
+        XCTAssertEqual(
+            ObservedUserEditFilter.validatedEdit(
+                observed: "open WidgetPro please",
+                final: "open widget pro please"
+            ),
+            "open WidgetPro please"
+        )
+    }
+
+    func testObservedEditFilterAcceptsSpokenPunctuationCorrection() {
+        XCTAssertEqual(
+            ObservedUserEditFilter.validatedEdit(
+                observed: "are you sure?",
+                final: "are you sure question mark"
+            ),
+            "are you sure?"
+        )
+    }
+
+    @MainActor
+    func testCoordinatorSkipsObservedEditCaptureWhenFieldReadsBackEmpty() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let evidenceStore = CorrectionEvidenceStore(defaults: defaults)
+        let coordinator = AppCoordinator(
+            correctionEvidence: evidenceStore,
+            observedEditCaptureDelays: [0],
+            autoStart: false
+        )
+        let evidenceID = evidenceStore.record(.init(
+            id: "evidence-1",
+            observedAt: Date(timeIntervalSince1970: 1),
+            recordingID: "rec-1",
+            rawTranscript: "widget pro",
+            canonicalizedTranscript: "widget pro",
+            finalInsertedTranscript: "widget pro",
+            userEditedTranscript: nil,
+            appliedRuleIDs: [],
+            polishOutcome: "disabled",
+            engineOutcome: nil,
+            guardRejectionReason: nil
+        ))
+        let observer = EvidenceFakeTargetObserver()
+        observer.exposesText = true
+        observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: EvidenceNoopTextInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptFinalTranscript("widget pro")
+        session.finish()
+        // The inserted segment was wiped: only the baseline prefix/suffix remain.
+        observer.value = "open  please"
+        coordinator.scheduleObservedUserEditCapture(
+            evidenceID: evidenceID,
+            finalInsertedTranscript: "widget pro",
+            session: session
+        )
+
+        XCTAssertNil(evidenceStore.evidence.first?.userEditedTranscript)
+        XCTAssertTrue(evidenceStore.suggestedRecords.isEmpty)
+    }
 }
 
 private final class EvidenceFakeTargetObserver: InsertionTargetObserver {
