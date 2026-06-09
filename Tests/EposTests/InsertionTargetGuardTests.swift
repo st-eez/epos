@@ -1,3 +1,4 @@
+import ApplicationServices
 import XCTest
 @testable import Epos
 
@@ -39,6 +40,18 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(InsertionTargetObservation.read(nil, hasReflectedText: true), .emptyExposed)
         // A non-empty read is always a usable value regardless of the flag.
         XCTAssertEqual(InsertionTargetObservation.read("hello", hasReflectedText: false), .value("hello"))
+        // An empty read classifies identically to nil even when a non-empty baseline
+        // insertion context exists: it must hit the reflection classifier, never become
+        // a `.positionedValue("", …)` that bypasses it.
+        let midFieldContext = InsertionTargetContext(prefix: "open ", suffix: " please")
+        XCTAssertEqual(
+            InsertionTargetObservation.read("", hasReflectedText: false, context: midFieldContext),
+            .notRead
+        )
+        XCTAssertEqual(
+            InsertionTargetObservation.read("", hasReflectedText: true, context: midFieldContext),
+            .emptyExposed
+        )
     }
 
     func testFocusFrameFailsSoftOnNonFiniteAXComponents() {
@@ -425,6 +438,49 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.operations, [.insert("hello"), .insert(" world")])
         XCTAssertEqual(backend.cancelCount, 1)
         XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testTransientFocusReadFailureDoesNotAbortSessionButIdentityFailureDoes() {
+        // A focused-element fetch failing with kAXErrorCannotComplete means the target
+        // app was momentarily unresponsive under the messaging timeout — NOT that focus
+        // moved. The 2026-05-31 sessions lost 90%+ of the utterance to exactly this:
+        // one stalled read mid-dictation classified as .focusChanged → abort → cancel.
+        // The session must keep inserting through a transient stall.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("hello")
+        observer.focusReadError = .cannotComplete
+        session.acceptPartialTranscript("hello world")
+        XCTAssertEqual(backend.operations, [.insert("hello"), .insert(" world")])
+        XCTAssertEqual(backend.cancelCount, 0)
+
+        // The stall clears and dictation keeps flowing.
+        observer.focusReadError = nil
+        session.acceptPartialTranscript("hello world again")
+        XCTAssertEqual(backend.operations, [.insert("hello"), .insert(" world"), .insert(" again")])
+
+        // An identity failure (the element is genuinely gone) keeps the abort.
+        observer.focusReadError = .invalidUIElement
+        session.acceptPartialTranscript("hello world again and again")
+        session.acceptFinalTranscript("hello world again and again")
+        XCTAssertEqual(backend.operations, [.insert("hello"), .insert(" world"), .insert(" again")])
+        XCTAssertEqual(backend.cancelCount, 1)
+        XCTAssertEqual(backend.finishCount, 0)
+    }
+
+    func testFocusReadFailureClassifierSeparatesTransientFromIdentityErrors() {
+        // Transient messaging failures: unknown, never a change.
+        XCTAssertFalse(AXInsertionTargetObserver.focusReadFailureIndicatesFocusChange(.cannotComplete))
+        XCTAssertFalse(AXInsertionTargetObserver.focusReadFailureIndicatesFocusChange(.apiDisabled))
+        // Identity failures: the element is gone or nothing is focused — still a change.
+        XCTAssertTrue(AXInsertionTargetObserver.focusReadFailureIndicatesFocusChange(.invalidUIElement))
+        XCTAssertTrue(AXInsertionTargetObserver.focusReadFailureIndicatesFocusChange(.noValue))
     }
 
     func testSessionCapturesBaselineBeforeFirstTranscriptArrives() {
@@ -1486,6 +1542,10 @@ final class InsertionTargetGuardTests: XCTestCase {
 
 private final class FakeTargetObserver: InsertionTargetObserver {
     var focusChanged = false
+    // Simulates the focused-element fetch FAILING with this AXError instead of
+    // returning an element, routed through the live classifier so the session tests
+    // exercise the same transient-vs-identity policy as `AXInsertionTargetObserver`.
+    var focusReadError: AXError?
     var value: String?
     var exposesText = false
     var verifiesIdentity = false
@@ -1506,7 +1566,12 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     var reflectsText: Bool?
 
     func captureBaseline() { baselineCaptured = true }
-    func focusChangedSinceStart() -> Bool { focusChanged }
+    func focusChangedSinceStart() -> Bool {
+        if let focusReadError {
+            return AXInsertionTargetObserver.focusReadFailureIndicatesFocusChange(focusReadError)
+        }
+        return focusChanged
+    }
     func observedValue() -> String? {
         if let value, !value.isEmpty { everReadNonEmptyValue = true }
         return value

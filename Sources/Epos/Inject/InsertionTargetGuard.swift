@@ -108,19 +108,20 @@ extension InsertionTargetObservation {
     /// not advertisement: a field that merely advertises the attribute but never returns
     /// content must NOT make an empty read look like divergence, or it strands every
     /// dictation whose early partial gets revised (it can neither delete the stale guess
-    /// nor append the correction). Keeping this at the boundary means a `.value("")`
-    /// never reaches `decide` from the live path.
+    /// nor append the correction). An empty string classifies identically to nil:
+    /// keeping this at the boundary means neither `.value("")` nor
+    /// `.positionedValue("", …)` ever reaches `decide` from the live path.
     public static func read(
         _ value: String?,
         hasReflectedText: Bool,
         context: InsertionTargetContext? = nil,
         selectedRange: InsertionTargetTextRange? = nil
     ) -> InsertionTargetObservation {
-        if let value {
-            if let context, !value.isEmpty || context != InsertionTargetContext(prefix: "", suffix: "") {
+        if let value, !value.isEmpty {
+            if let context {
                 return .positionedValue(value, context: context, selectedRange: selectedRange)
             }
-            if !value.isEmpty { return .value(value) }
+            return .value(value)
         }
         return hasReflectedText ? .emptyExposed : .notRead
     }
@@ -276,11 +277,28 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         // moved, so don't fire the focus guard. The live value read still bounds deletes:
         // it reads whatever element holds focus now, so divergence there latches append-only.
         guard let homePid else { return false }
-        guard let current = copyFocusedElement() else {
-            // Focus became unreadable (field/window went away). Treat as changed:
-            // continuing to type blind risks the wrong target.
-            log.info("insertion guard: focused element unreadable mid-session; treating as focus change")
+        let current: AXUIElement
+        switch copyFocusedElementDetailed() {
+        case .element(let element):
+            current = element
+        case .failure(let error) where Self.focusReadFailureIndicatesFocusChange(error):
+            // Focus genuinely unreadable (field/window went away, nothing focused).
+            // Treat as changed: continuing to type blind risks the wrong target.
+            log.info(
+                "insertion guard: focused element unreadable mid-session (AXError \(error.rawValue)); treating as focus change"
+            )
             return true
+        case .failure(let error):
+            // Transient messaging failure: the target app is momentarily unresponsive
+            // under the 0.25s messaging timeout, NOT evidence that focus moved. Like a
+            // one-sided-nil signature read (see `InsertionTargetFocusSignature`), this
+            // is "unknown, never a change" — a false abort here cancels the session and
+            // silently drops the rest of the utterance, while the value-read and frame
+            // backstops still bound any damage from a genuinely missed move.
+            log.info(
+                "insertion guard: focused element read failed transiently mid-session (AXError \(error.rawValue)); treating as unknown, not a focus change"
+            )
+            return false
         }
         // Compare by owning process first, not element identity. A Chromium/Electron terminal
         // such as cmux hands back a fresh AXUIElement for the same field between
@@ -484,15 +502,47 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         return AXUIElementGetPid(element, &processID) == .success ? processID : nil
     }
 
+    /// Outcome of a focused-element fetch when the caller needs to distinguish WHY
+    /// it failed. Only `focusChangedSinceStart` consumes the error; every other
+    /// read site treats any failure as nil via `copyFocusedElement`.
+    enum FocusedElementRead {
+        case element(AXUIElement)
+        case failure(AXError)
+    }
+
+    /// Pure classification of a failed focused-element fetch. `cannotComplete`
+    /// ("the accessible application is unresponsive") and `apiDisabled` are
+    /// transient messaging failures — they say nothing about where focus is, so
+    /// they must read as "unknown", never as a focus change. Everything else
+    /// (`invalidUIElement`, `noValue`, …) is an identity failure: the element is
+    /// gone or nothing is focused, which keeps the abort behavior.
+    static func focusReadFailureIndicatesFocusChange(_ error: AXError) -> Bool {
+        switch error {
+        case .cannotComplete, .apiDisabled:
+            return false
+        default:
+            return true
+        }
+    }
+
     private func copyFocusedElement() -> AXUIElement? {
+        guard case .element(let element) = copyFocusedElementDetailed() else { return nil }
+        return element
+    }
+
+    private func copyFocusedElementDetailed() -> FocusedElementRead {
         var focused: CFTypeRef?
         let result = AXUIElementCopyAttributeValue(
             systemWide, kAXFocusedUIElementAttribute as CFString, &focused
         )
-        guard result == .success, let element = focused else { return nil }
+        guard result == .success, let element = focused else {
+            // A `.success` with no value means "nothing is focused" — same identity
+            // failure as an explicit `.noValue`.
+            return .failure(result == .success ? .noValue : result)
+        }
         // CFTypeRef of an AXUIElement; force-cast is safe — the attribute is
         // documented to return an AXUIElementRef.
         // swiftlint:disable:next force_cast
-        return (element as! AXUIElement)
+        return .element(element as! AXUIElement)
     }
 }
