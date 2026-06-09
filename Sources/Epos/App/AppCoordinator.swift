@@ -141,12 +141,18 @@ public final class AppCoordinator: ObservableObject {
     }
 
     /// Built once per recording so a mid-session settings change cannot alter the
-    /// finalization behavior of an already-running dictation.
-    private func makePolisher() -> TranscriptPolisher {
+    /// finalization behavior of an already-running dictation. Internal so a test can
+    /// assert the final polish baseline applies the same `streamClean` the live closure
+    /// does — the seam where a polish-off final used to revert the on-screen cleaning.
+    func makePolisher() -> TranscriptPolisher {
         // Snapshot the value-type canonicalizer so the guard validates — and the
-        // polisher returns — `canonicalize(polished)`, the exact string that meets
-        // the on-screen `canonicalize(rawStream)`. The snapshot also freezes the
-        // rules for this recording, matching the build-once-per-recording intent.
+        // polisher returns — the exact string the live closure streamed on screen. That
+        // closure is `streamClean(canonicalize(rawStream))`, and `acceptFinalPolishedTranscript`
+        // types the polisher output verbatim (no second canonicalize), so the polisher
+        // MUST apply the same `streamClean`. Without it the polish-off default re-typed the
+        // raw, filler/stutter-laden tail at finalization and reverted the on-screen cleaning
+        // on every deletable target. The snapshot also freezes the rules for this recording,
+        // matching the build-once-per-recording intent.
         let canonicalizer = corrections.canonicalizer
         // Only walk the correction rules for known terms when polish is on; when it's
         // off (the default) the polisher short-circuits at its `enabled` gate and never
@@ -155,7 +161,7 @@ public final class AppCoordinator: ObservableObject {
             enabled: settings.polishEnabled,
             engine: polishEngine,
             knownTerms: settings.polishEnabled ? polishKnownTerms() : [],
-            canonicalize: { canonicalizer.canonicalize($0) }
+            canonicalize: { TranscriptDeterministicCleaner.streamClean(canonicalizer.canonicalize($0)) }
         )
     }
 
@@ -246,7 +252,17 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         textInsertionSession = ProgressiveTranscriptInsertionSession(
             insertionSession: textInsertion.startInsertionSession(),
-            canonicalize: { [corrections] text in corrections.canonicalize(text) },
+            // Strip hard fillers AND collapse stuttered function-word repeats ("the the")
+            // from every partial BEFORE it is typed. The recognizer floats "uh"/"um" and
+            // stutters in volatile partials; cleaning them here keeps them from flickering
+            // on screen during streaming. `makePolisher` applies the SAME `streamClean` to
+            // the final baseline so the cleaned text also survives finalization — without
+            // that the final reconcile would re-type the raw tail and undo this. Both passes
+            // are conservative (hard fillers only; a closed allow-list of always-stutter
+            // words) so they never touch meaning.
+            canonicalize: { [corrections] text in
+                TranscriptDeterministicCleaner.streamClean(corrections.canonicalize(text))
+            },
             target: AXInsertionTargetObserver()
         )
         transcriptTiming.start()

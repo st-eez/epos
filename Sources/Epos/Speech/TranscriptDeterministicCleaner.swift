@@ -30,6 +30,103 @@ enum TranscriptDeterministicCleaner {
         }
 
         guard !removed.isEmpty || !replacements.isEmpty else { return text }
+        return apply(removed: removed, replacements: replacements, to: segments)
+    }
+
+    /// The partial-safe disfluency pass — strip hard fillers, then collapse stuttered
+    /// function-word repeats — over ALREADY-canonicalized text. The single transform
+    /// shared by the live insertion closure and the polish baseline (`makePolisher`),
+    /// so the text streamed on screen and the text the final reconcile types are the
+    /// same string. Without this shared seam the polish-off final (the default) re-types
+    /// the raw, filler/stutter-laden tail and undoes the live cleaning on every deletable
+    /// target. It is the subset of `clean` that is safe on volatile partials — no
+    /// ordinals, `so`/`like` opener, or grammar reflow that would act on unstable text.
+    static func streamClean(_ canonicalized: String) -> String {
+        collapseAdjacentDuplicates(stripStandaloneFillers(canonicalized))
+    }
+
+    /// Removes ONLY standalone hard fillers (`um`/`uh`/`er`/`hmm`) and the comma
+    /// that punctuated each — nothing else. Safe to run on volatile partials in the
+    /// live insertion path, where the full `clean` pass (ordinals, the `so`/`like`
+    /// opener, grammar) would flicker or act on not-yet-stable text. Applied via
+    /// `streamClean` to both the streamed partials and the final polish baseline, so the
+    /// filler never flickers on screen and never survives into the final inserted text.
+    /// Same exact-token set and acronym guard as `clean`, so the two never disagree.
+    static func stripStandaloneFillers(_ text: String) -> String {
+        let segments = Self.segments(from: text)
+        var removed: Set<Int> = []
+        for (index, segment) in segments.enumerated() where segment.isWord {
+            guard let normalized = segment.normalized else { continue }
+            if PolishVocabulary.singleFillers.contains(normalized), !isAcronym(segment.text) {
+                removed.insert(index)
+            }
+        }
+        guard !removed.isEmpty else { return text }
+        return apply(removed: removed, replacements: [:], to: segments)
+    }
+
+    /// Collapses an immediately-repeated function word (case-insensitive, whitespace-only
+    /// gap) to a single occurrence — the common spoken stutter "the the"/"and and". Restricted
+    /// to a closed allow-list (`safeDuplicateWords`) of words whose doubling is ALWAYS
+    /// disfluency: it deliberately will NOT touch a content word (can't tell a stutter
+    /// "build build" from emphasis without parsing), the valid grammatical doublings
+    /// "had had"/"that that", emphatic reduplication ("very very", "so so"), or a
+    /// comma-separated repeat. It also skips a pair where EITHER token is an acronym, so an
+    /// acronym beside its lowercase homonym is preserved ("the OR or the ICU" keeps the
+    /// conjunction) — matching `stripStandaloneFillers`. Like that pass it is safe on volatile
+    /// partials and is applied via `streamClean` to both the streamed text and the final
+    /// polish baseline, so a collapsed stutter never flickers back on screen at finalization.
+    /// Missing a stutter is harmless; collapsing a real repeat would change meaning, so the
+    /// set stays conservative.
+    static func collapseAdjacentDuplicates(_ text: String) -> String {
+        let segments = Self.segments(from: text)
+        var removed: Set<Int> = []
+        var previousWord: (index: Int, normalized: String)?
+        for (index, segment) in segments.enumerated() where segment.isWord {
+            guard let normalized = segment.normalized else { continue }
+            if let previous = previousWord,
+               previous.normalized == normalized,
+               safeDuplicateWords.contains(normalized),
+               !isAcronym(segment.text),
+               !isAcronym(segments[previous.index].text),
+               gapBetweenWordsIsWhitespace(previous.index, index, in: segments) {
+                removed.insert(index)
+            }
+            previousWord = (index, normalized)
+        }
+        guard !removed.isEmpty else { return text }
+        // Keep a comma the user dictated after the stutter: the removed segment is the
+        // duplicate copy, and its trailing comma belongs to the kept word.
+        return apply(removed: removed, replacements: [:], to: segments, dropTrailingCommaAfterRemoved: false)
+    }
+
+    /// Words whose immediate repetition is ALWAYS a spoken stutter — never valid grammar
+    /// ("had had", "that that"), never emphatic reduplication ("very very", "so so",
+    /// "no no"). Closed and conservative on purpose: a missed stutter is harmless, a wrongly
+    /// collapsed real repeat is a meaning change. Excludes "so" (the "so-so" idiom) and the
+    /// grammatical doublers by omission. It excludes the phrasal-verb particles "in" and "on",
+    /// whose doubling is a legitimate particle+preposition juncture, not a stutter ("log in in
+    /// the morning", "turn it on on Monday"); the remaining prepositions (to/of/at/for) have
+    /// no such juncture so their doubling is always a stutter. It also excludes the copulas
+    /// (is/was/are/were): the cleft construction "[what X is] is Y" ("what it is is important",
+    /// "all it was was luck") is a real double-copula, not a stutter.
+    private static let safeDuplicateWords: Set<String> = [
+        "the", "a", "an", "to", "of", "at", "for", "and", "or", "but",
+        "we", "it", "they", "i",
+    ]
+
+    /// Drops `removed` segments and substitutes `replacements`, then renormalizes
+    /// whitespace and commas. When `dropTrailingCommaAfterRemoved` is true (the filler
+    /// passes) a comma directly trailing a removed segment is dropped too — it punctuated
+    /// the disfluency, not the kept word. The dedup pass passes false: there the removed
+    /// segment is the SECOND copy of a real, kept word, so a comma after it is the user's
+    /// punctuation on that word ("the the, report" → "the, report", not "the report").
+    private static func apply(
+        removed: Set<Int>,
+        replacements: [Int: String],
+        to segments: [Segment],
+        dropTrailingCommaAfterRemoved: Bool = true
+    ) -> String {
         // A comma directly trailing a removed filler punctuated the disfluency, not
         // the preceding kept word — drop it with the filler. Leaving it would let
         // whitespace normalization transplant it onto the kept word ("let's eat um,
@@ -37,12 +134,14 @@ enum TranscriptDeterministicCleaner {
         // A comma BEFORE the filler belongs to the kept word and stays
         // ("I want, um, apples" → "I want, apples").
         var gapReplacements: [Int: String] = [:]
-        for index in removed {
-            let gapIndex = segments.index(after: index)
-            guard gapIndex < segments.endIndex, !segments[gapIndex].isWord else { continue }
-            let gapText = gapReplacements[gapIndex] ?? segments[gapIndex].text
-            if let comma = gapText.firstIndex(of: ",") {
-                gapReplacements[gapIndex] = String(gapText[..<comma]) + String(gapText[gapText.index(after: comma)...])
+        if dropTrailingCommaAfterRemoved {
+            for index in removed {
+                let gapIndex = segments.index(after: index)
+                guard gapIndex < segments.endIndex, !segments[gapIndex].isWord else { continue }
+                let gapText = gapReplacements[gapIndex] ?? segments[gapIndex].text
+                if let comma = gapText.firstIndex(of: ",") {
+                    gapReplacements[gapIndex] = String(gapText[..<comma]) + String(gapText[gapText.index(after: comma)...])
+                }
             }
         }
         let stripped = segments
