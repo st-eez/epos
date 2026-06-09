@@ -29,6 +29,11 @@ public final class Transcriber: @unchecked Sendable {
 
     private static let log = EposLogger(category: "transcriber")
 
+    /// Wall-clock bound on the with-input finalize + drain sequence in `finish()`. Raw
+    /// finalize completes well under 2s across all observed real sessions; 10s is a
+    /// generous escape hatch for an Apple-framework hang, not a tuning knob.
+    static let finishTimeout: Duration = .seconds(10)
+
     private let lock = NSLock()
     private var session: Session?
 
@@ -134,6 +139,13 @@ public final class Transcriber: @unchecked Sendable {
             await finish()
             throw error
         }
+        // A finish() racing the await above nils the session and closes the event
+        // continuation; returning the stream then hands the caller a dead, already-finished
+        // stream with no error. Re-check that the installed session is still ours.
+        let stillCurrent = lock.withLock { self.session?.analyzer === analyzer }
+        guard stillCurrent else {
+            throw TranscriberError.tornDownDuringStart
+        }
         return eventStream
     }
 
@@ -184,19 +196,36 @@ public final class Transcriber: @unchecked Sendable {
         session.inputContinuation.finish()
 
         if session.hasReceivedBuffer {
-            do {
-                try await session.analyzer.finalizeAndFinishThroughEndOfInput()
-            } catch {
-                let message = String(describing: error)
-                Self.log.error("finalize failed: \(message)")
-                // A failed finalize can leave `transcriber.results` dangling;
-                // force-close the event stream and cancel the drain so the
-                // `await drainTask.value` below cannot hang.
-                session.eventContinuation.yield(.failed(message))
+            // Bound the whole finalize + drain sequence with a wall-clock timeout:
+            // `finalizeAndFinishThroughEndOfInput()` can hang without throwing, and a
+            // cancelled drain task cannot unblock a suspend inside Apple's opaque
+            // `transcriber.results` sequence — either would wedge the coordinator in
+            // `.finalizing` forever. finish() must ALWAYS return within the bound.
+            let completed = await Self.completed(within: Self.finishTimeout) {
+                do {
+                    try await session.analyzer.finalizeAndFinishThroughEndOfInput()
+                } catch {
+                    let message = String(describing: error)
+                    Self.log.error("finalize failed: \(message)")
+                    // A failed finalize can leave `transcriber.results` dangling;
+                    // force-close the event stream and cancel the drain so the
+                    // `await drainTask.value` below cannot hang.
+                    session.eventContinuation.yield(.failed(message))
+                    session.eventContinuation.finish()
+                    session.drainTask.cancel()
+                }
+                await session.drainTask.value
+            }
+            if !completed {
+                Self.log.error("finalize timed out after \(Self.finishTimeout); forcing session closed")
+                // Session state was already extracted and nilled above, so the next
+                // start() is unaffected. Force-close our event stream so the caller's
+                // event loop ends, and cancel the analyzer without awaiting it — an
+                // analyzer hung in finalize may hang cancelAndFinishNow() too.
                 session.eventContinuation.finish()
                 session.drainTask.cancel()
+                Task { await session.analyzer.cancelAndFinishNow() }
             }
-            await session.drainTask.value
         } else {
             // `cancelAndFinishNow()` returns promptly, but Apple's
             // `SpeechTranscriber.results` AsyncSequence does NOT terminate
@@ -210,8 +239,34 @@ public final class Transcriber: @unchecked Sendable {
 
         Self.log.info("session finished (hadInput=\(session.hasReceivedBuffer)) locale=\(self.locale.identifier)")
     }
+
+    /// Race `operation` against a wall-clock timeout. Returns true if it completed,
+    /// false on timeout. Deliberately uses unstructured tasks: a task group would await
+    /// all children before returning, which re-introduces the hang this exists to escape.
+    /// On timeout the operation task is cancelled but may stay suspended inside
+    /// non-cancellable framework code; the suspended continuation is the unavoidable
+    /// residue of an external hang and must not block the caller.
+    static func completed(within timeout: Duration, _ operation: @escaping @Sendable () async -> Void) async -> Bool {
+        let (raceStream, raceCont) = AsyncStream<Bool>.makeStream()
+        let work = Task {
+            await operation()
+            raceCont.yield(true)
+        }
+        let timer = Task {
+            try? await Task.sleep(for: timeout)
+            raceCont.yield(false)
+        }
+        var iterator = raceStream.makeAsyncIterator()
+        let result = await iterator.next() ?? false
+        work.cancel()
+        timer.cancel()
+        return result
+    }
 }
 
 enum TranscriberError: Error {
     case alreadyRunning
+    /// A concurrent `finish()` tore the session down while `start()` was awaiting
+    /// `analyzer.start`; the event stream is already closed and must not be returned.
+    case tornDownDuringStart
 }

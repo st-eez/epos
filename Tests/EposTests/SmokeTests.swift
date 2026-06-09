@@ -1185,6 +1185,25 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertTrue(finished, "Transcriber.finish() hung with no input")
     }
+
+    /// The with-input `finish()` path is bounded by racing {finalize + drain} against
+    /// `Transcriber.finishTimeout` via `completed(within:_:)`. The hang itself cannot be
+    /// induced on a real `SpeechAnalyzer`, so the race helper is tested in isolation:
+    /// a never-returning operation must lose the race and the helper must still return.
+    func testCompletedWithinReturnsFalseAndReturnsWhenOperationNeverFinishes() async {
+        let result = await Transcriber.completed(within: .milliseconds(50)) {
+            // Suspend indefinitely on a stream that never yields, standing in for a
+            // finalize/drain await that hangs inside Apple's framework.
+            let (stream, _) = AsyncStream<Void>.makeStream()
+            for await _ in stream {}
+        }
+        XCTAssertFalse(result, "a hung operation must time out, not win the race")
+    }
+
+    func testCompletedWithinReturnsTrueWhenOperationFinishesInTime() async {
+        let result = await Transcriber.completed(within: .seconds(5)) {}
+        XCTAssertTrue(result, "a completed operation must win the race")
+    }
 }
 
 private func makeTemporaryDirectory() throws -> URL {
