@@ -20,12 +20,16 @@ public enum FinalizationPhase: Equatable {
 
 @MainActor
 public final class AppCoordinator: ObservableObject {
-    @Published public private(set) var state: CoordinatorState = .idle
+    /// `internal(set)` (not `private(set)`) only so latch tests can stage the
+    /// finalize-window trigger; production code mutates it solely in this file.
+    @Published public internal(set) var state: CoordinatorState = .idle
     @Published public private(set) var finalizationPhase: FinalizationPhase = .finalizingSpeech
     @Published public private(set) var finalText: String = ""
     @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
     @Published public private(set) var settings: Settings
+    /// True while the indicator pill flashes the dropped-start notice; read by `RecordingIndicator`.
+    @Published public private(set) var startUnavailable = false
 
     /// Running display: committed finals + in-progress partial. The partial replaces
     /// only the tail because `SpeechTranscriber` emits volatile partials for the
@@ -52,24 +56,24 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptTiming: TranscriptTimingDiagnostics
 
     private var transcriptionTask: Task<Void, Never>?
-    private var captureFormat: AVAudioFormat?
+    /// Cached at bootstrap; nil until then. Internal so latch tests can install one.
+    var captureFormat: AVAudioFormat?
     private var textInsertionSession: ProgressiveTranscriptInsertionSession?
     private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
     private let includeTranscriptTextInDiagnostics: Bool
-    /// Set when a press arrives during the finalize/polish window (state != .idle),
-    /// where `startRecording` would otherwise silently drop it. The press also abandons
-    /// the in-flight polish (via `activePolisher`) to collapse the window, then is
-    /// replayed at the `.finalizing → .idle` transition if fn is still physically held —
-    /// so a back-to-back utterance isn't lost to the polish-widened window.
-    private var pendingStartWhileFinalizing = false
-    /// Set when a press arrives before `bootstrap()` has cached `captureFormat` —
-    /// the launch window, where `startRecording` would otherwise silently drop the
-    /// dictation (23 real occurrences in 12 days of dogfood logs, each one a press
-    /// 2–5s before "bootstrap begin"). Replayed at bootstrap completion if fn is
-    /// still physically held, same contract as `pendingStartWhileFinalizing`.
-    /// Internal (not private) so tests can pin the latch behavior.
-    var pendingStartAwaitingBootstrap = false
+    /// Single deferred-start latch, set when a press arrives while `startRecording`
+    /// cannot run it yet: the finalize/polish window (state != .idle) or the launch
+    /// window before `bootstrap()` cached `captureFormat`. The key stays down, so the
+    /// edge-triggered hotkey emits no new press — an unlatched press is silently
+    /// dropped (23 real launch-window drops in 12 days of dogfood logs).
+    /// `replayDeferredStartIfNeeded()` consumes it at whichever transition unblocks
+    /// the start. Latch + replay task are internal so tests can pin the behavior.
+    var pendingDeferredStart = false
+    var deferredStartReplayTask: Task<Void, Never>?
+    /// Live fn-key state consulted before replaying a latched press. Injectable so
+    /// tests can pin both replay outcomes; defaults to the hotkey's hardware read.
+    private let isFnKeyHeld: @MainActor () -> Bool
     /// The current recording's polisher, held so a re-press during finalize can abandon
     /// its in-flight polish. Set at `startRecording`, cleared before returning to idle.
     /// (Distinct from threading it into `runSession`, which is what actually runs the polish.)
@@ -90,6 +94,7 @@ public final class AppCoordinator: ObservableObject {
         diagnostics: DiagnosticLogSink = .shared,
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
+        isFnKeyHeld: (@MainActor () -> Bool)? = nil,
         observedEditCaptureDelays: [TimeInterval] = AppCoordinator.defaultObservedEditCaptureDelays,
         includeTranscriptTextInDiagnostics: Bool? = nil,
         autoStart: Bool = true
@@ -101,6 +106,7 @@ public final class AppCoordinator: ObservableObject {
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
+        self.isFnKeyHeld = isFnKeyHeld ?? { [hotkey] in hotkey.isFunctionKeyDown }
         self.observedEditCaptureDelays = observedEditCaptureDelays
         let includeTranscriptText = includeTranscriptTextInDiagnostics ?? TranscriptDiagnosticTextPolicy.load()
         self.includeTranscriptTextInDiagnostics = includeTranscriptText
@@ -218,29 +224,57 @@ public final class AppCoordinator: ObservableObject {
         didBootstrap = true
         log.info("bootstrap begin")
         _ = await permissions.requestAll()
-        _ = await assets.prepare()
+        if case .failed(let message) = await assets.prepare() {
+            log.error("bootstrap asset prepare failed: \(message)")
+        }
         captureFormat = await transcriber.bestAudioFormat()
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
-        replayPendingStartAfterBootstrapIfNeeded()
+        replayDeferredStartIfNeeded()
     }
 
-    /// Replay, at bootstrap completion, a press that arrived during the launch
-    /// window. Mirrors `replayPendingStartIfNeeded`: only while fn is still
-    /// physically held — a key released during bootstrap is dropped.
-    /// Internal (not private) so tests can pin the latch behavior.
-    func replayPendingStartAfterBootstrapIfNeeded() {
-        guard pendingStartAwaitingBootstrap else { return }
-        pendingStartAwaitingBootstrap = false
+    /// Replay a latched press at the transition that unblocked it (bootstrap
+    /// completion or `.finalizing → .idle`), consuming the latch exactly once.
+    /// Replays only while fn is still physically held — a key released while
+    /// blocked is dropped — re-checked once after a short debounce so a key the
+    /// user is mid-release on does not open a phantom session (observed live:
+    /// a 161ms, zero-result recording). Internal so tests can pin both outcomes.
+    func replayDeferredStartIfNeeded() {
+        guard pendingDeferredStart else { return }
+        pendingDeferredStart = false
         guard captureFormat != nil else {
+            // The user held fn and spoke into a dead pipeline (permission denied or
+            // asset download failed); an error log alone gives them zero feedback.
             log.error("pending start dropped: capture format unavailable after bootstrap")
+            flashStartUnavailableNotice()
             return
         }
-        guard hotkey.isFunctionKeyDown else {
-            log.info("pending start dropped: fn released before bootstrap completed")
+        guard isFnKeyHeld() else {
+            log.info("pending start dropped: fn released while start was blocked")
             return
         }
-        log.info("replaying start: fn still held after bootstrap")
-        startRecording()
+        deferredStartReplayTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 75_000_000)
+            guard let self, self.state == .idle else { return }
+            guard self.isFnKeyHeld() else {
+                self.log.info("pending start dropped: fn released during replay debounce")
+                return
+            }
+            self.log.info("replaying start: fn still held")
+            self.startRecording()
+        }
+    }
+
+    /// Flash the existing recording pill with a "Not ready" notice when a deferred
+    /// start had to be dropped because bootstrap finished without a capture format.
+    private func flashStartUnavailableNotice() {
+        startUnavailable = true
+        indicator.show()
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let self, self.startUnavailable else { return }
+            self.startUnavailable = false
+            if self.state == .idle { self.indicator.hide() }
+        }
     }
 
     private func bindHotkey() {
@@ -254,11 +288,10 @@ public final class AppCoordinator: ObservableObject {
             // A press during the finalize/polish window — the `await polisher.polish`
             // widens `.finalizing` by up to the generation time, and the user is starting
             // their next utterance. Abandon the in-flight polish so the window collapses
-            // (utterance 1 keeps its already-typed raw text), and latch the press so it's
-            // replayed at `.finalizing → .idle` if fn is still down (the edge-triggered
-            // hotkey emits no new press for a key that's already held).
+            // (utterance 1 keeps its already-typed raw text), and latch the press for
+            // replay at `.finalizing → .idle`.
             if state == .finalizing {
-                pendingStartWhileFinalizing = true
+                pendingDeferredStart = true
                 activePolisher?.abandonInFlightPolish()
                 log.info("start requested during finalize; abandoning polish, will retry at idle if fn held")
             }
@@ -266,10 +299,8 @@ public final class AppCoordinator: ObservableObject {
         }
         guard let format = captureFormat else {
             // The launch window: fn pressed before bootstrap cached the format.
-            // Latch the press instead of dropping it; `bootstrap()` replays it on
-            // completion if fn is still held (the edge-triggered hotkey emits no
-            // new press for a key that's already down).
-            pendingStartAwaitingBootstrap = true
+            // Latch the press instead of dropping it; `bootstrap()` replays it.
+            pendingDeferredStart = true
             log.info("start requested before bootstrap completed; will replay when capture format is ready")
             return
         }
@@ -742,22 +773,6 @@ public final class AppCoordinator: ObservableObject {
             RecordingLogContext.clear()
         }
         state = .idle
-        replayPendingStartIfNeeded()
-    }
-
-    /// Retry, at the `.finalizing → .idle` transition, a start that arrived during the
-    /// finalize/polish window. The edge-triggered hotkey produces no new `onPress` for
-    /// an already-held key, so a press latched there would otherwise be lost; replay it
-    /// only while fn is still physically held — a key released during the window is
-    /// dropped (the user no longer wants to record).
-    private func replayPendingStartIfNeeded() {
-        guard pendingStartWhileFinalizing else { return }
-        pendingStartWhileFinalizing = false
-        guard hotkey.isFunctionKeyDown else {
-            log.info("pending start dropped: fn released during finalize")
-            return
-        }
-        log.info("replaying start: fn still held after finalize")
-        startRecording()
+        replayDeferredStartIfNeeded()
     }
 }

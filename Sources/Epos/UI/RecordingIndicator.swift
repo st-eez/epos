@@ -12,7 +12,8 @@ public struct RecordingIndicator: View {
         RecordingIndicatorSurface(
             state: coordinator.state,
             finalizationPhase: coordinator.finalizationPhase,
-            amplitude: coordinator.amplitude
+            amplitude: coordinator.amplitude,
+            startUnavailable: coordinator.startUnavailable
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 20)
@@ -26,6 +27,9 @@ struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
     let finalizationPhase: FinalizationPhase
     let amplitude: Float
+    /// Flash a red "Not ready" notice: a held-fn dictation was dropped because
+    /// bootstrap finished without a capture format.
+    let startUnavailable: Bool
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
     private let teal = EposPalette.teal
@@ -34,11 +38,13 @@ struct RecordingIndicatorSurface: View {
     init(
         state: CoordinatorState,
         finalizationPhase: FinalizationPhase = .finalizingSpeech,
-        amplitude: Float
+        amplitude: Float,
+        startUnavailable: Bool = false
     ) {
         self.state = state
         self.finalizationPhase = finalizationPhase
         self.amplitude = amplitude
+        self.startUnavailable = startUnavailable
     }
 
     var body: some View {
@@ -49,7 +55,7 @@ struct RecordingIndicatorSurface: View {
             } else {
                 activitySpinner
             }
-            Text(Self.statusText(state: state, finalizationPhase: finalizationPhase))
+            Text(startUnavailable ? "Not ready" : Self.statusText(state: state, finalizationPhase: finalizationPhase))
                 .font(.system(size: 12, weight: .semibold))
                 .foregroundStyle(.white.opacity(0.88))
                 .lineLimit(1)
@@ -103,7 +109,8 @@ struct RecordingIndicatorSurface: View {
     }
 
     private var statusColor: Color {
-        switch state {
+        if startUnavailable { return EposPalette.red }
+        return switch state {
         case .recording: teal
         case .finalizing: amber
         case .idle: .white.opacity(0.34)
