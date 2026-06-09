@@ -786,12 +786,17 @@ private final class EvidenceFakeTargetObserver: InsertionTargetObserver {
     var insertionContext: InsertionTargetContext?
     var applicationBundleIdentifier: String?
     var windowTitle: String?
+    private var everReadNonEmptyValue = false
 
     func captureBaseline() {}
     func focusChangedSinceStart() -> Bool { focusChanged }
-    func observedValue() -> String? { value }
+    func observedValue() -> String? {
+        if let value, !value.isEmpty { everReadNonEmptyValue = true }
+        return value
+    }
     func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     func exposesTextValue() -> Bool { exposesText }
+    func hasReflectedTextValue() -> Bool { everReadNonEmptyValue }
     func verifiesFocusIdentity() -> Bool { false }
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
     func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }

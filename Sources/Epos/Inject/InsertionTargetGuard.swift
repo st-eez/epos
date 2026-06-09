@@ -100,15 +100,19 @@ public enum InsertionTargetObservation: Equatable {
 
 extension InsertionTargetObservation {
     /// Build the observation from a raw Accessibility value read and whether this
-    /// element exposes text. A non-empty read is always a usable `.value`. An empty
-    /// or failed read is `.emptyExposed` when the element has shown real text this
-    /// session (a native field that just lost our text → divergence) and `.notRead`
-    /// when it never has (cmux/Electron expose nothing → uninformative, keep
-    /// self-correcting). Keeping this at the boundary means a `.value("")` never
-    /// reaches `decide` from the live path.
+    /// element has REFLECTED our text before. A non-empty read is always a usable
+    /// `.value`. An empty or failed read is `.emptyExposed` when the element has shown
+    /// real text this session (a native field that just lost our text → divergence) and
+    /// `.notRead` when it never has (cmux/Electron advertise `kAXValue` but expose
+    /// nothing → uninformative, keep self-correcting). The discriminator is reflection,
+    /// not advertisement: a field that merely advertises the attribute but never returns
+    /// content must NOT make an empty read look like divergence, or it strands every
+    /// dictation whose early partial gets revised (it can neither delete the stale guess
+    /// nor append the correction). Keeping this at the boundary means a `.value("")`
+    /// never reaches `decide` from the live path.
     public static func read(
         _ value: String?,
-        exposesText: Bool,
+        hasReflectedText: Bool,
         context: InsertionTargetContext? = nil,
         selectedRange: InsertionTargetTextRange? = nil
     ) -> InsertionTargetObservation {
@@ -118,7 +122,7 @@ extension InsertionTargetObservation {
             }
             if !value.isEmpty { return .value(value) }
         }
-        return exposesText ? .emptyExposed : .notRead
+        return hasReflectedText ? .emptyExposed : .notRead
     }
 }
 
@@ -162,9 +166,19 @@ public protocol InsertionTargetObserver: AnyObject {
     func observedValue() -> String?
     /// The current selected text range/caret, when the focused element exposes it.
     func observedSelectedRange() -> InsertionTargetTextRange?
-    /// True once this element has exposed real (non-empty) text this session, so an
-    /// empty read can be told apart from an app that never exposes text. Cheap.
+    /// True when the element advertises editable text at all — its `kAXValue`
+    /// attribute exists at baseline OR it has read back non-empty this session. Gates
+    /// whether a value read is worth attempting; it does NOT decide whether an empty
+    /// read is divergence (an Electron terminal such as cmux advertises `kAXValue` yet
+    /// never returns content — see `hasReflectedTextValue`). Cheap.
     func exposesTextValue() -> Bool
+    /// True once this element has actually READ BACK our text (a non-empty value this
+    /// session). This is the discriminator for an empty read: a field that has reflected
+    /// text and now reads empty has genuinely diverged (`.emptyExposed` → append-only, no
+    /// blind delete); a field that advertises `kAXValue` but has NEVER reflected text is
+    /// AX-opaque (cmux/Electron) and an empty read is uninformative (`.notRead` → keep
+    /// self-correcting). Merely advertising the attribute is not reflection. Cheap.
+    func hasReflectedTextValue() -> Bool
     /// True when `focusChangedSinceStart()` proves same-ELEMENT identity for the home
     /// field (a text-exposing native control compared via `CFEqual`). A passing focus
     /// check then pins the field, so a divergent value during a pure append is
@@ -190,6 +204,7 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
     public func observedValue() -> String? { nil }
     public func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     public func exposesTextValue() -> Bool { false }
+    public func hasReflectedTextValue() -> Bool { false }
     public func verifiesFocusIdentity() -> Bool { false }
     public func baselineInsertionContext() -> InsertionTargetContext? { nil }
     public func targetApplicationBundleIdentifier() -> String? { nil }
@@ -212,17 +227,19 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private var homeWindowTitle: String?
     private var homeOpaqueFocusSignature: InsertionTargetFocusSignature?
     /// True when the home element advertises `kAXValueAttribute` at session start.
-    /// Set once at `captureBaseline`, before any delete, so the FIRST delete cycle
-    /// already knows a text-exposing field is text-exposing — without it, the
-    /// first empty read would proceed and blind-delete. A field that advertises
-    /// text but reads empty has diverged; treating it as such is safe even if it
-    /// costs an AX-opaque app (that happens to advertise) its self-correction.
+    /// Set once at `captureBaseline`, before any delete. It gates whether a value read is
+    /// worth attempting (`exposesTextValue`) and whether the focus check can prove
+    /// same-ELEMENT identity (`verifiesFocusIdentity`, which CFEquals the home element).
+    /// It does NOT decide whether an empty read is divergence — that is
+    /// `everReadNonEmptyValue` (reflection), so a field that merely advertises but never
+    /// reflects (cmux/Electron) keeps self-correcting instead of blind-aborting.
     private var homeElementAdvertisesValue = false
     private var insertionContext: InsertionTargetContext?
-    /// Latched once any read returns real text, covering elements that expose text
-    /// only once populated. Together with the advertise probe this means an empty
-    /// read counts as divergence whenever the element ever exposes text; an app
-    /// that never does (cmux/Electron) keeps self-correcting.
+    /// Latched once any read returns real text. This — NOT mere advertisement — is the
+    /// discriminator for an empty read: a field that has reflected our text and now reads
+    /// empty has diverged (`.emptyExposed`), while one that never reflected (cmux/Electron,
+    /// even if it advertises `kAXValue`) reads empty uninformatively and keeps
+    /// self-correcting.
     private var everReadNonEmptyValue = false
     private let log = EposLogger(category: "inject")
 
@@ -317,6 +334,8 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     }
 
     public func exposesTextValue() -> Bool { homeElementAdvertisesValue || everReadNonEmptyValue }
+
+    public func hasReflectedTextValue() -> Bool { everReadNonEmptyValue }
 
     public func verifiesFocusIdentity() -> Bool { homeElementAdvertisesValue && homeElement != nil }
 

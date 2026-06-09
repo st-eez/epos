@@ -181,6 +181,16 @@ public final class ProgressiveTranscriptInsertionSession {
             let observation = targetObservation()
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
             switch evaluation.decision {
+            case .abort where target.verifiesFocusIdentity():
+                // The only `.abort` reaching here is a caretMismatch on the mid-field
+                // (`positionedValue`) path. Identity proof means the focus check confirmed
+                // the SAME element (CFEqual held), so the divergent caret is a stale AX read
+                // — a Chromium/Electron compose box (Teams) reports its caret/value behind
+                // our synthesized keystrokes — not a field move. Don't kill the dictation
+                // over an unreliable read: stop deleting and append-only from here. An append
+                // can't corrupt existing content, so this is strictly do-no-harm.
+                appendOnly = true
+                logGuardDecision(evaluation, action: "appendOnly")
             case .abort:
                 logGuardDecision(evaluation, action: "abort")
                 cancel()
@@ -204,12 +214,14 @@ public final class ProgressiveTranscriptInsertionSession {
             let observation = targetObservation()
             let evaluation = InsertionTargetGuard.evaluate(expected: committedText, observed: observation)
             // When the focus check proves same-element identity (CFEqual passed at
-            // the top of this reconcile), a divergent value cannot be a field move:
-            // non-empty means same-field mutation (autocorrect, IME normalization),
-            // empty means the pinned field reads as unreadable-or-cleared
-            // (Electron-style inputs advertise AXValue but return nothing). Both
-            // latch append-only like the delete branch instead of killing the rest
-            // of the dictation. Without identity proof the value read is the last
+            // the top of this reconcile), a divergent read cannot be a field move:
+            // a non-empty value is same-field mutation (autocorrect, IME normalization),
+            // an empty value is the pinned field reading as unreadable-or-cleared
+            // (Electron-style inputs advertise AXValue but return nothing), and a
+            // mismatched caret is the same field reporting its selection behind our
+            // synthesized keystrokes (Teams' Chromium compose box). All three latch
+            // append-only like the delete branch instead of killing the rest of the
+            // dictation. Without identity proof the value/caret read is the last
             // backstop against typing into another same-app field, so divergence
             // there still cancels.
             let identityPinnedDivergence = target.verifiesFocusIdentity()
@@ -218,6 +230,13 @@ public final class ProgressiveTranscriptInsertionSession {
                 break
             case .stopAppendOnly where !committedText.isEmpty
                 && (evaluation.caretMatches == true || identityPinnedDivergence):
+                appendOnly = true
+                logGuardDecision(evaluation, action: "appendOnly")
+            case .abort where !committedText.isEmpty && identityPinnedDivergence:
+                // caretMismatch on an identity-confirmed same field. A pure append cannot
+                // delete existing content and the element is confirmed unchanged, so a
+                // stale Electron caret read is no reason to drop the rest of the utterance
+                // — latch do-no-harm append-only just like a same-field value divergence.
                 appendOnly = true
                 logGuardDecision(evaluation, action: "appendOnly")
             case .stopAppendOnly, .abort:
@@ -254,7 +273,11 @@ public final class ProgressiveTranscriptInsertionSession {
             if lossProofAppend {
                 insertion = Self.lossProofAppendTail(from: committedText, to: newTarget)
                 if insertion.isEmpty, newTarget.count > committedText.count, !newTarget.hasPrefix(committedText) {
-                    log.info("append-only raw final suppressed unsafe mid-token tail committedChars=\(committedText.utf16.count) targetChars=\(newTarget.utf16.count)")
+                    // NOT trailing-word loss: the full utterance is already on screen.
+                    // The final only re-revised earlier text (casing/punctuation/homonym,
+                    // e.g. "1"->"first"); append-only can't reach back to apply it without
+                    // a delete this target can't verify, so we keep the last-partial text.
+                    log.info("append-only kept last-partial text, suppressed final interior revision committedChars=\(committedText.utf16.count) targetChars=\(newTarget.utf16.count)")
                 }
             } else {
                 insertion = newTarget.hasPrefix(committedText)
@@ -334,9 +357,14 @@ public final class ProgressiveTranscriptInsertionSession {
 
     private func targetObservation() -> InsertionTargetObservation {
         let context = target.baselineInsertionContext()
+        // An empty read is divergence (.emptyExposed → append-only) ONLY when the field
+        // has reflected our text before. A field that merely advertises kAXValue but
+        // never returns content (cmux/Electron) reads empty uninformatively (.notRead →
+        // self-correct), so its early mis-recognized partials get backspaced and fixed
+        // instead of stranding the whole dictation on the first guess.
         return InsertionTargetObservation.read(
             target.observedValue(),
-            exposesText: target.exposesTextValue(),
+            hasReflectedText: target.hasReflectedTextValue(),
             context: context,
             selectedRange: context == nil ? nil : target.observedSelectedRange()
         )

@@ -30,14 +30,15 @@ final class InsertionTargetGuardTests: XCTestCase {
     func testReadFactoryDistinguishesOpaqueFromTextExposingTargets() {
         // AX-opaque app that has never exposed text (e.g. cmux): empty/nil reads
         // are uninformative — keep self-correcting.
-        XCTAssertEqual(InsertionTargetObservation.read(nil, exposesText: false), .notRead)
-        XCTAssertEqual(InsertionTargetObservation.read("", exposesText: false), .notRead)
-        // Field that has shown real text this session but now reads empty/nil: its
-        // text vanished, which is genuine divergence.
-        XCTAssertEqual(InsertionTargetObservation.read("", exposesText: true), .emptyExposed)
-        XCTAssertEqual(InsertionTargetObservation.read(nil, exposesText: true), .emptyExposed)
+        XCTAssertEqual(InsertionTargetObservation.read(nil, hasReflectedText: false), .notRead)
+        XCTAssertEqual(InsertionTargetObservation.read("", hasReflectedText: false), .notRead)
+        // Field that has REFLECTED real text this session but now reads empty/nil: its
+        // text vanished, which is genuine divergence. Advertising kAXValue is not enough
+        // (cmux advertises yet never reflects) — only an actual non-empty read counts.
+        XCTAssertEqual(InsertionTargetObservation.read("", hasReflectedText: true), .emptyExposed)
+        XCTAssertEqual(InsertionTargetObservation.read(nil, hasReflectedText: true), .emptyExposed)
         // A non-empty read is always a usable value regardless of the flag.
-        XCTAssertEqual(InsertionTargetObservation.read("hello", exposesText: false), .value("hello"))
+        XCTAssertEqual(InsertionTargetObservation.read("hello", hasReflectedText: false), .value("hello"))
     }
 
     func testFocusFrameFailsSoftOnNonFiniteAXComponents() {
@@ -447,6 +448,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -855,6 +857,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -891,6 +894,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -925,6 +929,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -957,6 +962,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -1012,10 +1018,49 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
+    func testAdvertisedButNeverReflectedTargetSelfCorrectsRevisedPartial() {
+        // Real dogfood regression (com.cmuxterm.app): dictating "slash goal" left only
+        // "SL". cmux is an Electron terminal that ADVERTISES kAXValue (so it is identity-
+        // pinned) but NEVER returns content — every read is empty. The recognizer typed
+        // the volatile early guess "SL", then revised it to "slash" and canonicalized to
+        // "/goal". The old classification treated the advertised-but-empty read as
+        // divergence (.emptyExposed → append-only), so it could neither backspace the
+        // stale "SL" nor append the correction (not a prefix-extension) — the whole
+        // utterance was dropped after the first guess. Advertising is not reflection: a
+        // field that has never shown our text reads empty UNINFORMATIVELY (.notRead), so
+        // the session must self-correct through the delete path, exactly as for a fully
+        // AX-opaque app (testOpaqueAppEmptyReadStillSelfCorrects).
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true      // advertises kAXValue...
+        observer.verifiesIdentity = true // ...so it is identity-pinned, like cmux in the logs
+        observer.value = ""              // ...but never returns content: every read is empty
+        // reflectsText left nil → faithful: never reflected, so an empty read is .notRead
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("SL")       // volatile early letter guess, typed
+        session.acceptPartialTranscript("slash")    // revised: backspace "SL", type "slash"
+        session.acceptFinalTranscript("/goal")      // canonicalized final
+        session.finish()
+
+        XCTAssertEqual(backend.fieldText, "/goal", "advertised-but-opaque target must self-correct, not strand the first guess")
+        XCTAssertTrue(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "self-correction requires backspacing the revised early partial"
+        )
+        XCTAssertEqual(backend.cancelCount, 0)
+    }
+
     func testTextExposingFieldEmptyReadLatchesAppendOnlyAndNeverDeletes() {
-        // A native field that HAS shown real text this session (exposesText true) but
-        // now reads empty has diverged — its content vanished. The session must latch
-        // append-only and NEVER blind-backspace into content that isn't ours.
+        // A native field that HAS reflected real text this session (reflectsText true)
+        // but now reads empty has diverged — its content vanished. The session must latch
+        // append-only and NEVER blind-backspace into content that isn't ours. (Merely
+        // advertising kAXValue is NOT reflection — that is the cmux case, which self-
+        // corrects; see testAdvertisedButNeverReflectedTargetSelfCorrectsRevisedPartial.)
         //
         // It must also not graft mid-token tails. A replacement final ("the door" ->
         // "the window") cannot be fixed without deleting, so under the latch the raw
@@ -1024,6 +1069,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // has reflected our text before, so an empty read is divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -1049,6 +1095,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -1069,6 +1116,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -1085,6 +1133,40 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.operations, [.insert("the door")])
     }
 
+    func testLiveFillerStripKeepsFillerOffAppendOnlyTarget() {
+        // The cmux regression: the recognizer floats "uh" in a volatile partial, the
+        // final drops it, but on an append-only target the stray "uh" can't be deleted
+        // back out. Stripping fillers in `canonicalize` (as AppCoordinator wires it)
+        // keeps "uh" off the screen entirely — it is never typed, so nothing must be
+        // retracted. Without the strip this field would be stuck showing "I think uh".
+        // cmux model: identity-pinned, AXValue always reads empty → append-only from
+        // the start, no deletes ever (matches testIdentityVerifiedPureAppendLatches…).
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.verifiesIdentity = true
+        observer.value = ""
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { TranscriptDeterministicCleaner.stripStandaloneFillers($0) },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("I think uh")
+        session.acceptPartialTranscript("I think uh we")
+        session.acceptFinalTranscript("I think we")
+
+        XCTAssertEqual(backend.fieldText, "I think we")
+        XCTAssertFalse(
+            backend.operations.contains { if case .insert(let s) = $0 { s.contains("uh") } else { false } },
+            "the filler must never be typed on an append-only target"
+        )
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "stripping pre-empts the filler; no delete should be needed or attempted"
+        )
+    }
+
     func testAppendOnlyRawFinalDoesNotGraftMidWordCorrectionTail() {
         // Real dogfood regression: the recognizer emitted a partial ending in
         // "bched.", then final-corrected it to "batched.". If the AX guard latches
@@ -1094,6 +1176,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -1161,12 +1244,92 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.cancelCount, 1)
     }
 
+    func testIdentityPinnedAppendSurvivesStaleElectronCaretRead() {
+        // Real dogfood regression (com.microsoft.teams2): dictating into a Teams
+        // compose box dropped everything after the first word. Teams is a Chromium
+        // app that advertises AXValue AND a selected range, but reports both stale
+        // relative to our synthesized keystrokes — after typing word one the value
+        // read still omits it and the caret never lines up. The mid-field
+        // (`positionedValue`) path then returns caretMismatch -> .abort, which under
+        // the old append branch cancelled the whole session (action=abortAppend).
+        // The focus check already proved the SAME element (identity), and the
+        // reconcile is a pure append, so the right response is do-no-harm
+        // append-only, not killing the dictation.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.verifiesIdentity = true
+        observer.insertionContext = InsertionTargetContext(prefix: "", suffix: "existing draft.")
+        // Caret at the very start of pre-existing text — word one lands cleanly.
+        observer.value = "existing draft."
+        observer.selectedRange = InsertionTargetTextRange(location: 0, length: 0)
+
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("The")
+        // Teams now reports stale value/caret: the read omits our typed "The" and the
+        // caret still sits at 0 instead of after the word. Old code aborted here.
+        observer.value = "existing draft."
+        observer.selectedRange = InsertionTargetTextRange(location: 0, length: 0)
+        session.acceptPartialTranscript("The quick")
+        session.acceptFinalTranscript("The quick brown")
+
+        XCTAssertEqual(backend.fieldText, "The quick brown")
+        XCTAssertEqual(backend.cancelCount, 0, "an identity-pinned stale caret must not abort the dictation")
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "a pure append latched do-no-harm must never backspace"
+        )
+    }
+
+    func testIdentityPinnedDeleteRevisionLatchesAppendOnlyOnStaleCaret() {
+        // Same root cause on the delete branch: once a word is on screen, a recognizer
+        // revision produces deleteCount > 0. On Teams the stale caret read makes that
+        // delete look like a caretMismatch -> .abort. The old delete branch cancelled,
+        // dropping the rest of the utterance. With identity proof the element is
+        // confirmed unchanged, so latch append-only (suppress the one revision) and
+        // keep dictating — later clean extensions still land.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.verifiesIdentity = true
+        observer.insertionContext = InsertionTargetContext(prefix: "", suffix: "existing draft.")
+        observer.value = "existing draft."
+        observer.selectedRange = InsertionTargetTextRange(location: 0, length: 0)
+
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("cot")
+        // Stale reads, then a revision that would backspace ("cot" -> "cod").
+        observer.value = "existing draft."
+        observer.selectedRange = InsertionTargetTextRange(location: 0, length: 0)
+        session.acceptPartialTranscript("cod")   // delete-branch caretMismatch -> append-only latch
+        session.acceptPartialTranscript("cot is") // clean extension still lands under the latch
+        session.acceptFinalTranscript("cot is here")
+
+        XCTAssertEqual(backend.fieldText, "cot is here")
+        XCTAssertEqual(backend.cancelCount, 0, "an identity-pinned stale caret must not abort the dictation")
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "the latch must suppress the unverifiable delete, never apply it"
+        )
+    }
+
     // MARK: - Final polished insert (issue 4) and minimal-edit diff (issue 8)
 
     func testFinalPolishedReturnsFalseWhenAppendOnlyLatchSuppressesIt() {
         let backend = GuardRecordingBackend()
         let observer = FakeTargetObserver()
         observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
         let session = ProgressiveTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             canonicalize: { $0 },
@@ -1331,12 +1494,26 @@ private final class FakeTargetObserver: InsertionTargetObserver {
     var applicationBundleIdentifier: String?
     var windowTitle: String?
     private(set) var baselineCaptured = false
+    // Mirrors the live observer's `everReadNonEmptyValue`: latched once any read returns
+    // non-empty, so `hasReflectedTextValue()` answers "has this field ever shown our
+    // text" — the discriminator between a real field that lost its text (`.emptyExposed`)
+    // and an advertise-but-opaque target like cmux that never reflects (`.notRead`).
+    private var everReadNonEmptyValue = false
+    // Force the reflected-text answer for tests that drive an empty `value` as a lever to
+    // reach append-only: set true to declare "this field reflects text, so an empty read
+    // is genuine divergence" (a real field whose text was cleared) without having to
+    // choreograph a non-empty read first. nil = faithful (track actual reads).
+    var reflectsText: Bool?
 
     func captureBaseline() { baselineCaptured = true }
     func focusChangedSinceStart() -> Bool { focusChanged }
-    func observedValue() -> String? { value }
+    func observedValue() -> String? {
+        if let value, !value.isEmpty { everReadNonEmptyValue = true }
+        return value
+    }
     func observedSelectedRange() -> InsertionTargetTextRange? { selectedRange }
     func exposesTextValue() -> Bool { exposesText }
+    func hasReflectedTextValue() -> Bool { reflectsText ?? everReadNonEmptyValue }
     func verifiesFocusIdentity() -> Bool { verifiesIdentity }
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
     func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }
@@ -1352,6 +1529,7 @@ private final class MovingTargetObserver: InsertionTargetObserver {
     func observedValue() -> String? { nil }
     func observedSelectedRange() -> InsertionTargetTextRange? { nil }
     func exposesTextValue() -> Bool { false }
+    func hasReflectedTextValue() -> Bool { false }
     func verifiesFocusIdentity() -> Bool { false }
     func baselineInsertionContext() -> InsertionTargetContext? { nil }
     func targetApplicationBundleIdentifier() -> String? { nil }
