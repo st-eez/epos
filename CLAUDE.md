@@ -12,56 +12,33 @@ design docs, not proof — verify behavior in `Sources/` and `Tests/` before edi
 ## How a dictation flows
 
 ```
-fn down  (Hotkey/FnHotkey)
-   ↓
-AudioCapture                     mic 48kHz/1ch → 16kHz/1ch PCM
-   ↓                             (DogfoodTap saves per-recording WAVs for replay evals)
-Transcriber                      SpeechAnalyzer + SpeechTranscriber, en-US;
-   ↓                             correction aliases attached as speech context
-volatile partials + growing per-segment finals
-   ↓
-TranscriptCanonicalizer          deterministic alias/jargon + spoken-symbol layer;
-   ↓                             runs on every partial AND final (authoritative fix)
-ProgressiveTranscriptInsertionSession
-   ↓                             converge the field on the transcript: backspace the
-   ↓                             divergent suffix, retype. InsertionTargetGuard checks
-   ↓                             every delete/append via AX reads; on divergence it
-   ↓                             latches APPEND-ONLY (never delete again, only append
-   ↓                             new tails sliced against the transcript anchor)
-TextInsertionBackend             synthesized keystrokes into the focused app
-
-fn up → finalize → optional TranscriptPolisher (`polishEnabled`, default OFF;
-content-retention guard + always-safe fallback, words are never lost) → final reconcile
+FnHotkey                               (fn-only push-to-talk; hold to record)
+    ↓  AudioCapture                    (48 kHz mic → 16 kHz mono PCM)
+Transcriber                            (SpeechAnalyzer + SpeechTranscriber, en-US)
+    ↓  volatile partials + growing per-segment finals
+TranscriptCanonicalizer                (deterministic alias/jargon + spoken-symbol fix)
+    ↓
+ProgressiveTranscriptInsertionSession  (converges the field on the transcript)
+    ↓  InsertionTargetGuard            (AX safety check on every delete/append)
+TextInsertionBackend                   (synthesized keystrokes → focused app)
 ```
 
-`AppCoordinator` owns the recording state machine and wires every stage. The UI
-shows volatile partials and hosts the corrections editor. `CorrectionDictionary` +
-`CorrectionEvidence` learn new aliases from the user's post-dictation AX edits,
-gated by `CorrectionPromotionGate`.
+`AppCoordinator` owns the recording state machine and wires every stage; the menu
+bar UI shows volatile partials. Correction aliases are attached to the recognizer
+as speech context, and the canonicalizer runs on every partial AND final as the
+authoritative jargon fix.
 
----
+Insertion converges by backspacing the divergent suffix and retyping, so revisions
+correct live. Every delete/append pays an AX read first; when a target's reads
+prove unreliable (Electron compose boxes, cleared fields), the session latches
+**append-only**: it never deletes again and only appends new tails sliced against
+a transcript anchor, so existing text is never corrupted.
 
-## Key files
-
-| File | Role |
-|------|------|
-| `App/AppCoordinator.swift` | Recording state machine; wires audio → speech → insertion |
-| `App/Settings.swift` | Persisted settings (`polishEnabled`, …) |
-| `Hotkey/FnHotkey.swift` | fn-key push-to-talk monitor |
-| `Audio/AudioCapture.swift` | Mic capture + resample to 16 kHz mono |
-| `Audio/DogfoodTap.swift` | Per-recording WAVs for replay evals |
-| `Speech/Transcriber.swift` | SpeechAnalyzer/SpeechTranscriber session lifecycle |
-| `Speech/AssetManager.swift` | On-device model asset install/availability |
-| `Speech/TranscriptCanonicalizer.swift` | Deterministic correction layer (jargon aliases, spoken symbols) |
-| `Speech/Correction*.swift` | User-editable alias dictionary; learns from AX edit evidence |
-| `Speech/TranscriptPolisher*.swift`, `*Polish*.swift` | Opt-in LLM polish: engines, guard, prompts, fallback |
-| `Speech/TranscriptDeterministicCleaner.swift` | Guard-proven hard-filler cleanup (polish fallback path) |
-| `Inject/ProgressiveTranscriptInsertion.swift` | Streaming reconcile; append-only latch + anchor |
-| `Inject/InsertionTargetGuard.swift`, `InsertionTargetFocusSignature.swift` | AX safety: when a delete/append is safe; same-app focus-move detection |
-| `Inject/TextInsertionBackend.swift` | Keystroke synthesis backend |
-| `Permissions/PermissionsGate.swift` | Mic / speech / accessibility TCC gating |
-| `Diagnostics/EposLogger.swift` | Unified logging + app-owned diagnostic file log |
-| `UI/MenuBarView.swift`, `UI/RecordingIndicator*.swift`, `UI/Correction*.swift` | Menu bar, recording indicator, corrections editor |
+On fn release the coordinator finalizes. The optional `TranscriptPolisher`
+(`polishEnabled`, default OFF) may rewrite the final transcript behind a
+content-retention guard with an always-safe fallback — words are never lost.
+`CorrectionDictionary` + `CorrectionEvidence` learn new aliases from the user's
+post-dictation AX edits, gated by `CorrectionPromotionGate`.
 
 ---
 
@@ -182,3 +159,27 @@ as a background capture rig:
   stage only task-relevant files.
 - Do not push, force push, hard reset, amend, discard changes, or update git
   config unless explicitly asked.
+
+---
+
+## Key files
+
+| File | Role |
+|------|------|
+| `App/AppCoordinator.swift` | Recording state machine; wires audio → speech → insertion |
+| `App/Settings.swift` | Persisted settings (`polishEnabled`, …) |
+| `Hotkey/FnHotkey.swift` | fn-key push-to-talk monitor |
+| `Audio/AudioCapture.swift` | Mic capture + resample to 16 kHz mono |
+| `Audio/DogfoodTap.swift` | Per-recording WAVs for replay evals |
+| `Speech/Transcriber.swift` | SpeechAnalyzer/SpeechTranscriber session lifecycle |
+| `Speech/AssetManager.swift` | On-device model asset install/availability |
+| `Speech/TranscriptCanonicalizer.swift` | Deterministic correction layer (jargon aliases, spoken symbols) |
+| `Speech/Correction*.swift` | User-editable alias dictionary; learns from AX edit evidence |
+| `Speech/TranscriptPolisher*.swift`, `*Polish*.swift` | Opt-in LLM polish: engines, guard, prompts, fallback |
+| `Speech/TranscriptDeterministicCleaner.swift` | Guard-proven hard-filler cleanup (polish fallback path) |
+| `Inject/ProgressiveTranscriptInsertion.swift` | Streaming reconcile; append-only latch + anchor |
+| `Inject/InsertionTargetGuard.swift`, `InsertionTargetFocusSignature.swift` | AX safety: when a delete/append is safe; same-app focus-move detection |
+| `Inject/TextInsertionBackend.swift` | Keystroke synthesis backend |
+| `Permissions/PermissionsGate.swift` | Mic / speech / accessibility TCC gating |
+| `Diagnostics/EposLogger.swift` | Unified logging + app-owned diagnostic file log |
+| `UI/MenuBarView.swift`, `UI/RecordingIndicator*.swift`, `UI/Correction*.swift` | Menu bar, recording indicator, corrections editor |
