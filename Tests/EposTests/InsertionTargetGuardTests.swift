@@ -1009,6 +1009,49 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
     }
 
+    func testAppendOnlyRecoversTailAfterSuppressedInteriorRevisionFinal() {
+        // Regression for the 2026-06-10 Teams tail loss (recording 012eccb2):
+        // append-only latched at the first keystroke (stale Electron caret read),
+        // partials streamed half the utterance, then the first segment final
+        // re-worded the typed prefix and was rightly suppressed. Pre-fix that
+        // suppression also lost the commit/transcript alignment: every later
+        // partial and final — pure extensions of the FINAL's text — no longer
+        // prefix-matched the on-screen text and reconciled to zero inserted
+        // chars, dropping the entire second half of the dictation (60 of 153
+        // chars landed). The anchor must realign to each authoritative final so
+        // subsequent segments still append.
+        let backend = GuardRecordingBackend()
+        let observer = FakeTargetObserver()
+        observer.exposesText = true
+        observer.reflectsText = true // real field that reflected text then went empty → divergence
+        let session = ProgressiveTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            canonicalize: { $0 },
+            target: observer
+        )
+
+        session.acceptPartialTranscript("I saw a cat")
+        // A divergent read latches append-only as the partial shrinks.
+        observer.value = ""
+        session.acceptPartialTranscript("I saw a")
+        // First segment final re-words the interior: unappendable, suppressed.
+        session.acceptFinalTranscript("I saw a big cat")
+        // The recognizer keeps going; everything below extends the final's text.
+        session.acceptPartialTranscript("I saw a big cat and")
+        session.acceptPartialTranscript("I saw a big cat and it")
+        session.acceptFinalTranscript("I saw a big cat and it ran")
+        session.finish()
+
+        XCTAssertEqual(
+            backend.fieldText, "I saw a cat and it ran",
+            "words dictated after a suppressed interior revision must still land"
+        )
+        XCTAssertFalse(
+            backend.operations.contains { if case .delete = $0 { true } else { false } },
+            "append-only latch must never backspace"
+        )
+    }
+
     func testAppendOnlyRawFinalsAdvanceByLengthWithoutStackingAcrossFinals() {
         // Locks the loss-proof append to slice by COMMITTED LENGTH, not common prefix.
         // A common-prefix slice re-anchors at the low divergence point on every final

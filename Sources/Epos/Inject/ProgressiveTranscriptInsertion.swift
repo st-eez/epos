@@ -30,6 +30,14 @@ public final class ProgressiveTranscriptInsertionSession {
     /// `committedText` no longer models the screen. We never resume deleting; we
     /// only append, so existing on-screen text can never be corrupted.
     private var appendOnly = false
+    /// Append-only alignment anchor: the prefix of the canonical transcript we
+    /// have already consumed. It tracks `committedText` until a final's interior
+    /// revision is suppressed; from then on the screen keeps the stale prefix
+    /// while the anchor realigns to the authoritative final, so later partials
+    /// and finals still slice off their NEW tails transcript-relative instead of
+    /// never prefix-matching the screen again and silently dropping the rest of
+    /// the utterance (2026-06-10 Teams tail loss).
+    private var appendAnchor: String?
 
     public init(
         insertionSession: any TextInsertionSession,
@@ -257,33 +265,42 @@ public final class ProgressiveTranscriptInsertionSession {
         // do-no-harm into kill-the-dictation. Keystrokes land at the live caret —
         // inherent to synthesis; a mid-utterance caret move while holding fn is
         // rare and the misplaced tail is bounded, visible, and never destructive.
-        // WHICH tail depends on the source:
+        // WHICH tail depends on the source, and both slice against `appendAnchor`
+        // (the consumed-transcript prefix), not the on-screen `committedText` —
+        // after a suppressed interior revision the two diverge and only the
+        // anchor still aligns with what the recognizer sends next:
         //
         // - A raw final (`lossProofAppend`) is the recognizer's authoritative end-
-        //   state. When the final only extends the commit, append that extension. When
+        //   state. When the final only extends the anchor, append that extension. When
         //   the final re-cases/punctuates an earlier prefix and then adds new words,
         //   append only a length-based tail if it starts at a word boundary. Never
         //   graft a mid-token suffix: "bched." -> "batched." cannot be fixed without
-        //   deleting, and appending "d." would make the visible text worse.
+        //   deleting, and appending "d." would make the visible text worse. Either
+        //   way the anchor realigns to the final: a suppressed interior revision is
+        //   unreachable on screen, but the NEXT segment extends the final's text,
+        //   so it must be sliced against it or the session freezes forever.
         // - A volatile partial or the polished rewrite stays conservative: it appends
-        //   only a clean prefix-extension. Partials flicker (a lateral revision would
-        //   graft garbage), and a polish that doesn't extend the commit must stay
-        //   suppressible.
+        //   only a clean prefix-extension and advances the anchor only by what
+        //   landed. Partials flicker (a lateral revision would graft garbage), and
+        //   a polish that doesn't extend the commit must stay suppressible.
         if appendOnly {
             deleteCount = 0
+            let anchor = appendAnchor ?? committedText
             if lossProofAppend {
-                insertion = Self.lossProofAppendTail(from: committedText, to: newTarget)
-                if insertion.isEmpty, newTarget.count > committedText.count, !newTarget.hasPrefix(committedText) {
+                insertion = Self.lossProofAppendTail(from: anchor, to: newTarget)
+                if insertion.isEmpty, newTarget.count > anchor.count, !newTarget.hasPrefix(anchor) {
                     // NOT trailing-word loss: the full utterance is already on screen.
                     // The final only re-revised earlier text (casing/punctuation/homonym,
                     // e.g. "1"->"first"); append-only can't reach back to apply it without
                     // a delete this target can't verify, so we keep the last-partial text.
                     log.info("append-only kept last-partial text, suppressed final interior revision committedChars=\(committedText.utf16.count) targetChars=\(newTarget.utf16.count)")
                 }
+                appendAnchor = newTarget
             } else {
-                insertion = newTarget.hasPrefix(committedText)
-                    ? String(newTarget.dropFirst(committedText.count))
+                insertion = newTarget.hasPrefix(anchor)
+                    ? String(newTarget.dropFirst(anchor.count))
                     : ""
+                appendAnchor = anchor + insertion
             }
         }
 
