@@ -6,8 +6,10 @@ transcript finalizes in place. Transcription is fully on-device (Apple
 `SpeechTranscriber`).
 
 `specs/baseline.md` is the spec and source of truth. Before changing architecture
-or scope, re-read it; if the work doesn't fit, update the spec first. Specs are
-design docs, not proof — verify behavior in `Sources/` and `Tests/` before editing.
+or scope, re-read it; if the work doesn't fit, update the spec first. Scope is
+deliberately narrow: the non-goals and backlog in `specs/baseline.md` are binding —
+check them before adding any feature. Specs are design docs, not proof — verify
+behavior in `Sources/` and `Tests/` before editing.
 
 ## How a dictation flows
 
@@ -39,18 +41,6 @@ On fn release the coordinator finalizes. The optional `TranscriptPolisher`
 content-retention guard with an always-safe fallback — words are never lost.
 `CorrectionDictionary` + `CorrectionEvidence` learn new aliases from the user's
 post-dictation AX edits, gated by `CorrectionPromotionGate`.
-
----
-
-## Non-goals (baseline)
-
-Out of scope without an updated spec. Full backlog at the bottom of `specs/baseline.md`.
-
-- Filler-word detector (the polish stage's guard-proven filler strip shipped via spec update; a dedicated detector did not)
-- Persistent history, multiple model choices, multi-locale switching UI
-- Toggle/hands-free mode (push-to-talk only)
-- Cloud transcription fallback
-- Custom hotkey binding UI
 
 ---
 
