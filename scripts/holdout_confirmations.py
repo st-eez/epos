@@ -10,6 +10,9 @@ import re
 import tempfile
 from typing import Any
 
+from holdout_freeze import load_selection
+from holdout_selection import SelectionError
+
 
 CONFIRMATIONS_FILENAME = "holdout-confirmations.jsonl"
 SCHEMA_VERSION = 1
@@ -115,9 +118,24 @@ def append_confirmation(path: Path, confirmation: Confirmation) -> None:
     existing = load_confirmations(path)
     if any(row.file == confirmation.file for row in existing):
         raise ConfirmationError(f"{path}: {confirmation.file} is already confirmed")
+    write_confirmations(path, [*existing, confirmation])
+
+
+def remove_confirmation(path: Path, file: str) -> Confirmation:
+    """Drop one confirmation so it can be redone; returns the row that was removed."""
+    existing = load_confirmations(path)
+    removed = next((row for row in existing if row.file == file), None)
+    if removed is None:
+        raise ConfirmationError(f"{path}: {file} is not confirmed")
+    write_confirmations(path, [row for row in existing if row.file != file])
+    return removed
+
+
+def write_confirmations(path: Path, rows: list[Confirmation]) -> None:
+    """Replace the whole file atomically; a partial write can never be observed."""
     payload = "".join(
         json.dumps(row.to_row(), ensure_ascii=False, sort_keys=True) + "\n"
-        for row in (*existing, confirmation)
+        for row in rows
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
@@ -142,10 +160,21 @@ def resolve_confirmations(
     path: Path,
     legacy_files: set[str],
     current_digests: dict[str, str],
+    selection_path: Path,
 ) -> dict[str, Confirmation]:
     """Validate confirmations against the recordings the ledger is about to emit."""
+    confirmations = load_confirmations(path)
+    if not confirmations:
+        return {}
+    frozen_selection = frozen_selection_digest(selection_path)
     resolved: dict[str, Confirmation] = {}
-    for confirmation in load_confirmations(path):
+    for confirmation in confirmations:
+        if confirmation.selection_sha256 != frozen_selection:
+            raise ConfirmationError(
+                f"{confirmation.file}: confirmed under holdout selection "
+                f"{confirmation.selection_sha256[:12]}, but {selection_path.name} "
+                f"freezes {frozen_selection[:12]}; the confirmation is orphaned"
+            )
         digest = current_digests.get(confirmation.file)
         if digest is None:
             raise ConfirmationError(
@@ -163,6 +192,24 @@ def resolve_confirmations(
             )
         resolved[confirmation.file] = confirmation
     return resolved
+
+
+def frozen_selection_digest(selection_path: Path) -> str:
+    """The digest of the selection every confirmation must have been made under.
+
+    The selection lives in a purgeable macOS cache. If it is gone while
+    confirmations remain, the confirmations cannot be tied to a holdout at all,
+    so nothing may merge until the frozen file is restored.
+    """
+    if not selection_path.is_file():
+        raise ConfirmationError(
+            "holdout confirmations exist but the frozen selection is missing: "
+            f"{selection_path}; restore that file from a backup before merging"
+        )
+    try:
+        return load_selection(selection_path).sha256
+    except SelectionError as error:
+        raise ConfirmationError(str(error)) from error
 
 
 def required_string(where: str, row: dict[str, Any], key: str) -> str:

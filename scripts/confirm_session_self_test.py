@@ -6,11 +6,12 @@ import json
 from pathlib import Path
 
 from confirm_candidates import discover_candidates
+from confirm_cli import reopen
 from confirm_plan import format_plan
-from confirm_session import SessionError, SessionIO, run_session
+from confirm_session import SessionError, SessionIO, ask, run_session
 from corpus_reader import Corpus
-from holdout_confirmations import load_confirmations
-from holdout_selection import Selection, compute_selection
+from holdout_confirmations import ConfirmationError, load_confirmations
+from holdout_selection import Selection, SelectionError, compute_selection
 
 
 SELECTION_SIZE = 4
@@ -42,7 +43,7 @@ def run_self_test(root: Path, recordings: Path, corpus: Corpus) -> None:
     candidates = {files[0]: "Recognizer guess one.", files[1]: "Recognizer guess two."}
     confirmations = root / "session-confirmations.jsonl"
 
-    scripted = ScriptedIO(["r", "", "Typed correction.", "s", "q"])
+    scripted = ScriptedIO(["r", "", "Typed correction.", "y", "s", "q"])
     summary = run_session(
         selection,
         recordings,
@@ -74,6 +75,8 @@ def run_self_test(root: Path, recordings: Path, corpus: Corpus) -> None:
     )
 
     run_resume_self_test(selection, recordings, confirmations, files)
+    run_prompt_self_test(recordings, files)
+    run_reconfirm_self_test(selection, recordings, confirmations, files)
     run_guard_self_test(selection, recordings, root, files)
     run_candidate_self_test(root, recordings, selection)
     assert format_plan(selection, root / "s.json", root / "c.jsonl", ["drift"], True)
@@ -85,7 +88,7 @@ def run_resume_self_test(
     confirmations: Path,
     files: list[str],
 ) -> None:
-    scripted = ScriptedIO(["Skipped one.", "Last one."])
+    scripted = ScriptedIO(["Skipped one for real.", "Last one for real."])
     summary = run_session(
         selection,
         recordings,
@@ -101,6 +104,73 @@ def run_resume_self_test(
     assert [row.file for row in rows] == files, "resume must preserve earlier rows"
     assert rows[-1].candidate_shown is None
     assert rows[-1].candidate_edited is True
+
+
+def run_prompt_self_test(recordings: Path, files: list[str]) -> None:
+    """Control keys are case-insensitive, and short text needs an explicit yes."""
+    audio = recordings / files[0]
+    upper = ScriptedIO(["R", "Q"])
+    assert ask(upper.io(), audio, "Candidate.") == ("quit", "")
+    assert upper.played == [files[0], files[0]], (
+        "an uppercase R replays instead of becoming ground truth"
+    )
+    assert ask(ScriptedIO([" S "]).io(), audio, None) == ("skip", "")
+    assert ask(ScriptedIO(["Three words here."]).io(), audio, None) == (
+        "confirm", "Three words here."
+    ), "a normal transcript is committed on the first answer"
+
+    gated = ScriptedIO(["Ok", "", "Ok", "maybe", "y"])
+    assert ask(gated.io(), audio, "Candidate.") == ("confirm", "Ok")
+    assert any('ground truth: "Ok"' in line for line in gated.printed), gated.printed
+    assert ask(ScriptedIO(["Two words", "yes"]).io(), audio, None) == (
+        "confirm", "Two words"
+    )
+    assert ask(ScriptedIO(["Ok"]).io(), audio, "Candidate.") == ("quit", ""), (
+        "an unanswered short-text prompt discards the text instead of writing it"
+    )
+
+
+def run_reconfirm_self_test(
+    selection: Selection,
+    recordings: Path,
+    confirmations: Path,
+    files: list[str],
+) -> None:
+    """--reconfirm drops exactly one row, then confirms only that recording."""
+    rows = load_confirmations(confirmations)
+    assert [row.file for row in rows] == files
+    kept = reopen(confirmations, rows, selection, files[1])
+    assert [row.file for row in kept] == [files[0], files[2], files[3]]
+    assert [row.file for row in load_confirmations(confirmations)] == [
+        files[0], files[2], files[3]
+    ], "dropping one confirmation must preserve every other row"
+    expect(
+        lambda: reopen(confirmations, kept, selection, files[1]),
+        ConfirmationError,
+        "is not confirmed",
+    )
+    expect(
+        lambda: reopen(confirmations, kept, selection, "absent.wav"),
+        SelectionError,
+        "not in the frozen holdout",
+    )
+    scripted = ScriptedIO(["Redone transcript here."])
+    summary = run_session(
+        selection,
+        recordings,
+        confirmations,
+        {},
+        None,
+        scripted.io(),
+        confirmed_files=frozenset(
+            item.file for item in selection.recordings if item.file != files[1]
+        ),
+    )
+    assert scripted.played == [files[1]], "only the reopened recording replays"
+    assert (summary.confirmed, summary.skipped, summary.remaining) == (1, 0, 0)
+    redone = {row.file: row for row in load_confirmations(confirmations)}
+    assert len(redone) == len(files)
+    assert redone[files[1]].human_intended_transcript == "Redone transcript here."
 
 
 def run_guard_self_test(
@@ -158,6 +228,15 @@ def run_candidate_self_test(
         "only the production arm, and only where the audio digest still matches"
     )
     assert found.source == artifact.name and found.reason is None
+
+
+def expect(action, kind: type[Exception], message: str) -> None:
+    try:
+        action()
+    except kind as error:
+        assert message in str(error), (message, str(error))
+    else:
+        raise AssertionError(f"expected {kind.__name__} containing {message!r}")
 
 
 def row(

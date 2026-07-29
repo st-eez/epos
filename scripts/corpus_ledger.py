@@ -15,7 +15,9 @@ from corpus_membership import (
     MembershipError,
     load_frozen_membership,
     recording_identity_digest,
+    validate_confirmed_ratchet,
 )
+from holdout_audio import file_sha256
 from holdout_confirmations import DESIGNATION, ConfirmationError, resolve_confirmations
 from holdout_confirmations import SCHEMA_VERSION as CONFIRMATION_SCHEMA_VERSION
 
@@ -39,6 +41,8 @@ def build_ledger(
     legacy_manifest: Path,
     frozen_membership: Path,
     confirmations: Path | None = None,
+    selection: Path | None = None,
+    confirmed_ratchet: Path | None = None,
     *,
     expected_manifest_sha256: str = EXPECTED_MANIFEST_SHA256,
     expected_legacy_rows: int = EXPECTED_LEGACY_ROWS,
@@ -81,9 +85,13 @@ def build_ledger(
     digests = {
         name: file_sha256(path) for name, path in sorted(audio_by_file.items())
     }
+    if confirmations is not None and selection is None:
+        raise CorpusError("holdout confirmations require the frozen selection path")
     try:
         confirmed = (
-            resolve_confirmations(confirmations, set(manifest_by_file), digests)
+            resolve_confirmations(
+                confirmations, set(manifest_by_file), digests, selection
+            )
             if confirmations is not None else {}
         )
     except ConfirmationError as error:
@@ -127,6 +135,11 @@ def build_ledger(
             frozen_membership,
             expected_rows=expected_frozen_rows,
         )
+        if confirmed_ratchet is not None:
+            validate_confirmed_ratchet(
+                confirmed_ratchet,
+                [(row.file, row.audio_sha256) for row in confirmed.values()],
+            )
     except MembershipError as error:
         raise CorpusError(str(error)) from error
     current_digests = {
@@ -216,14 +229,6 @@ def required_nonempty_string(
             f"{source}: legacy row {ordinal} requires non-empty string {key}"
         )
     return value
-
-
-def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while chunk := stream.read(1024 * 1024):
-            digest.update(chunk)
-    return digest.hexdigest()
 
 
 def validate_output_path(

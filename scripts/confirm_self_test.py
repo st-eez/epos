@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from pathlib import Path
 import struct
+from types import SimpleNamespace
 
+from confirm_cli import resolve_selection
 from confirm_session_self_test import run_self_test as run_session_self_test
 from corpus_reader import Corpus, CorpusEntry
 from holdout_audio import HoldoutAudioError, file_sha256, wav_duration_seconds
+from holdout_confirmations import Confirmation
 from holdout_freeze import load_selection, validate_selection, write_selection
 from holdout_selection import (
     CHRONOLOGICAL_STRATA,
@@ -137,7 +140,56 @@ def run_freeze_self_test(
     assert validate_selection(selection, drifted, recordings), (
         "a regenerated corpus must be reported, not treated as tampering"
     )
+    run_never_recompute_self_test(path, recordings, corpus, selection)
+    assert not path.exists()
+
+
+def run_never_recompute_self_test(
+    path: Path,
+    recordings: Path,
+    corpus: Corpus,
+    selection: Selection,
+) -> None:
+    """A confirmation may only ever resume against the selection it was made under."""
+    resume = SimpleNamespace(reselect=False, size=len(selection.recordings))
+    confirmed = [sample_confirmation(selection.recordings[0].file, selection.sha256)]
+    assert resolve_selection(path, corpus, recordings, resume, confirmed)[0] == selection
+    orphan = [sample_confirmation(selection.recordings[0].file, "0" * 64)]
+    expect_error(
+        lambda: resolve_selection(path, corpus, recordings, resume, orphan),
+        "made under a different holdout selection",
+    )
     path.unlink()
+    expect_error(
+        lambda: resolve_selection(path, corpus, recordings, resume, confirmed),
+        "the frozen selection is missing",
+    )
+    expect_error(
+        lambda: resolve_selection(
+            path,
+            corpus,
+            recordings,
+            SimpleNamespace(reselect=True, size=resume.size),
+            confirmed,
+        ),
+        "--reselect would invalidate them",
+    )
+    fresh, notes = resolve_selection(path, corpus, recordings, resume, [])
+    assert (fresh, notes) == (selection, []), (
+        "with nothing confirmed, an absent selection is computed as before"
+    )
+
+
+def sample_confirmation(file: str, selection_sha256: str) -> Confirmation:
+    return Confirmation(
+        file=file,
+        audio_sha256="a" * 64,
+        human_intended_transcript="Confirmed text.",
+        candidate_shown=None,
+        candidate_source=None,
+        candidate_edited=True,
+        selection_sha256=selection_sha256,
+    )
 
 
 def fixture_corpus(recordings: Path) -> Corpus:

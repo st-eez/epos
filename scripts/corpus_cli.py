@@ -14,7 +14,17 @@ from corpus_ledger import (
     validate_output_path,
     write_ledger,
 )
-from holdout_confirmations import CONFIRMATIONS_FILENAME
+from corpus_membership import (
+    CONFIRMED_RATCHET_FILENAME,
+    MembershipError,
+    freeze_confirmed_ratchet,
+)
+from holdout_confirmations import (
+    CONFIRMATIONS_FILENAME,
+    ConfirmationError,
+    load_confirmations,
+)
+from holdout_freeze import SELECTION_FILENAME
 
 
 def main() -> int:
@@ -51,6 +61,28 @@ def main() -> int:
             f"RECORDINGS/{CONFIRMATIONS_FILENAME} and may be absent"
         ),
     )
+    parser.add_argument(
+        "--selection",
+        type=Path,
+        help=(
+            "frozen holdout selection every confirmation must belong to; "
+            f"defaults to RECORDINGS/{SELECTION_FILENAME}"
+        ),
+    )
+    parser.add_argument(
+        "--confirmed-ratchet",
+        type=Path,
+        default=repo_root / "specs" / CONFIRMED_RATCHET_FILENAME,
+        help="repo-committed floor of already-merged holdout confirmations",
+    )
+    parser.add_argument(
+        "--freeze-confirmations",
+        action="store_true",
+        help=(
+            "validate everything, then record the current confirmations in the "
+            "ratchet file so a purged confirmations file fails closed"
+        ),
+    )
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
@@ -65,16 +97,21 @@ def main() -> int:
 
     manifest = args.manifest or args.recordings / "ground-truth.jsonl"
     confirmations = args.confirmations or args.recordings / CONFIRMATIONS_FILENAME
+    selection = args.selection or args.recordings / SELECTION_FILENAME
     try:
         rows = build_ledger(
             recordings_directory=args.recordings,
             legacy_manifest=manifest,
             frozen_membership=args.frozen_membership,
             confirmations=confirmations,
+            selection=selection,
+            confirmed_ratchet=args.confirmed_ratchet,
         )
+        if args.freeze_confirmations:
+            return freeze_confirmations(args.confirmed_ratchet, confirmations)
         validate_output_path(args.output, args.recordings, manifest)
         write_ledger(args.output, rows, replace=args.replace)
-    except (CorpusError, OSError) as error:
+    except (CorpusError, ConfirmationError, MembershipError, OSError) as error:
         print(f"corpus: {error}", file=sys.stderr)
         return 1
 
@@ -90,6 +127,18 @@ def main() -> int:
         f"{counts['inferred']} inferred, {counts['unlabeled']} unlabeled"
     )
     print(f"ledger: {args.output}")
+    return 0
+
+
+def freeze_confirmations(ratchet: Path, confirmations: Path) -> int:
+    """Ratchet the confirmations a full validated build just accepted."""
+    rows = load_confirmations(confirmations)
+    before, after = freeze_confirmed_ratchet(
+        ratchet, [(row.file, row.audio_sha256) for row in rows]
+    )
+    print(f"froze {after} confirmed holdout recordings ({after - before} new)")
+    print(f"ratchet: {ratchet}")
+    print("commit that file: it is the only floor under the confirmations cache")
     return 0
 
 

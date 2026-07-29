@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 
 from corpus_ledger import CorpusError, build_ledger
-from corpus_membership import recording_identity_digest
+from corpus_membership import MembershipError, recording_identity_digest
 from corpus_reader_self_test import holdout_row
 from holdout_confirmations import (
     Confirmation,
@@ -15,6 +15,8 @@ from holdout_confirmations import (
     append_confirmation,
     load_confirmations,
 )
+from holdout_freeze import SELECTION_FILENAME, write_selection
+from holdout_selection import SelectedRecording, Selection, finalize
 
 
 AUDIO = {
@@ -23,7 +25,7 @@ AUDIO = {
     "unlabeled.wav": b"unlabeled audio",
     "spare.wav": b"spare audio",
 }
-SELECTION_SHA256 = "c" * 64
+FIXTURE_SELECTION_PATH = object()
 
 
 def run_self_test(root: Path) -> None:
@@ -49,6 +51,7 @@ def run_self_test(root: Path) -> None:
         encoding="utf-8",
     )
     confirmations = recordings / "holdout-confirmations.jsonl"
+    selection = recordings / SELECTION_FILENAME
 
     baseline = ledger(recordings, manifest, membership, confirmations)
     assert {row["file"]: row["verificationStatus"] for row in baseline} == {
@@ -56,7 +59,8 @@ def run_self_test(root: Path) -> None:
         "inferred.wav": "inferred",
         "spare.wav": "unlabeled",
         "unlabeled.wav": "unlabeled",
-    }, "an absent confirmations file must leave the ledger unchanged"
+    }, "no confirmations and no frozen selection is the valid pre-session state"
+    write_selection(selection, SELECTION, replace=False)
 
     append_confirmation(confirmations, confirmation("unlabeled.wav"))
     append_confirmation(confirmations, confirmation("spare.wav", edited=True))
@@ -100,12 +104,56 @@ def run_self_test(root: Path) -> None:
         (confirmation("confirmed.wav"), "confirmed by both the legacy manifest"),
         (confirmation("absent.wav"), "confirmed recording has no audio"),
         (confirmation("unlabeled.wav", audio_sha256="d" * 64), "no longer matches"),
+        (
+            confirmation("unlabeled.wav", selection_sha256="d" * 64),
+            "the confirmation is orphaned",
+        ),
     ):
         path = written(root / "case.jsonl", row)
         expect_error(
             lambda path=path: ledger(recordings, manifest, membership, path),
             message,
         )
+    expect_error(
+        lambda: ledger(recordings, manifest, membership, confirmations, selection=None),
+        "confirmations require the frozen selection path",
+    )
+    frozen = selection.read_text(encoding="utf-8")
+    selection.unlink()
+    expect_error(
+        lambda: ledger(recordings, manifest, membership, confirmations),
+        "confirmations exist but the frozen selection is missing",
+    )
+    selection.write_text(
+        frozen.replace('"poolSize": 4', '"poolSize": 3'), encoding="utf-8"
+    )
+    expect_error(
+        lambda: ledger(recordings, manifest, membership, confirmations),
+        "was edited after freezing",
+    )
+    selection.write_text(frozen, encoding="utf-8")
+    # Imported here: the ratchet test reuses this module's fixture helpers.
+    from corpus_holdout_ratchet_self_test import run_self_test as run_ratchet_self_test
+
+    run_ratchet_self_test(root, recordings, manifest, membership, confirmations)
+
+
+def fixture_selection() -> Selection:
+    """A real frozen selection, so its digest survives load_selection's checks."""
+    return finalize(
+        tuple(
+            SelectedRecording(
+                file=name,
+                audio_sha256=digest(name),
+                duration_seconds=1.0 + index,
+                duration_stratum=1,
+                chronological_stratum=1,
+            )
+            for index, name in enumerate(sorted(AUDIO))
+        ),
+        len(AUDIO),
+        "a" * 64,
+    )
 
 
 def confirmation(
@@ -113,6 +161,7 @@ def confirmation(
     *,
     edited: bool = False,
     audio_sha256: str | None = None,
+    selection_sha256: str | None = None,
 ) -> Confirmation:
     transcript = f"Confirmed {file}."
     return Confirmation(
@@ -122,7 +171,7 @@ def confirmation(
         candidate_shown=None if edited else transcript,
         candidate_source=None if edited else "replay.jsonl",
         candidate_edited=edited,
-        selection_sha256=SELECTION_SHA256,
+        selection_sha256=selection_sha256 or SELECTION.sha256,
     )
 
 
@@ -143,12 +192,20 @@ def ledger(
     manifest: Path,
     membership: Path,
     confirmations: Path,
+    *,
+    selection: Path | None | object = FIXTURE_SELECTION_PATH,
+    ratchet: Path | None = None,
 ) -> list[dict]:
     return build_ledger(
         recordings,
         manifest,
         membership,
         confirmations,
+        (
+            recordings / SELECTION_FILENAME
+            if selection is FIXTURE_SELECTION_PATH else selection
+        ),
+        ratchet,
         expected_manifest_sha256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
         expected_legacy_rows=2,
         human_confirmed_rows=1,
@@ -160,7 +217,10 @@ def ledger(
 def expect_error(action, message: str) -> None:
     try:
         action()
-    except (ConfirmationError, CorpusError) as error:
+    except (ConfirmationError, CorpusError, MembershipError) as error:
         assert message in str(error), (message, str(error))
     else:
         raise AssertionError(f"expected a failure containing {message!r}")
+
+
+SELECTION = fixture_selection()

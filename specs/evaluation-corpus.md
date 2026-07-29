@@ -107,11 +107,26 @@ Regenerating the ledger changes the corpus digest. That is reported as a note,
 not a failure: the holdout stands as long as every frozen pick still exists
 with unchanged audio. A pick whose bytes changed is a hard failure.
 
+Every confirmation records the `selectionSHA256` it was made under, and both
+files live in a macOS cache directory that can be purged. So the never-recompute
+invariant is enforced from both sides:
+
+- if any confirmation exists and `holdout-selection.json` is **gone**,
+  `scripts/confirm` refuses to run. It does not recompute: a fresh selection
+  would silently orphan the existing confirmations. The only recovery is
+  restoring the frozen selection file from a backup;
+- if the selection file is present but a confirmation names a different
+  `selectionSHA256`, that is also a refusal — the wrong selection was restored.
+
+The same two checks run again at ledger-merge time, so an orphaned confirmation
+can never reach the ledger even if it was produced by some other route.
+
 ### Confirming
 
 ```sh
-scripts/confirm --plan   # print the selection and exit, writing nothing
-scripts/confirm          # freeze, then listen and confirm
+scripts/confirm --plan              # print the selection and exit, writing nothing
+scripts/confirm                     # freeze, then listen and confirm
+scripts/confirm --reconfirm FILE    # redo one recording that was confirmed wrong
 ```
 
 Each recording plays through `afplay`. The current production-pipeline
@@ -119,7 +134,19 @@ transcript is shown as an explicit candidate, prefilled from the newest
 `reviewable*`/`unlabeled*` context replay artifact in `.build/evals` and only
 where the artifact's `audioSHA256` still matches the recording. Enter accepts
 the candidate, typed text replaces it, `r` replays, `s` skips, `q` quits.
-Quitting is safe: a rerun resumes at the first unconfirmed recording.
+Control keys are case-insensitive, so a shifted `R` replays instead of becoming
+a transcript. Quitting is safe: a rerun resumes at the first unconfirmed
+recording.
+
+A typed transcript of one or two words is the zone where a fumbled control key
+lands, so it is echoed back and needs an explicit `y`. Anything else — enter
+included — returns to the prompt with nothing written.
+
+`--reconfirm FILE` is the correction path for a confirmation that is already on
+disk: it removes that one row by rewriting the whole file, then runs the loop
+for just that recording, leaving every other confirmation untouched. It is an
+error when `FILE` is not in the frozen holdout or is not currently confirmed,
+and it never freezes a selection as a side effect.
 
 A candidate never silently becomes truth. Every row in
 `holdout-confirmations.jsonl` records the candidate that was shown, its source
@@ -140,8 +167,33 @@ confirmed recording becomes `human_confirmed` with a null `legacyOrdinal`,
 `scripts/audit` joins on to call a signed eval row verified.
 
 The merge fails closed: a confirmation whose audio digest no longer matches,
-whose recording is missing, or whose recording is also labeled by the legacy
-manifest stops the build.
+whose recording is missing, whose recording is also labeled by the legacy
+manifest, or whose `selectionSHA256` is not the one `holdout-selection.json`
+freezes stops the build. Confirmations without that frozen selection file cannot
+be tied to a holdout at all, so their presence without it is also a failure. No
+confirmations and no selection file is the valid pre-session state.
+
+### Confirmation ratchet
+
+Confirmations live in the same purgeable cache as the audio, so on their own they
+are not a floor: deleting the file would quietly turn 40 confirmed rows back into
+`unlabeled` on the next `scripts/corpus --replace`. After a confirming session:
+
+```sh
+scripts/corpus --freeze-confirmations
+```
+
+That validates the whole ledger first and then records the confirmed set in
+`specs/holdout-confirmed-recordings.sha256`, which is committed. It uses the same
+privacy-safe scheme as the frozen membership file — sorted
+`SHA256(UTF8(filename) + NUL + ASCII(lowercase audio SHA256))` lines, no
+filenames and no transcripts — and is monotonic: it refuses to write a set that
+drops anything already frozen.
+
+Afterwards every ledger build requires each ratcheted digest to match a present
+confirmation with unchanged audio. A purged or truncated confirmations file is a
+hard failure naming the count, not a silent revert. An absent ratchet file means
+nothing is frozen yet and is valid.
 
 `scripts/corpus_reader.py` accepts a `human_confirmed` row in exactly two
 shapes — a legacy ordinal in `1...35`, or a null ordinal with holdout

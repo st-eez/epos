@@ -15,6 +15,8 @@ REPLAY = "r"
 SKIP = "s"
 QUIT = "q"
 PROMPT = "  enter=accept  text=correct  r=replay  s=skip  q=quit > "
+SHORT_TRANSCRIPT_WORDS = 2
+SHORT_PROMPT = "  y=yes, that is the whole transcript  enter=no, let me retype > "
 
 
 class SessionError(RuntimeError):
@@ -116,11 +118,12 @@ def ask(io: SessionIO, audio: Path, candidate: str | None) -> tuple[str, str]:
         except EOFError:
             return "quit", ""
         stripped = answer.strip()
-        if stripped == QUIT:
+        control = stripped.casefold()
+        if control == QUIT:
             return "quit", ""
-        if stripped == SKIP:
+        if control == SKIP:
             return "skip", ""
-        if stripped == REPLAY:
+        if control == REPLAY:
             io.play(audio)
             continue
         if not stripped:
@@ -128,7 +131,28 @@ def ask(io: SessionIO, audio: Path, candidate: str | None) -> tuple[str, str]:
                 return "confirm", candidate
             io.write_line("  no candidate to accept; type the transcript, s, or q")
             continue
-        return "confirm", stripped
+        if len(stripped.split()) > SHORT_TRANSCRIPT_WORDS or confirm_short(io, stripped):
+            return "confirm", stripped
+
+
+def confirm_short(io: SessionIO, transcript: str) -> bool:
+    """Re-ask on a very short transcript, which is where a mistyped key lands.
+
+    Ground truth is written once and has no correction path inside the loop, so
+    text short enough to be a fumbled control key needs an explicit yes.
+    """
+    io.write_line(f'  recording as ground truth: "{transcript}"')
+    while True:
+        try:
+            answer = io.read_line(SHORT_PROMPT)
+        except EOFError:
+            return False
+        decision = answer.strip().casefold()
+        if decision in {"y", "yes"}:
+            return True
+        if decision in {"", "n", "no"}:
+            return False
+        io.write_line("  answer y or n")
 
 
 def write_confirmation(

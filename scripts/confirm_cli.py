@@ -17,6 +17,7 @@ from holdout_confirmations import (
     ConfirmationError,
     default_confirmations_path,
     load_confirmations,
+    remove_confirmation,
 )
 from holdout_freeze import (
     default_selection_path,
@@ -64,6 +65,11 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="discard an unused frozen selection and recompute it",
     )
+    result.add_argument(
+        "--reconfirm",
+        metavar="FILE",
+        help="drop one recording's confirmation and confirm it again",
+    )
     result.add_argument("--test", action="store_true")
     return result
 
@@ -87,6 +93,10 @@ def main(argv: list[str] | None = None) -> int:
         validate_output_path(confirmations_path, recordings, repo_root)
         corpus = load_corpus(args.corpus.expanduser())
         confirmations = load_confirmations(confirmations_path)
+        if args.reconfirm and not confirmations:
+            raise ConfirmationError(
+                f"nothing is confirmed yet, so {args.reconfirm} cannot be redone"
+            )
         frozen = selection_path.is_file() and not args.reselect
         selection, notes = resolve_selection(
             selection_path, corpus, recordings, args, confirmations
@@ -98,8 +108,19 @@ def main(argv: list[str] | None = None) -> int:
             print(f"note: {note}")
         if not frozen:
             write_selection(selection_path, selection, replace=args.reselect)
+        if args.reconfirm:
+            confirmations = reopen(
+                confirmations_path, confirmations, selection, args.reconfirm
+            )
+            print(f"dropped the confirmation for {args.reconfirm}; confirming it again")
         return confirm(
-            repo_root, recordings, selection, confirmations_path, confirmations, args
+            repo_root,
+            recordings,
+            selection,
+            confirmations_path,
+            confirmations,
+            args,
+            only=args.reconfirm,
         )
     except (
         ConfirmationError,
@@ -125,10 +146,42 @@ def resolve_selection(
             f"{len(confirmations)} recordings are already confirmed; "
             "--reselect would invalidate them"
         )
+    if confirmations and not exists:
+        raise SelectionError(
+            f"{len(confirmations)} recordings are confirmed but the frozen "
+            f"selection is missing: {selection_path}. Computing a new one would "
+            "orphan every confirmation, so nothing was written. Restore that file "
+            "from a backup; the recordings directory is a purgeable macOS cache."
+        )
     if exists and not args.reselect:
         selection = load_selection(selection_path)
+        orphans = [
+            row.file for row in confirmations
+            if row.selection_sha256 != selection.sha256
+        ]
+        if orphans:
+            raise SelectionError(
+                f"{len(orphans)} confirmations were made under a different holdout "
+                f"selection than {selection_path.name} freezes; restore the "
+                "selection those confirmations belong to"
+            )
         return selection, validate_selection(selection, corpus, recordings)
     return compute_selection(corpus, recordings, size=args.size), []
+
+
+def reopen(
+    confirmations_path: Path,
+    confirmations: list[Confirmation],
+    selection: Selection,
+    file: str,
+) -> list[Confirmation]:
+    """Drop one confirmation so it can be redone, keeping every other row."""
+    if all(recording.file != file for recording in selection.recordings):
+        raise SelectionError(f"{file} is not in the frozen holdout")
+    if all(row.file != file for row in confirmations):
+        raise ConfirmationError(f"{file} is not confirmed; there is nothing to redo")
+    remove_confirmation(confirmations_path, file)
+    return [row for row in confirmations if row.file != file]
 
 
 def confirm(
@@ -138,6 +191,8 @@ def confirm(
     confirmations_path: Path,
     confirmations: list[Confirmation],
     args: argparse.Namespace,
+    *,
+    only: str | None = None,
 ) -> int:
     digests = {
         recording.file: recording.audio_sha256 for recording in selection.recordings
@@ -150,6 +205,11 @@ def confirm(
         f"{len(confirmations)} already confirmed. "
         "Listen, then accept or correct the candidate."
     )
+    held = (
+        frozenset(item.file for item in selection.recordings if item.file != only)
+        if only is not None
+        else frozenset(row.file for row in confirmations)
+    )
     summary = run_session(
         selection,
         recordings,
@@ -157,7 +217,7 @@ def confirm(
         candidates.transcripts,
         candidates.source,
         terminal_io(),
-        confirmed_files=frozenset(row.file for row in confirmations),
+        confirmed_files=held,
     )
     print("")
     print(
