@@ -64,6 +64,10 @@ final class CanonicalizerCandidateEvalTests: XCTestCase {
 
         XCTAssertTrue(CandidateVerdict(evaluations: safe).passes)
         XCTAssertFalse(CandidateVerdict(evaluations: regressing).passes)
+        XCTAssertEqual(CandidateVerdict(evaluations: safe).baselineWordErrors, 2)
+        XCTAssertEqual(CandidateVerdict(evaluations: safe).variantWordErrors, 1)
+        XCTAssertEqual(CandidateVerdict(evaluations: safe).baselineExactRows, 0)
+        XCTAssertEqual(CandidateVerdict(evaluations: safe).variantExactRows, 1)
     }
 
     func testCandidateValidationRejectsBuiltInIDCollision() {

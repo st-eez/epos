@@ -138,6 +138,22 @@ struct CandidateVerdict {
         evaluations.filter { $0.slice == .holdout && $0.delta < 0 }.count
     }
 
+    var baselineWordErrors: Int {
+        evaluations.reduce(0) { $0 + $1.before.wordErrors }
+    }
+
+    var variantWordErrors: Int {
+        evaluations.reduce(0) { $0 + $1.after.wordErrors }
+    }
+
+    var baselineExactRows: Int {
+        evaluations.filter { $0.before.wordErrors == 0 }.count
+    }
+
+    var variantExactRows: Int {
+        evaluations.filter { $0.after.wordErrors == 0 }.count
+    }
+
     var passes: Bool {
         !changed.isEmpty && baselineRegressions == 0 && holdoutRegressions == 0 && holdoutWins > 0
     }
@@ -149,6 +165,8 @@ struct CandidateVerdict {
             "  candidates: \(candidates.map(\.id).joined(separator: ", "))",
             "  artifact: \(artifact.lastPathComponent)",
             "  changed rows: \(changed.count)",
+            "  word errors: \(baselineWordErrors)->\(variantWordErrors)",
+            "  exact rows: \(baselineExactRows)->\(variantExactRows)",
             "  baseline regressions: \(baselineRegressions)",
             "  holdout wins/regressions: \(holdoutWins)/\(holdoutRegressions)",
             "  verdict: \(passes ? "PASS" : "REJECT")",
