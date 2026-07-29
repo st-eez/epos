@@ -111,6 +111,98 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.cancelCount, 1)
     }
 
+    func testFinalSessionDistinguishesTargetAndBackendRefusal() {
+        let changedObserver = FinalTargetObserver()
+        changedObserver.focusChanged = true
+        let targetSession = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: changedObserver
+        )
+        let backendSession = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend(insertionSucceeds: false).startInsertionSession()
+        )
+
+        XCTAssertEqual(targetSession.insertFinalResult("text"), .targetRefused)
+        XCTAssertEqual(backendSession.insertFinalResult("text"), .backendRefused)
+    }
+
+    func testAcceptedWriteUsesExactBoundedReadback() async {
+        let observer = FinalTargetObserver(
+            value: "before  after",
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertEqual(session.insertFinalResult("expected"), .accepted)
+        observer.value = "before expected after"
+
+        let matched = await session.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0]
+        )
+        let wrongExpectation = await session.verifyDelivery(
+            expected: "different",
+            retryDelaysNanoseconds: [0]
+        )
+        XCTAssertEqual(matched, .matched)
+        XCTAssertEqual(wrongExpectation, .unavailable)
+    }
+
+    func testAcceptedWriteReportsReadableMismatchAndOpaqueUnverified() async {
+        let readableObserver = FinalTargetObserver(
+            value: "before  after",
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let readableSession = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: readableObserver
+        )
+        XCTAssertTrue(readableSession.insertFinal("expected"))
+        readableObserver.value = "before wrong after"
+
+        let opaqueSession = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: FinalTargetObserver()
+        )
+        XCTAssertTrue(opaqueSession.insertFinal("expected"))
+
+        let mismatch = await readableSession.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0]
+        )
+        let unavailable = await opaqueSession.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0]
+        )
+        XCTAssertEqual(mismatch, .mismatched)
+        XCTAssertEqual(unavailable, .unavailable)
+    }
+
+    func testIdenticalSelectionReplacementCannotClaimVerifiedDelivery() async {
+        let observer = FinalTargetObserver(
+            value: "before expected after",
+            range: .init(location: 7, length: 8),
+            context: .init(prefix: "before ", selectedText: "expected", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertTrue(session.insertFinal("expected"))
+        let result = await session.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0]
+        )
+
+        XCTAssertEqual(result, .unavailable)
+    }
+
     func testFinalSessionCancelAndEmptyFinalEmitNoWrites() {
         let backend = FinalRecordingBackend()
         let session = FinalTranscriptInsertionSession(

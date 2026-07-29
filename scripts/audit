@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+audit_script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$audit_script_dir/audit_cli.py" "$@"

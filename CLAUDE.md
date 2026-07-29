@@ -69,8 +69,12 @@ open /Applications/Epos.app
   dogfood recordings or call local models; they are opt-in, not broken.
 - `scripts/bench [count]` installs a signed Debug app and runs the five-arm Apple
   preset comparison inside that app identity. It replaces `/Applications/Epos.app`.
-- `swift test` writes into the dogfood diagnostic log — exclude test bursts before
-  mining logs for real-usage bugs.
+- `scripts/audit` reports privacy-safe operational outcomes and the most complete
+  signed labeled-corpus artifact. It keeps current schema-1 sessions separate from
+  legacy inferred logs and never prints transcript text.
+- Current `swift test` processes disable the shared dogfood diagnostic sink. Older
+  logs can still contain historical test bursts; `scripts/audit` partitions all
+  pre-schema sessions as legacy instead of treating them as current evidence.
 
 ---
 
@@ -113,8 +117,8 @@ guards needed.
 Use `EposLogger` so each event goes to Apple unified logging AND the app-owned
 diagnostic log under `~/Library/Caches/Epos/logs/` (one file per day). Subsystem
 `com.steez.Epos`. One category per module — currently `coordinator`, `permissions`,
-`assets`, `transcriber`, `audio`, `inject`, `corrections`, `dogfood`, `indicator`.
-Reuse an existing category before inventing a new one.
+`assets`, `transcriber`, `audio`, `inject`, `corrections`, `dogfood`, `indicator`,
+`reliability`. Reuse an existing category before inventing a new one.
 
 The diagnostic log is the primary bug-investigation surface: every recording gets
 a `recordingID`, and insertion logs each final-write decision. It is a local
@@ -174,4 +178,5 @@ as a background capture rig:
 | `Inject/TextInsertionBackend.swift` | Keystroke synthesis backend |
 | `Permissions/PermissionsGate.swift` | Mic / speech / accessibility TCC gating |
 | `Diagnostics/EposLogger.swift` | Unified logging + app-owned diagnostic file log |
+| `Diagnostics/ReliabilityDiagnostics.swift` | Privacy-safe terminal recording outcome for `scripts/audit` |
 | `UI/MenuBarView.swift`, `UI/RecordingIndicator*.swift`, `UI/Correction*.swift` | Menu bar, recording indicator, corrections editor |

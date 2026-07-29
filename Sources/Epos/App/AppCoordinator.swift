@@ -47,6 +47,7 @@ public final class AppCoordinator: ObservableObject {
     private let permissions: PermissionsGate
     private let assets: AssetManager
     private let recordingIDGenerator: @Sendable () -> String
+    private let reliabilityDiagnostics: DiagnosticLogSink
     public static let defaultObservedEditCaptureDelays: [TimeInterval] = [2, 6, 12, 15]
     private let observedEditCaptureDelays: [TimeInterval]
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
@@ -64,6 +65,7 @@ public final class AppCoordinator: ObservableObject {
     private var textInsertionSession: FinalTranscriptInsertionSession?
     private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
+    private var currentReliabilityRecording: ReliabilityRecording?
     private let includeTranscriptTextInDiagnostics: Bool
     /// Single deferred-start latch, set when a press arrives while `startRecording`
     /// cannot run it yet: the finalize/polish window (state != .idle) or the launch
@@ -113,6 +115,7 @@ public final class AppCoordinator: ObservableObject {
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
+        self.reliabilityDiagnostics = diagnostics
         self.isFnKeyHeld = isFnKeyHeld ?? { [hotkey] in hotkey.isFunctionKeyDown }
         self.observedEditCaptureDelays = observedEditCaptureDelays
         let includeTranscriptText = includeTranscriptTextInDiagnostics ?? TranscriptDiagnosticTextPolicy.load()
@@ -322,6 +325,12 @@ public final class AppCoordinator: ObservableObject {
         let recordingID = recordingIDGenerator()
         currentRecordingID = recordingID
         RecordingLogContext.activate(recordingID)
+        log.info("recording start")
+        let reliability = ReliabilityRecording(
+            recordingID: recordingID,
+            diagnostics: reliabilityDiagnostics
+        )
+        currentReliabilityRecording = reliability
         finalizationPhase = .finalizingSpeech
         finalText = ""
         partial = ""
@@ -337,7 +346,6 @@ public final class AppCoordinator: ObservableObject {
         let contextualStrings = speechContextualStrings()
         activePolisher = sessionPolisher
         sessionPolisher.prewarm()
-        log.info("recording start")
 
         transcriptionTask = Task { [weak self] in
             await self?.runSession(
@@ -350,6 +358,7 @@ public final class AppCoordinator: ObservableObject {
 
     public func finishRecording() {
         guard state == .recording else { return }
+        currentReliabilityRecording?.markReleased()
         state = .finalizing
         finalizationPhase = .finalizingSpeech
         log.info("recording finalize")
@@ -369,18 +378,24 @@ public final class AppCoordinator: ObservableObject {
         let shouldSaveAudioSamples = settings.saveAudioSamples
         let shouldSaveCorrectionEvidence = settings.saveCorrectionEvidence
         let sessionRecordingID = currentRecordingID
+        let reliability = currentReliabilityRecording
+        var recognizerFailed = false
 
         let events: AsyncStream<TranscriptEvent>
         do {
             events = try await transcriber.start(contextualStrings: contextualStrings)
             guard state == .recording else {
                 cancelTextInsertionSession()
+                reliability?.emit(.cancelledBeforeAudio)
                 await resetSessionStateBeforeIdle()
                 log.info("recording done (finalChars=0 cancelledBeforeAudioStart=true)")
                 returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
                 return
             }
-            audio.onBuffer = { buffer in transcriber.accept(buffer) }
+            audio.onBuffer = { buffer in
+                reliability?.recordAudioBuffer(frameCount: Int(buffer.frameLength))
+                transcriber.accept(buffer)
+            }
             audio.onAmplitude = { [weak self] amp in
                 Task { @MainActor in
                     guard let self, self.state == .recording else { return }
@@ -395,6 +410,7 @@ public final class AppCoordinator: ObservableObject {
             try audio.start(targetFormat: format)
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
+            reliability?.emit(.setupFailed)
             dogfood.stop(keeping: shouldSaveAudioSamples)
             cancelTextInsertionSession()
             await resetSessionStateBeforeIdle()
@@ -412,6 +428,7 @@ public final class AppCoordinator: ObservableObject {
                 handleFinalTranscriptSegment(text)
                 logTranscriptTiming(kind: .final, eventText: text)
             case .failed(let message):
+                recognizerFailed = true
                 log.error("transcription failed: \(message)")
             }
         }
@@ -435,7 +452,8 @@ public final class AppCoordinator: ObservableObject {
             let polishStartedAt = Date()
             let result = await polisher.polish(finalText)
             finalizationPhase = .inserting
-            let applied = insertFinalTranscript(result.text)
+            let insertionResult = insertFinalTranscriptResult(result.text)
+            let applied = insertionResult == .accepted
             if !applied { flashInsertionUnavailableNotice() }
             let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
             let insertedTranscript = textInsertionSession?.insertedTranscript
@@ -473,9 +491,20 @@ public final class AppCoordinator: ObservableObject {
                 guardRejection: result.guardRejection,
                 elapsedMs: millisecondsElapsed(since: polishStartedAt)
             )
+            emitFinalReliabilityOutcome(
+                reliability: reliability,
+                recognizerFailed: recognizerFailed,
+                insertionResult: insertionResult,
+                transcript: result.text,
+                session: textInsertionSession
+            )
             finishTextInsertionSession()
         } else {
             cancelTextInsertionSession()
+            reliability?.emit(
+                recognizerFailed ? .recognizerFailed :
+                    (reliability?.hasAudioInput == true ? .emptyTranscript : .noInput)
+            )
         }
 
         let finalChars = finalText.count
@@ -509,6 +538,41 @@ public final class AppCoordinator: ObservableObject {
     func insertFinalTranscript(_ text: String) -> Bool {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
         return textInsertionSession?.insertFinal(text) ?? false
+    }
+
+    func insertFinalTranscriptResult(_ text: String) -> FinalInsertionResult {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .backendRefused
+        }
+        return textInsertionSession?.insertFinalResult(text) ?? .backendRefused
+    }
+
+    private func emitFinalReliabilityOutcome(
+        reliability: ReliabilityRecording?,
+        recognizerFailed: Bool,
+        insertionResult: FinalInsertionResult,
+        transcript: String,
+        session: FinalTranscriptInsertionSession?
+    ) {
+        guard let reliability else { return }
+        guard insertionResult == .accepted, let session else {
+            reliability.emitFinal(
+                recognizerFailed: recognizerFailed,
+                insertionResult: insertionResult,
+                delivery: .unavailable,
+                transcriptUTF16: transcript.utf16.count
+            )
+            return
+        }
+        Task {
+            let delivery = await session.verifyDelivery(expected: transcript)
+            reliability.emitFinal(
+                recognizerFailed: recognizerFailed,
+                insertionResult: insertionResult,
+                delivery: delivery,
+                transcriptUTF16: transcript.utf16.count
+            )
+        }
     }
 
     @discardableResult
@@ -740,6 +804,7 @@ public final class AppCoordinator: ObservableObject {
         partial = ""
         transcriptionTask = nil
         activePolisher = nil
+        currentReliabilityRecording = nil
         transcriptTiming.finish()
         finalizationPhase = .finalizingSpeech
     }
