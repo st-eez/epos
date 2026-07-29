@@ -153,6 +153,15 @@ def build_candidates(rows: Iterable[JsonObject]) -> list[Candidate]:
             score=score,
             reason_codes=reason_codes,
         ))
+    fingerprints = {
+        candidate.correction_dictionary_fingerprint
+        for candidate in candidates
+    }
+    if len(fingerprints) != 1:
+        raise LabelQueueError(
+            "replay mixes correction dictionary fingerprints: "
+            + ", ".join(sorted(fingerprints))
+        )
     return candidates
 
 
@@ -267,4 +276,3 @@ def unique_normalized_strings(items: Iterable[str], excluding: str) -> list[str]
             seen.add(key)
             unique.append(item)
     return unique
-

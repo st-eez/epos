@@ -142,6 +142,12 @@ def run_self_test(root: Path) -> None:
     inconsistent_hash[-1]["audioSHA256"] = "0" * 64
     expect_error(inconsistent_hash, "production rows disagree on audioSHA256")
 
+    mixed_dictionary = [dict(row) for row in loaded]
+    for row in mixed_dictionary:
+        if row["file"] == "sample-00.wav":
+            row["correctionDictionaryFingerprint"] = "1" * 64
+    expect_error(mixed_dictionary, "mixes correction dictionary fingerprints")
+
     invalid_hash = [
         dict(row) for row in loaded if row["file"] == "sample-00.wav"
     ]
