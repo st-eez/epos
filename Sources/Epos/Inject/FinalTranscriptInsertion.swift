@@ -103,21 +103,28 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
                     logDeliveryReadback(
                         expected: text,
                         observations: observations,
+                        baselineSelectedText: context.selectedText,
                         outcome: .matched
                     )
                     return .matched
                 }
             }
         }
-        let mismatches = observations.compactMap { $0 }
+        let mismatches = observations.compactMap { observed -> String? in
+            guard let observed, observed != context.selectedText else { return nil }
+            return observed
+        }
         let stableRepeatedMismatch = mismatches.count >= 2 &&
             Set(mismatches).count == 1
-        let finalAttemptReadable = observations.last.flatMap { $0 } != nil
+        let finalAttemptMismatch = observations.last
+            .flatMap { $0 }
+            .map { $0 != context.selectedText } ?? false
         let outcome: FinalInsertionDeliveryVerification =
-            (finalAttemptReadable || stableRepeatedMismatch) ? .mismatched : .unavailable
+            (finalAttemptMismatch || stableRepeatedMismatch) ? .mismatched : .unavailable
         logDeliveryReadback(
             expected: text,
             observations: observations,
+            baselineSelectedText: context.selectedText,
             outcome: outcome
         )
         return outcome
@@ -171,9 +178,11 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     private func logDeliveryReadback(
         expected: String,
         observations: [String?],
+        baselineSelectedText: String,
         outcome: FinalInsertionDeliveryVerification
     ) {
         let readable = observations.compactMap { $0 }
+        let mismatches = readable.filter { $0 != baselineSelectedText }
         let observedLengths = observations.map {
             $0.map { String($0.utf16.count) } ?? "nil"
         }.joined(separator: ",")
@@ -183,7 +192,8 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
                 "attempts=\(observations.count) " +
                 "readable=\(readable.count) " +
                 "finalReadable=\(observations.last.flatMap { $0 } != nil) " +
-                "stableMismatch=\(readable.count >= 2 && Set(readable).count == 1) " +
+                "staleBaseline=\(readable.count - mismatches.count) " +
+                "stableMismatch=\(mismatches.count >= 2 && Set(mismatches).count == 1) " +
                 "expectedUTF16=\(expected.utf16.count) " +
                 "observedUTF16=\(observedLengths)",
             recordingID: recordingID

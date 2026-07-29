@@ -183,9 +183,9 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(unavailable, .unavailable)
     }
 
-    func testStaleReadableSampleFollowedByUnavailableReadbackIsUnverified() async {
+    func testRepeatedStaleReadableSamplesFollowedByUnavailableReadbackAreUnverified() async {
         let observer = SequencedFinalTargetObserver(
-            values: ["before  after", "before  after", nil, nil],
+            values: ["before  after", "before  after", "before  after", nil],
             range: .init(location: 7, length: 0),
             context: .init(prefix: "before ", suffix: " after")
         )
@@ -197,6 +197,31 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertTrue(session.insertFinal("expected"))
         let result = await session.verifyDelivery(
             expected: "expected",
+            retryDelaysNanoseconds: [0, 0, 0]
+        )
+
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    func testRepeatedStaleSelectionSamplesAreUnverified() async {
+        let observer = SequencedFinalTargetObserver(
+            values: [
+                "before old after",
+                "before old after",
+                "before old after",
+                nil,
+            ],
+            range: .init(location: 7, length: 3),
+            context: .init(prefix: "before ", selectedText: "old", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertTrue(session.insertFinal("new"))
+        let result = await session.verifyDelivery(
+            expected: "new",
             retryDelaysNanoseconds: [0, 0, 0]
         )
 
