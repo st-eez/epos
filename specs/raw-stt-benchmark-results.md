@@ -131,3 +131,45 @@ For a future comparison, keep the same selected files when possible. If new
 ground-truth rows are added, record the row count, reference word count, total
 audio seconds, and artifact paths in this file before comparing headline
 metrics.
+
+## 2026-07-29 CoreML Parakeet v2 follow-up
+
+FluidAudio's CoreML `parakeet-tdt-0.6b-v2` was tested over the same frozen
+114-recording corpus. This run used FluidAudio commit
+`88d6d8166880dee1ac7c32c80f8e10cd782f8ca8` and its downloaded v2 model.
+
+Artifacts:
+
+- Raw rows: `.build/evals/parakeet-v2-114-raw.jsonl`
+- Correction-gate corpus: `.build/evals/parakeet-v2-114-candidate-corpus.jsonl`
+- Confidence rows: `.build/evals/parakeet-v2-114-confidence.jsonl`
+
+Measured results:
+
+| Output | Corpus WER | Exact Clips | Word Errors |
+|---|---:|---:|---:|
+| Apple raw | `6.340%` | `66 / 114` | `84 / 1325` |
+| FluidAudio Parakeet v2 raw | `6.264%` | `68 / 114` | `83 / 1325` |
+| Parakeet v2 plus Epos built-ins and active measured corrections | `4.528%` | `80 / 114` | `60 / 1325` |
+| Current Apple production baseline | `0.679%` | `105 / 114` | `9 / 1325` |
+
+Parakeet v2 was a narrow raw recognizer win over Apple, but Epos's production
+correction and stream-cleaning stack is strongly coupled to Apple's recurring
+error shapes. Applying the same correction stack to Parakeet still left 51 more
+word errors and 25 fewer exact clips than current production. It is not a viable
+replacement from this evidence.
+
+A two-recognizer selector was also rejected. Exhaustive threshold sweeps over
+Apple mean/minimum confidence, Parakeet confidence, confidence deltas, and paired
+thresholds found no deterministic rule that selected Parakeet's wins without
+also selecting regressions. Parakeet assigned high confidence to some of its
+largest errors, so confidence cannot safely arbitrate between the models.
+
+Automatic input gain was tested on the nine Apple production residual recordings
+at `2x` and `4x`. `2x` changed no residual outcome. `4x` fixed one row and
+regressed another, leaving the same total error count. No gain stage ships.
+
+The next corpus expansion requires human-intended transcripts for previously
+unlabeled recordings. Larger local models remain outside the baseline's
+under-100-MB transcribing target unless that product constraint is explicitly
+changed.
