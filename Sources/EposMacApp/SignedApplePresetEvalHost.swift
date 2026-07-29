@@ -1,5 +1,6 @@
 #if DEBUG
 import AVFoundation
+import CryptoKit
 import Darwin
 import Epos
 import Foundation
@@ -74,6 +75,7 @@ enum SignedApplePresetEvalHost {
         var rows: [ApplePresetEvalRow] = []
         for (recordingIndex, recording) in recordings.enumerated() {
             let duration = try durationSeconds(recording)
+            let audioDigest = try audioSHA256(recording)
             for arm in rotated(enabledArms, by: recordingIndex) {
                 let armLocale = availability.available[arm]!
                 let started = ContinuousClock.now
@@ -100,6 +102,7 @@ enum SignedApplePresetEvalHost {
                     configuration: arm.configuration,
                     locale: armLocale.identifier,
                     file: recording.lastPathComponent,
+                    audioSHA256: audioDigest,
                     audioDurationSeconds: duration,
                     humanIntendedTranscript: intended,
                     transcript: transcript,
@@ -163,6 +166,16 @@ enum SignedApplePresetEvalHost {
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
         try handle.write(contentsOf: Data("\n".utf8))
+    }
+
+    private static func audioSHA256(_ recording: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: recording)
+        defer { try? handle.close() }
+        var digest = SHA256()
+        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
+            digest.update(data: chunk)
+        }
+        return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private static func durationSeconds(_ recording: URL) throws -> Double {
