@@ -7,6 +7,21 @@ human-intended transcripts for saved `.wav` dogfood recordings. LLM polish remai
 the final cleanup layer; it is not the primary lever for ASR misses that Apple
 `SpeechTranscriber` never produced.
 
+## Reference provenance correction
+
+The legacy 114-row `ground-truth.jsonl` is not uniformly human-confirmed. Project
+records document the first 35 rows as confirmed. Rows 36 through 114 were inferred
+from recognizer and pipeline output during the 80-row and holdout expansions.
+Those 79 rows remain useful historical regression evidence, but they are not
+verified accuracy labels and must return to the human-review pool.
+
+Until a provenance-bearing corpus replaces the legacy manifest:
+
+- accuracy claims use only references explicitly marked `human_confirmed`;
+- the historical 114-row scores are reported as legacy inferred-reference evidence;
+- no new correction may be promoted solely from an inferred row;
+- recognizer agreement, canonicalized text, and inserted text never create labels.
+
 ## 2026-06-03 ground-truth ASR pass
 
 Ground truth source:
@@ -177,17 +192,18 @@ ground-truth manifest, and runs the repository default correction dictionary wit
 and without the candidate. It does not retranscribe audio, call a polish model, or
 read machine-local persisted correction rules.
 
-The first 80 manifest rows remain the locked baseline and the final 34 remain the
-holdout. A candidate passes only when:
+The old order-derived first-80/final-34 gate is disabled. All 79 rows after the
+first 35 are inferred, so none can serve as a promotion holdout. A candidate can
+pass only when:
 
 - all 114 labeled filenames are present exactly once;
-- the locked baseline has zero WER regressions;
-- the holdout has zero WER regressions;
-- the holdout has at least one WER improvement.
+- confirmed development rows have zero WER regressions;
+- a separate human-confirmed holdout exists;
+- that holdout has zero WER regressions and at least one WER improvement.
 
-Changed rows and score deltas remain visible in the local command output. A
-rejected candidate exits nonzero and must not be promoted into
-`CorrectionDictionary.defaultRecords`.
+There is currently no human-confirmed holdout, so `scripts/correct` reports the
+candidate evidence but rejects every promotion explicitly. New queue labels must
+be assigned to development or holdout before this gate can be re-enabled.
 
 The signed Apple benchmark records both raw recognizer text and Epos's
 deterministic production baseline: the active app correction dictionary followed

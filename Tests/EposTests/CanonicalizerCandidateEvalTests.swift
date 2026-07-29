@@ -46,28 +46,56 @@ final class CanonicalizerCandidateEvalTests: XCTestCase {
         let verdict = CandidateVerdict(evaluations: evaluations)
         print(verdict.report(candidates: candidates, artifact: artifactURL))
 
+        XCTAssertGreaterThan(
+            verdict.confirmedHoldoutRows,
+            0,
+            "candidate promotion disabled: no human-confirmed holdout rows"
+        )
         XCTAssertFalse(verdict.changed.isEmpty, "candidate is a no-op on the frozen corpus")
-        XCTAssertEqual(verdict.baselineRegressions, 0, "candidate regressed locked baseline rows")
+        XCTAssertEqual(
+            verdict.developmentRegressions,
+            0,
+            "candidate regressed confirmed development rows"
+        )
         XCTAssertEqual(verdict.holdoutRegressions, 0, "candidate regressed holdout rows")
         XCTAssertGreaterThan(verdict.holdoutWins, 0, "candidate has no holdout win")
     }
 
     func testVerdictRequiresHoldoutWinWithoutRegressions() {
         let safe = [
-            CandidateEvaluation.synthetic(slice: .baseline, before: 1, after: 1),
+            CandidateEvaluation.synthetic(slice: .development, before: 1, after: 1),
             CandidateEvaluation.synthetic(slice: .holdout, before: 1, after: 0),
         ]
         let regressing = safe + [
-            CandidateEvaluation.synthetic(slice: .baseline, before: 0, after: 1),
+            CandidateEvaluation.synthetic(slice: .development, before: 0, after: 1),
             CandidateEvaluation.synthetic(slice: .holdout, before: 0, after: 1),
+        ]
+        let inferredOnlyWin = [
+            CandidateEvaluation.synthetic(slice: .development, before: 1, after: 1),
+            CandidateEvaluation.synthetic(slice: .reviewOnly, before: 1, after: 0),
         ]
 
         XCTAssertTrue(CandidateVerdict(evaluations: safe).passes)
         XCTAssertFalse(CandidateVerdict(evaluations: regressing).passes)
+        XCTAssertFalse(CandidateVerdict(evaluations: inferredOnlyWin).passes)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).baselineWordErrors, 2)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).variantWordErrors, 1)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).baselineExactRows, 0)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).variantExactRows, 1)
+    }
+
+    func testLegacyManifestPartitionHasNoConfirmedHoldout() {
+        let files = (1...114).map { "sample-\($0).wav" }
+        let manifest = CandidateCorpusManifest(
+            orderedFiles: files,
+            transcripts: Dictionary(
+                uniqueKeysWithValues: files.map { ($0, "reference") }
+            )
+        )
+
+        XCTAssertEqual(manifest.slice(for: files[34]), .development)
+        XCTAssertEqual(manifest.slice(for: files[35]), .reviewOnly)
+        XCTAssertFalse(files.contains { manifest.slice(for: $0) == .holdout })
     }
 
     func testCandidateValidationRejectsBuiltInIDCollision() {
