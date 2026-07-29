@@ -10,12 +10,14 @@ from audit_common import ACCURACY_BUCKETS, OPERATIONAL_BUCKETS
 from audit_operational import operational_report
 
 
-def build_report(log_path: Path, eval_path: Path | None, arm: str | None) -> dict[str, Any]:
+def build_report(
+    log_path: Path, eval_path: Path | None, arm: str | None, corpus_path: Path
+) -> dict[str, Any]:
     return {
         "schemaVersion": 1,
         "privacy": "transcript text excluded",
         "operational": operational_report(log_path),
-        "labeledCorpusAccuracy": accuracy_report(eval_path, arm),
+        "labeledCorpusAccuracy": accuracy_report(eval_path, arm, corpus_path),
     }
 
 
@@ -64,7 +66,7 @@ def format_human(report: dict[str, Any]) -> str:
     append_partition(lines, "Legacy inferred", operational["legacyInferred"],
                      "finalizeToDone", "inferred finalize-to-done timing")
     accuracy = report["labeledCorpusAccuracy"]
-    lines.extend(["", "Labeled-corpus accuracy"])
+    lines.extend(["", "Corpus accuracy evidence"])
     if not accuracy["available"]:
         lines.append(f"  unavailable: {accuracy['reason']}")
     else:
@@ -73,11 +75,22 @@ def format_human(report: dict[str, Any]) -> str:
             f"  balanced arm coverage: {str(accuracy['artifactBalanced']).lower()}",
             f"  baseline arm: {accuracy['baselineArm']}",
             f"  score source: {accuracy['scoreSource']}",
+            f"  reference provenance: {accuracy['referenceProvenance']}",
+            f"  verified accuracy: {str(accuracy['verifiedAccuracy']).lower()}",
+            f"  authoritative corpus: {accuracy['corpusSource']}",
+            f"  reference joins: {accuracy['referenceJoinedRows']}/{accuracy['selectedRows']}",
+            f"  scored rows: {accuracy['scoredRows']}/{accuracy['selectedRows']}",
             f"  rows: {accuracy['rows']}/{accuracy['selectedRows']} selected "
             f"({accuracy['selectedMalformedRows']} selected malformed; "
             f"{accuracy['fileMalformedRows']} file malformed)",
             f"  mixed-error rows: {accuracy['mixedErrorRows']}",
         ])
+        if not accuracy["verifiedAccuracy"]:
+            reason = accuracy["corpusReason"] or (
+                "artifact rows did not all match file, audio SHA256, exact reference "
+                "text, human-confirmed status, and valid scores"
+            )
+            lines.append(f"  warning: historical evidence only; {reason}")
         for bucket in ACCURACY_BUCKETS:
             value, parts = accuracy["buckets"][bucket], accuracy["buckets"][bucket]["errorComponents"]
             lines.append(

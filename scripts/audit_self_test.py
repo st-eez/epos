@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from audit_accuracy import artifact_is_balanced, discover_best_signed_eval
+from audit_accuracy import accuracy_report, artifact_is_balanced, discover_best_signed_eval
 from audit_common import OUTCOME_ALIASES
 from audit_report import build_report, format_human
 
@@ -88,7 +88,21 @@ def run_self_test(root: Path) -> None:
         "write-accepted-unverified": "accepted_unverified",
     }
     assert {name: OUTCOME_ALIASES[name] for name in exact} == exact
-    report = build_report(logs, complete, None)
+    corpus_rows = []
+    for index in range(5):
+        corpus_rows.append({
+            "schemaVersion": 2,
+            "file": f"sample-{index}.wav",
+            "audioSHA256": f"{index + 1:064x}",
+            "transcriptCandidate": "private",
+            "verificationStatus": "human_confirmed",
+        })
+    corpus = root / "evaluation-corpus-v2.jsonl"
+    corpus.write_text(
+        "\n".join(json.dumps(row) for row in corpus_rows) + "\n",
+        encoding="utf-8",
+    )
+    report = build_report(logs, complete, None, corpus)
     operational = report["operational"]
     assert operational["recordingStarts"] == operational["classifiedRecordings"] == 7
     structured, legacy = operational["currentStructured"], operational["legacyInferred"]
@@ -112,7 +126,53 @@ def run_self_test(root: Path) -> None:
     assert accuracy["fileMalformedRows"] == 0
     assert accuracy["artifactBalanced"]
     assert accuracy["scoreSource"] == "productionOutputTranscriptScore"
+    assert accuracy["referenceProvenance"] == "authoritative_join_mismatch"
+    assert not accuracy["verifiedAccuracy"]
     assert sum(value["count"] for value in accuracy["buckets"].values()) == 3
     assert accuracy["mixedErrorRows"] == 1
     rendered = json.dumps(report) + format_human(report)
     assert "private" not in rendered
+    assert "historical evidence only" in rendered
+
+    confirmed_rows = []
+    for index, row in enumerate(rows):
+        confirmed_rows.append(dict(
+            row,
+            audioSHA256=f"{index % 5 + 1:064x}",
+            humanIntendedTranscript="private",
+            referenceVerificationStatus="human_confirmed",
+        ))
+    confirmed = root / "confirmed-signed.jsonl"
+    confirmed.write_text(
+        "\n".join(json.dumps(row) for row in confirmed_rows) + "\n",
+        encoding="utf-8",
+    )
+    confirmed_accuracy = accuracy_report(
+        confirmed, "speech-progressive-fast", corpus
+    )
+    assert confirmed_accuracy["referenceProvenance"] == "authoritative_join_mismatch"
+    assert not confirmed_accuracy["verifiedAccuracy"]
+
+    valid_rows = [row for row in confirmed_rows if row["arm"] == "other"]
+    valid = root / "valid-signed.jsonl"
+    valid.write_text(
+        "\n".join(json.dumps(row) for row in valid_rows) + "\n",
+        encoding="utf-8",
+    )
+    valid_accuracy = accuracy_report(valid, "other", corpus)
+    assert valid_accuracy["referenceProvenance"] == "authoritative_human_confirmed"
+    assert valid_accuracy["verifiedAccuracy"]
+
+    self_declared = [dict(row) for row in valid_rows]
+    self_declared[0]["audioSHA256"] = "0" * 64
+    untrusted = root / "self-declared-signed.jsonl"
+    untrusted.write_text(
+        "\n".join(json.dumps(row) for row in self_declared) + "\n",
+        encoding="utf-8",
+    )
+    untrusted_accuracy = accuracy_report(untrusted, "other", corpus)
+    assert not untrusted_accuracy["verifiedAccuracy"]
+
+    missing_accuracy = accuracy_report(valid, "other", root / "missing.jsonl")
+    assert missing_accuracy["referenceProvenance"] == "authoritative_corpus_unavailable"
+    assert "unavailable" in missing_accuracy["corpusReason"]

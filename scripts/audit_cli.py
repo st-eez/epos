@@ -43,6 +43,12 @@ def parser() -> argparse.ArgumentParser:
         help="baseline arm name when it cannot be selected unambiguously",
     )
     result.add_argument(
+        "--corpus",
+        type=Path,
+        default=repo_root / ".build" / "evals" / "evaluation-corpus-v2.jsonl",
+        help="authoritative v2 corpus used to verify reference provenance",
+    )
+    result.add_argument(
         "--json",
         action="store_true",
         help="emit machine-readable JSON",
@@ -67,7 +73,9 @@ def main(argv: list[str] | None = None) -> int:
     eval_path = args.eval_path
     if eval_path is None:
         eval_path = discover_best_signed_eval(repo_root / ".build" / "evals")
-    report = build_report(args.logs.expanduser(), eval_path, args.eval_arm)
+    report = build_report(
+        args.logs.expanduser(), eval_path, args.eval_arm, args.corpus.expanduser()
+    )
     if args.json:
         json.dump(report, sys.stdout, indent=2, sort_keys=True)
         sys.stdout.write("\n")

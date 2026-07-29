@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 import json
 from pathlib import Path
+import re
 from typing import Any
 
 from audit_common import ACCURACY_BUCKETS, percentage
@@ -94,6 +95,7 @@ SCORE_FIELDS = (
     "transcriptScore",
     "score",
 )
+SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def score_with_source(row: dict[str, Any]) -> tuple[dict[str, int], str] | None:
@@ -147,7 +149,56 @@ def classify(row: dict[str, Any]) -> tuple[str, dict[str, int], bool] | None:
     return bucket, row_score, sum(value > 0 for value in contributions.values()) > 1
 
 
-def accuracy_report(path: Path | None, requested: str | None) -> dict[str, Any]:
+def corpus_index(path: Path) -> tuple[dict[str, dict[str, Any]], str | None, int]:
+    if not path.is_file():
+        return {}, f"authoritative corpus is unavailable: {path}", 0
+    rows, malformed = read_rows(path)
+    indexed: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        file = row.get("file")
+        transcript = row.get("transcriptCandidate")
+        valid = (
+            row.get("schemaVersion") == 2
+            and isinstance(file, str) and bool(file)
+            and isinstance(row.get("audioSHA256"), str)
+            and SHA256.fullmatch(row["audioSHA256"]) is not None
+            and (transcript is None or isinstance(transcript, str))
+            and row.get("verificationStatus") in {
+                "human_confirmed", "inferred", "unlabeled"
+            }
+            and file not in indexed
+        )
+        if not valid:
+            malformed += 1
+            continue
+        indexed[file] = row
+    if malformed:
+        return {}, f"authoritative corpus has {malformed} malformed or duplicate rows", malformed
+    if not indexed:
+        return {}, "authoritative corpus has no valid rows", 0
+    return indexed, None, 0
+
+
+def matches_confirmed_reference(
+    row: dict[str, Any], corpus: dict[str, dict[str, Any]]
+) -> bool:
+    file = row.get("file")
+    reference = row.get("humanIntendedTranscript")
+    digest = row.get("audioSHA256")
+    authoritative = corpus.get(file) if isinstance(file, str) else None
+    return bool(
+        authoritative
+        and isinstance(reference, str)
+        and isinstance(digest, str)
+        and authoritative["verificationStatus"] == "human_confirmed"
+        and authoritative["audioSHA256"] == digest
+        and authoritative["transcriptCandidate"] == reference
+    )
+
+
+def accuracy_report(
+    path: Path | None, requested: str | None, corpus_path: Path
+) -> dict[str, Any]:
     if path is None or not path.is_file():
         return {"available": False, "evalSource": str(path) if path else None,
                 "baselineArm": requested, "reason": "no readable signed eval artifact found"}
@@ -158,8 +209,10 @@ def accuracy_report(path: Path | None, requested: str | None) -> dict[str, Any]:
         reason = "baseline arm is ambiguous; pass --eval-arm" if arm is None else "selected baseline arm has no rows"
         return {"available": False, "evalSource": str(path), "baselineArm": arm,
                 "reason": reason, "malformedRows": file_malformed}
-    counts, errors, components, score_sources = Counter(), Counter(), defaultdict(Counter), Counter()
-    mixed, selected_malformed = 0, 0
+    corpus, corpus_error, corpus_malformed = corpus_index(corpus_path)
+    counts, errors = Counter(), Counter()
+    components, score_sources = defaultdict(Counter), Counter()
+    mixed, selected_malformed, scored, joined = 0, 0, 0, 0
     for row in selected:
         classified = classify(row)
         if classified is None:
@@ -169,12 +222,27 @@ def accuracy_report(path: Path | None, requested: str | None) -> dict[str, Any]:
         selected_score = score_with_source(row)
         if selected_score:
             score_sources[selected_score[1]] += 1
+            scored += 1
+        joined += matches_confirmed_reference(row, corpus)
         counts[bucket] += 1
         errors[bucket] += row_score["wordErrors"]
         for name in ("substitutions", "insertions", "deletions"):
             components[bucket][name] += row_score[name]
         mixed += is_mixed
     total = sum(counts.values())
+    verified_accuracy = bool(
+        not corpus_error
+        and scored > 0
+        and scored == len(selected)
+        and joined == len(selected)
+        and selected_malformed == 0
+    )
+    if corpus_error:
+        reference_provenance = "authoritative_corpus_unavailable"
+    elif verified_accuracy:
+        reference_provenance = "authoritative_human_confirmed"
+    else:
+        reference_provenance = "authoritative_join_mismatch"
     buckets = {
         name: {
             "count": counts[name], "percent": percentage(counts[name], total),
@@ -190,6 +258,13 @@ def accuracy_report(path: Path | None, requested: str | None) -> dict[str, Any]:
         "fileMalformedRows": file_malformed,
         "selectedMalformedRows": selected_malformed,
         "artifactBalanced": artifact_is_balanced(rows), "mixedErrorRows": mixed,
+        "referenceProvenance": reference_provenance,
+        "verifiedAccuracy": verified_accuracy,
+        "corpusSource": str(corpus_path),
+        "corpusReason": corpus_error,
+        "corpusMalformedRows": corpus_malformed,
+        "referenceJoinedRows": joined,
+        "scoredRows": scored,
         "scoreSource": (
             next(iter(score_sources)) if len(score_sources) == 1
             else "mixed:" + ",".join(sorted(score_sources))
