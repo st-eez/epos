@@ -151,6 +151,13 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
         XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
     }
 
+    func testStreamCleanKeepsMissingBePatternUnchanged() {
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("It seems to getting batched."),
+            "It seems to getting batched."
+        )
+    }
+
     func testDoesNotInsertMissingBeForOtherIngOrPunctuatedShapes() {
         XCTAssertEqual(
             TranscriptDeterministicCleaner.clean("It seems to bring the wrong file."),
