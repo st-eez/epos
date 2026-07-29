@@ -12,12 +12,14 @@ from corpus_ledger import (
     validate_output_path,
     write_ledger,
 )
+from corpus_holdout_self_test import run_self_test as run_holdout_self_test
 from corpus_membership import recording_identity_digest
 from corpus_reader_self_test import run_self_test as run_reader_self_test
 
 
 def run_self_test(root: Path) -> None:
     run_reader_self_test(root)
+    run_holdout_self_test(root)
     recordings = root / "recordings"
     recordings.mkdir()
     audio = {

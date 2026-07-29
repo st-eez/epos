@@ -23,6 +23,9 @@ REQUIRED_CORPUS_FIELDS = frozenset({
     "legacyOrdinal",
 })
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+DESIGNATION_LEGACY = "legacy"
+DESIGNATION_HOLDOUT = "holdout"
+CONFIRMATION_FIELDS = ("confirmationSource", "confirmationSchemaVersion")
 
 
 class CorpusReadError(ValueError):
@@ -36,6 +39,7 @@ class CorpusEntry:
     transcript_candidate: str | None
     verification_status: str
     legacy_ordinal: int | None
+    designation: str | None
 
 
 @dataclass(frozen=True)
@@ -126,7 +130,49 @@ def read_entry(row: dict[str, Any]) -> CorpusEntry:
         transcript_candidate=transcript,
         verification_status=status,
         legacy_ordinal=ordinal,
+        designation=read_designation(row, file, status, ordinal),
     )
+
+
+def read_designation(
+    row: dict[str, Any],
+    file: str,
+    status: str,
+    ordinal: int | None,
+) -> str | None:
+    """Separate the frozen legacy confirmations from newly confirmed holdout rows.
+
+    A holdout row is the only way to be human-confirmed without a legacy
+    ordinal, and it must carry the provenance of the confirmation session.
+    """
+    designation = row.get("designation")
+    if status != "human_confirmed":
+        if designation is not None or any(
+            row.get(field) is not None for field in CONFIRMATION_FIELDS
+        ):
+            raise CorpusReadError(
+                f"{file}: designation and confirmation fields require human_confirmed"
+            )
+        return None
+    if ordinal is not None:
+        if designation not in (None, DESIGNATION_LEGACY):
+            raise CorpusReadError(
+                f"{file}: legacy human-confirmed rows must be designated "
+                f"{DESIGNATION_LEGACY}"
+            )
+        return DESIGNATION_LEGACY
+    if designation != DESIGNATION_HOLDOUT:
+        raise CorpusReadError(
+            f"{file}: human-confirmed rows without a legacyOrdinal must be "
+            f"designated {DESIGNATION_HOLDOUT}"
+        )
+    required_string(row, "confirmationSource")
+    version = row.get("confirmationSchemaVersion")
+    if isinstance(version, bool) or not isinstance(version, int) or version < 1:
+        raise CorpusReadError(
+            f"{file}: confirmationSchemaVersion must be a positive integer"
+        )
+    return DESIGNATION_HOLDOUT
 
 
 def validate_legacy_ordinal_sets(
@@ -137,6 +183,7 @@ def validate_legacy_ordinal_sets(
         status: {
             entry.legacy_ordinal for entry in entries.values()
             if entry.verification_status == status
+            and entry.designation != DESIGNATION_HOLDOUT
         }
         for status in ("human_confirmed", "inferred")
     }
@@ -165,7 +212,11 @@ def validate_status_fields(
         return
     if transcript is None:
         raise CorpusReadError(f"{file}: {status} rows require a transcriptCandidate")
-    if status == "human_confirmed" and ordinal not in CONFIRMED_LEGACY_ORDINALS:
+    if (
+        status == "human_confirmed"
+        and ordinal is not None
+        and ordinal not in CONFIRMED_LEGACY_ORDINALS
+    ):
         raise CorpusReadError(
             f"{file}: human-confirmed legacyOrdinal must be within 1...35"
         )
@@ -198,7 +249,7 @@ def optional_legacy_ordinal(row: dict[str, Any], file: str) -> int | None:
 
 
 def required_string(row: dict[str, Any], key: str) -> str:
-    value = row[key]
+    value = row.get(key)
     if not isinstance(value, str) or not value.strip():
         raise CorpusReadError(
             f"{row.get('file', '<unknown>')}: {key} must be a non-empty string"

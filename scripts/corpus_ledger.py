@@ -16,6 +16,8 @@ from corpus_membership import (
     load_frozen_membership,
     recording_identity_digest,
 )
+from holdout_confirmations import DESIGNATION, ConfirmationError, resolve_confirmations
+from holdout_confirmations import SCHEMA_VERSION as CONFIRMATION_SCHEMA_VERSION
 
 
 SCHEMA_VERSION = 2
@@ -36,6 +38,7 @@ def build_ledger(
     recordings_directory: Path,
     legacy_manifest: Path,
     frozen_membership: Path,
+    confirmations: Path | None = None,
     *,
     expected_manifest_sha256: str = EXPECTED_MANIFEST_SHA256,
     expected_legacy_rows: int = EXPECTED_LEGACY_ROWS,
@@ -75,13 +78,28 @@ def build_ledger(
         raise CorpusError(
             "legacy labels have no recording: " + ", ".join(sorted(stale_labels))
         )
+    digests = {
+        name: file_sha256(path) for name, path in sorted(audio_by_file.items())
+    }
+    try:
+        confirmed = (
+            resolve_confirmations(confirmations, set(manifest_by_file), digests)
+            if confirmations is not None else {}
+        )
+    except ConfirmationError as error:
+        raise CorpusError(str(error)) from error
     rows: list[dict[str, Any]] = []
-    for name, audio_path in sorted(audio_by_file.items()):
+    for name in sorted(audio_by_file):
         legacy = manifest_by_file.get(name)
-        if legacy is None:
-            transcript: str | None = None
-            status = "unlabeled"
+        holdout = confirmed.get(name)
+        if holdout is not None:
+            transcript: str | None = holdout.human_intended_transcript
+            status = "human_confirmed"
             legacy_ordinal: int | None = None
+        elif legacy is None:
+            transcript = None
+            status = "unlabeled"
+            legacy_ordinal = None
         else:
             legacy_ordinal, transcript = legacy
             status = (
@@ -89,14 +107,19 @@ def build_ledger(
                 if legacy_ordinal <= human_confirmed_rows
                 else "inferred"
             )
-        rows.append({
+        row = {
             "schemaVersion": SCHEMA_VERSION,
             "file": name,
-            "audioSHA256": file_sha256(audio_path),
+            "audioSHA256": digests[name],
             "transcriptCandidate": transcript,
             "verificationStatus": status,
             "legacyOrdinal": legacy_ordinal,
-        })
+        }
+        if holdout is not None:
+            row["designation"] = DESIGNATION
+            row["confirmationSource"] = holdout.confirmation_source
+            row["confirmationSchemaVersion"] = CONFIRMATION_SCHEMA_VERSION
+        rows.append(row)
     if len({row["file"] for row in rows}) != len(rows):
         raise CorpusError("generated ledger contains duplicate recordings")
     try:

@@ -14,6 +14,7 @@ from corpus_ledger import (
     validate_output_path,
     write_ledger,
 )
+from holdout_confirmations import CONFIRMATIONS_FILENAME
 
 
 def main() -> int:
@@ -42,6 +43,14 @@ def main() -> int:
         type=Path,
         default=repo_root / "specs" / "evaluation-corpus-frozen-recordings.sha256",
     )
+    parser.add_argument(
+        "--confirmations",
+        type=Path,
+        help=(
+            "holdout confirmations from scripts/confirm; defaults to "
+            f"RECORDINGS/{CONFIRMATIONS_FILENAME} and may be absent"
+        ),
+    )
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
@@ -55,11 +64,13 @@ def main() -> int:
         return 0
 
     manifest = args.manifest or args.recordings / "ground-truth.jsonl"
+    confirmations = args.confirmations or args.recordings / CONFIRMATIONS_FILENAME
     try:
         rows = build_ledger(
             recordings_directory=args.recordings,
             legacy_manifest=manifest,
             frozen_membership=args.frozen_membership,
+            confirmations=confirmations,
         )
         validate_output_path(args.output, args.recordings, manifest)
         write_ledger(args.output, rows, replace=args.replace)
@@ -71,9 +82,11 @@ def main() -> int:
         status: sum(row["verificationStatus"] == status for row in rows)
         for status in ("human_confirmed", "inferred", "unlabeled")
     }
+    holdout = sum(row.get("designation") == "holdout" for row in rows)
     print(
         f"wrote {len(rows)} recordings: "
-        f"{counts['human_confirmed']} human-confirmed, "
+        f"{counts['human_confirmed']} human-confirmed "
+        f"({counts['human_confirmed'] - holdout} legacy, {holdout} holdout), "
         f"{counts['inferred']} inferred, {counts['unlabeled']} unlabeled"
     )
     print(f"ledger: {args.output}")

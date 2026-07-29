@@ -20,11 +20,28 @@ INFERRED_ROWS = len(INFERRED_LEGACY_ORDINALS)
 LabeledRow = tuple[str, str, str]
 
 
+def holdout_row(entry: LabeledRow) -> dict[str, Any]:
+    """A row in the exact shape `scripts/corpus` emits for a confirmed holdout."""
+    file, audio_sha256, transcript = entry
+    return {
+        "schemaVersion": 2,
+        "file": file,
+        "audioSHA256": audio_sha256,
+        "transcriptCandidate": transcript,
+        "verificationStatus": "human_confirmed",
+        "legacyOrdinal": None,
+        "designation": "holdout",
+        "confirmationSource": "scripts/confirm",
+        "confirmationSchemaVersion": 1,
+    }
+
+
 def corpus_rows(
     *,
     confirmed: Sequence[LabeledRow] = (),
     inferred: Sequence[LabeledRow] = (),
     unlabeled: Sequence[tuple[str, str]] = (),
+    holdout: Sequence[LabeledRow] = (),
 ) -> list[dict[str, Any]]:
     """Rows in the exact shape `scripts/corpus` emits, padded to the frozen counts."""
     rows = [
@@ -48,6 +65,7 @@ def corpus_rows(
         "verificationStatus": "unlabeled",
         "legacyOrdinal": None,
     } for file, audio_sha256 in unlabeled)
+    rows.extend(holdout_row(entry) for entry in holdout)
     return rows
 
 
@@ -98,6 +116,11 @@ def run_self_test(root: Path) -> None:
     confirmed = corpus.entries_by_file[rows[0]["file"]]
     assert confirmed.verification_status == "human_confirmed"
     assert confirmed.legacy_ordinal == 1
+    assert confirmed.designation == "legacy"
+    assert corpus.entries_by_file["new-recording.wav"].designation is None
+
+    run_holdout_self_test(path)
+    write_rows(path, rows)
 
     expect_error(
         path,
@@ -174,6 +197,50 @@ def run_self_test(root: Path) -> None:
     path.write_text("\n\n", encoding="utf-8")
     expect_load_error(path, "no evaluation corpus rows found")
     expect_load_error(directory / "missing.jsonl", "cannot read evaluation corpus")
+
+
+def run_holdout_self_test(path: Path) -> None:
+    """A new confirmation is human-confirmed with no ordinal, and stays distinguishable."""
+    entry = ("holdout-001.wav", "b" * 64, "Confirmed by listening.")
+    rows = corpus_rows(unlabeled=[("new-recording.wav", "a" * 64)], holdout=[entry])
+    write_rows(path, rows)
+    corpus = load_corpus(path)
+    confirmed = corpus.entries_by_file[entry[0]]
+    assert confirmed.verification_status == "human_confirmed"
+    assert confirmed.legacy_ordinal is None
+    assert confirmed.designation == "holdout"
+    assert confirmed.transcript_candidate == entry[2]
+    assert status_counts(corpus.entries_by_file)["human_confirmed"] == CONFIRMED_ROWS + 1
+
+    holdout = rows[-1]
+    for field in ("designation", "confirmationSource", "confirmationSchemaVersion"):
+        expect_error(
+            path,
+            [*rows[:-1], {k: v for k, v in holdout.items() if k != field}],
+            "must be designated holdout" if field == "designation"
+            else f"{field} must be",
+        )
+    expect_error(
+        path,
+        [*rows[:-1], dict(holdout, designation="legacy")],
+        "must be designated holdout",
+    )
+    expect_error(
+        path,
+        [dict(rows[0], designation="holdout"), *rows[1:]],
+        "legacy human-confirmed rows must be designated legacy",
+    )
+    expect_error(
+        path,
+        [*rows[:-1], dict(holdout, confirmationSchemaVersion=0)],
+        "confirmationSchemaVersion must be a positive integer",
+    )
+    expect_error(
+        path,
+        [dict(row, designation="holdout") if row["verificationStatus"] == "inferred"
+         else row for row in rows],
+        "designation and confirmation fields require human_confirmed",
+    )
 
 
 def expect_error(path: Path, rows: list[dict[str, Any]], message: str) -> None:
