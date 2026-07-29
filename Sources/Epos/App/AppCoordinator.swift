@@ -338,7 +338,8 @@ public final class AppCoordinator: ObservableObject {
         insertionUnavailable = false
         textInsertionSession = FinalTranscriptInsertionSession(
             insertionSession: textInsertion.startInsertionSession(),
-            target: insertionTargetObserverFactory()
+            target: insertionTargetObserverFactory(),
+            recordingID: recordingID
         )
         transcriptTiming.start()
         indicator.show()

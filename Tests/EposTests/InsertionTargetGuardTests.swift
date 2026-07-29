@@ -183,6 +183,75 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(unavailable, .unavailable)
     }
 
+    func testStaleReadableSampleFollowedByUnavailableReadbackIsUnverified() async {
+        let observer = SequencedFinalTargetObserver(
+            values: ["before  after", "before  after", nil, nil],
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertTrue(session.insertFinal("expected"))
+        let result = await session.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0, 0, 0]
+        )
+
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    func testStaleReadableSampleCanRecoverToMatchedReadback() async {
+        let observer = SequencedFinalTargetObserver(
+            values: [
+                "before  after",
+                "before  after",
+                "before expected after",
+            ],
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertTrue(session.insertFinal("expected"))
+        let result = await session.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0, 0]
+        )
+
+        XCTAssertEqual(result, .matched)
+    }
+
+    func testRepeatedStableMismatchRemainsMismatchWhenFinalReadIsUnavailable() async {
+        let observer = SequencedFinalTargetObserver(
+            values: [
+                "before  after",
+                "before wrong after",
+                "before wrong after",
+                nil,
+            ],
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertTrue(session.insertFinal("expected"))
+        let result = await session.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0, 0, 0]
+        )
+
+        XCTAssertEqual(result, .mismatched)
+    }
+
     func testIdenticalSelectionReplacementCannotClaimVerifiedDelivery() async {
         let observer = FinalTargetObserver(
             value: "before expected after",
@@ -266,6 +335,37 @@ private final class FinalTargetObserver: InsertionTargetObserver {
     func observedValue() -> String? { value }
     func observedSelectedRange() -> InsertionTargetTextRange? { range }
     func requiresTextContextValidation() -> Bool { textContextValidationRequired }
+    func baselineInsertionContext() -> InsertionTargetContext? { context }
+    func targetApplicationBundleIdentifier() -> String? { nil }
+    func targetWindowTitle() -> String? { nil }
+}
+
+private final class SequencedFinalTargetObserver: InsertionTargetObserver {
+    private let values: [String?]
+    private var valueIndex = 0
+    private let range: InsertionTargetTextRange
+    private let context: InsertionTargetContext
+
+    init(
+        values: [String?],
+        range: InsertionTargetTextRange,
+        context: InsertionTargetContext
+    ) {
+        self.values = values
+        self.range = range
+        self.context = context
+    }
+
+    func captureBaseline() {}
+    func hasCapturedTarget() -> Bool { true }
+    func focusChangedSinceStart() -> Bool { false }
+    func observedValue() -> String? {
+        guard valueIndex < values.count else { return nil }
+        defer { valueIndex += 1 }
+        return values[valueIndex]
+    }
+    func observedSelectedRange() -> InsertionTargetTextRange? { range }
+    func requiresTextContextValidation() -> Bool { true }
     func baselineInsertionContext() -> InsertionTargetContext? { context }
     func targetApplicationBundleIdentifier() -> String? { nil }
     func targetWindowTitle() -> String? { nil }

@@ -21,6 +21,7 @@ public enum FinalInsertionDeliveryVerification: Equatable, Sendable {
 public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     private let insertionSession: any TextInsertionSession
     private let target: any InsertionTargetObserver
+    private let recordingID: String?
     private let log = EposLogger(category: "inject")
 
     private var didClose = false
@@ -28,10 +29,12 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
 
     public init(
         insertionSession: any TextInsertionSession,
-        target: any InsertionTargetObserver = NullInsertionTargetObserver()
+        target: any InsertionTargetObserver = NullInsertionTargetObserver(),
+        recordingID: String? = nil
     ) {
         self.insertionSession = insertionSession
         self.target = target
+        self.recordingID = recordingID
         target.captureBaseline()
     }
 
@@ -47,18 +50,27 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             return .backendRefused
         }
         guard targetIsUnchanged() else {
-            log.info("final insertion refused: fn-press target changed")
+            log.info(
+                "final insertion refused: fn-press target changed",
+                recordingID: recordingID
+            )
             cancel()
             return .targetRefused
         }
 
         guard insertionSession.insert(text) else {
-            log.error("final insertion refused: keystroke backend unavailable")
+            log.error(
+                "final insertion refused: keystroke backend unavailable",
+                recordingID: recordingID
+            )
             cancel()
             return .backendRefused
         }
         insertedTranscript = text
-        log.info("final insertion wrote chars=\(text.utf16.count)")
+        log.info(
+            "final insertion wrote chars=\(text.utf16.count)",
+            recordingID: recordingID
+        )
         return .accepted
     }
 
@@ -77,7 +89,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             return .unavailable
         }
 
-        var observedReadableValue = false
+        var observations: [String?] = []
         for delay in retryDelaysNanoseconds {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
@@ -85,14 +97,30 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             let observed = await Task.detached(priority: .userInitiated) { [self] in
                 observedInsertedText()
             }.value
+            observations.append(observed)
             if let observed {
-                observedReadableValue = true
                 if observed == text {
+                    logDeliveryReadback(
+                        expected: text,
+                        observations: observations,
+                        outcome: .matched
+                    )
                     return .matched
                 }
             }
         }
-        return observedReadableValue ? .mismatched : .unavailable
+        let mismatches = observations.compactMap { $0 }
+        let stableRepeatedMismatch = mismatches.count >= 2 &&
+            Set(mismatches).count == 1
+        let finalAttemptReadable = observations.last.flatMap { $0 } != nil
+        let outcome: FinalInsertionDeliveryVerification =
+            (finalAttemptReadable || stableRepeatedMismatch) ? .mismatched : .unavailable
+        logDeliveryReadback(
+            expected: text,
+            observations: observations,
+            outcome: outcome
+        )
+        return outcome
     }
 
     public func finish() {
@@ -138,5 +166,27 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             return false
         }
         return context.matchesBaseline(value: value, selectedRange: selectedRange)
+    }
+
+    private func logDeliveryReadback(
+        expected: String,
+        observations: [String?],
+        outcome: FinalInsertionDeliveryVerification
+    ) {
+        let readable = observations.compactMap { $0 }
+        let observedLengths = observations.map {
+            $0.map { String($0.utf16.count) } ?? "nil"
+        }.joined(separator: ",")
+        log.info(
+            "delivery readback " +
+                "outcome=\(outcome) " +
+                "attempts=\(observations.count) " +
+                "readable=\(readable.count) " +
+                "finalReadable=\(observations.last.flatMap { $0 } != nil) " +
+                "stableMismatch=\(readable.count >= 2 && Set(readable).count == 1) " +
+                "expectedUTF16=\(expected.utf16.count) " +
+                "observedUTF16=\(observedLengths)",
+            recordingID: recordingID
+        )
     }
 }
