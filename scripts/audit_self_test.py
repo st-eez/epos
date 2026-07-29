@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from audit_accuracy import accuracy_report, artifact_is_balanced, discover_best_signed_eval
+from audit_accuracy import accuracy_report
+from audit_artifact import artifact_is_balanced, discover_best_signed_eval
 from audit_common import OUTCOME_ALIASES
 from audit_report import build_report, format_human
+from corpus_reader_self_test import corpus_rows
 
 
 def run_self_test(root: Path) -> None:
@@ -88,20 +90,11 @@ def run_self_test(root: Path) -> None:
         "write-accepted-unverified": "accepted_unverified",
     }
     assert {name: OUTCOME_ALIASES[name] for name in exact} == exact
-    corpus_rows = []
-    for index in range(5):
-        corpus_rows.append({
-            "schemaVersion": 2,
-            "file": f"sample-{index}.wav",
-            "audioSHA256": f"{index + 1:064x}",
-            "transcriptCandidate": "private",
-            "verificationStatus": "human_confirmed",
-        })
+    ledger_rows = corpus_rows(confirmed=[
+        (f"sample-{index}.wav", f"{index + 1:064x}", "private") for index in range(5)
+    ])
     corpus = root / "evaluation-corpus-v2.jsonl"
-    corpus.write_text(
-        "\n".join(json.dumps(row) for row in corpus_rows) + "\n",
-        encoding="utf-8",
-    )
+    write_corpus(corpus, ledger_rows)
     report = build_report(logs, complete, None, corpus)
     operational = report["operational"]
     assert operational["recordingStarts"] == operational["classifiedRecordings"] == 7
@@ -176,3 +169,35 @@ def run_self_test(root: Path) -> None:
     missing_accuracy = accuracy_report(valid, "other", root / "missing.jsonl")
     assert missing_accuracy["referenceProvenance"] == "authoritative_corpus_unavailable"
     assert "unavailable" in missing_accuracy["corpusReason"]
+
+    hand_edited = root / "hand-edited-corpus.jsonl"
+    for label, edited_rows in (
+        ("every row marked human-confirmed",
+         [dict(row, verificationStatus="human_confirmed") for row in ledger_rows]),
+        ("legacyOrdinal stripped",
+         [{key: value for key, value in row.items() if key != "legacyOrdinal"}
+          for row in ledger_rows]),
+    ):
+        write_corpus(hand_edited, edited_rows)
+        edited_accuracy = accuracy_report(valid, "other", hand_edited)
+        assert edited_accuracy["referenceProvenance"] == (
+            "authoritative_corpus_unavailable"
+        ), label
+        assert not edited_accuracy["verifiedAccuracy"], label
+        assert "strict validation" in edited_accuracy["corpusReason"], label
+
+    malformed_corpus = root / "malformed-corpus.jsonl"
+    malformed_corpus.write_text(
+        "".join(json.dumps(row) + "\n" for row in ledger_rows) + "{oops}\n",
+        encoding="utf-8",
+    )
+    malformed_accuracy = accuracy_report(valid, "other", malformed_corpus)
+    assert not malformed_accuracy["verifiedAccuracy"]
+    assert "not valid UTF-8 JSON" in malformed_accuracy["corpusReason"]
+
+
+def write_corpus(path: Path, rows: list[dict[str, object]]) -> None:
+    path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )

@@ -1,4 +1,4 @@
-"""Fixtures and behavioral checks for the v2 evaluation corpus contract."""
+"""Fixtures and coverage checks for the label queue's corpus contract."""
 
 from __future__ import annotations
 
@@ -7,8 +7,10 @@ import hashlib
 import json
 from pathlib import Path
 
+from corpus_reader import Corpus, CorpusReadError
+from corpus_reader_self_test import corpus_rows
 from label_artifact import JsonObject, build_candidates, load_rows
-from label_corpus import CorpusCoverage, load_corpus, validate_recording_coverage
+from label_corpus import validate_recording_coverage
 from label_queue import Candidate, LabelQueueError
 
 
@@ -22,7 +24,7 @@ class LabelFixture:
     candidates: list[Candidate]
     corpus_rows: list[JsonObject]
     corpus_path: Path
-    corpus: CorpusCoverage
+    corpus: Corpus
     confirmed_file: str
 
 
@@ -30,35 +32,24 @@ def build_fixture(root: Path) -> LabelFixture:
     recordings = root / "recordings"
     recordings.mkdir()
     rows: list[JsonObject] = []
-    corpus_rows: list[JsonObject] = []
+    confirmed: list[tuple[str, str, str]] = []
+    inferred: list[tuple[str, str, str]] = []
+    unlabeled: list[tuple[str, str]] = []
     confirmed_file = "confirmed-01.wav"
     for ordinal in range(1, 36):
         file = f"confirmed-{ordinal:02d}.wav"
-        audio = f"confirmed audio {ordinal}".encode()
-        (recordings / file).write_bytes(audio)
-        corpus_rows.append({
-            "schemaVersion": 2,
-            "file": file,
-            "audioSHA256": hashlib.sha256(audio).hexdigest(),
-            "transcriptCandidate": f"human confirmed transcript {ordinal}",
-            "verificationStatus": "human_confirmed",
-            "legacyOrdinal": ordinal,
-        })
+        confirmed.append((
+            file,
+            write_recording(recordings, file, f"confirmed audio {ordinal}"),
+            f"human confirmed transcript {ordinal}",
+        ))
     for index in range(113):
         file = f"sample-{index:02d}.wav"
-        audio = f"audio {index}".encode()
-        (recordings / file).write_bytes(audio)
-        audio_sha256 = hashlib.sha256(audio).hexdigest()
-        inferred = index < 79
-        corpus_rows.append({
-            "schemaVersion": 2,
-            "file": file,
-            "audioSHA256": audio_sha256,
-            "transcriptCandidate": f"historical candidate {index}"
-            if inferred else None,
-            "verificationStatus": "inferred" if inferred else "unlabeled",
-            "legacyOrdinal": index + 36 if inferred else None,
-        })
+        audio_sha256 = write_recording(recordings, file, f"audio {index}")
+        if index < 79:
+            inferred.append((file, audio_sha256, f"historical candidate {index}"))
+        else:
+            unlabeled.append((file, audio_sha256))
         rows.extend(replay_rows(index, file, audio_sha256))
 
     artifact = root / "context.jsonl"
@@ -66,7 +57,12 @@ def build_fixture(root: Path) -> LabelFixture:
     loaded, artifact_sha256 = load_rows(artifact)
     candidates = build_candidates(loaded)
     corpus_path = root / "evaluation-corpus-v2.jsonl"
-    write_jsonl(corpus_path, corpus_rows)
+    ledger_rows = corpus_rows(
+        confirmed=confirmed,
+        inferred=inferred,
+        unlabeled=unlabeled,
+    )
+    write_jsonl(corpus_path, ledger_rows)
     corpus = validate_recording_coverage(candidates, recordings, corpus_path)
     return LabelFixture(
         recordings,
@@ -75,11 +71,17 @@ def build_fixture(root: Path) -> LabelFixture:
         loaded,
         artifact_sha256,
         candidates,
-        corpus_rows,
+        ledger_rows,
         corpus_path,
         corpus,
         confirmed_file,
     )
+
+
+def write_recording(recordings: Path, file: str, content: str) -> str:
+    audio = content.encode()
+    (recordings / file).write_bytes(audio)
+    return hashlib.sha256(audio).hexdigest()
 
 
 def replay_rows(index: int, file: str, audio_sha256: str) -> list[JsonObject]:
@@ -123,14 +125,6 @@ def run_corpus_self_tests(fixture: LabelFixture, root: Path) -> None:
         candidate.file for candidate in fixture.candidates
     }
 
-    confirmed_source_rows = copy_rows(fixture.corpus_rows)
-    confirmed_source_rows[35]["verificationStatus"] = "human_confirmed"
-    write_jsonl(fixture.corpus_path, confirmed_source_rows)
-    expect_load_error(
-        fixture.corpus_path,
-        "human-confirmed legacyOrdinal must be within 1...35",
-    )
-
     stale_rows = copy_rows(fixture.corpus_rows)
     stale_rows.append({
         "schemaVersion": 2,
@@ -142,6 +136,11 @@ def run_corpus_self_tests(fixture: LabelFixture, root: Path) -> None:
     })
     write_jsonl(fixture.corpus_path, stale_rows)
     expect_coverage_error(fixture, "stale corpus rows=1[stale.wav]")
+
+    invalid_rows = copy_rows(fixture.corpus_rows)
+    invalid_rows[0]["verificationStatus"] = "inferred"
+    write_jsonl(fixture.corpus_path, invalid_rows)
+    expect_coverage_error(fixture, "inferred legacyOrdinal must be within 36...114")
     write_jsonl(fixture.corpus_path, fixture.corpus_rows)
 
     changed_audio = fixture.recordings / fixture.candidates[0].file
@@ -155,25 +154,6 @@ def run_corpus_self_tests(fixture: LabelFixture, root: Path) -> None:
         "evaluation corpus does not exist",
         root / "missing-corpus.jsonl",
     )
-    expect_invalid_corpus(
-        fixture, 35, {"transcriptCandidate": None},
-        "inferred rows require a transcriptCandidate",
-    )
-    expect_invalid_corpus(
-        fixture, 114, {"legacyOrdinal": 99},
-        "unlabeled rows require null transcriptCandidate and legacyOrdinal",
-    )
-    expect_invalid_corpus(
-        fixture, 36, {"legacyOrdinal": 36}, "duplicate legacyOrdinal",
-    )
-    expect_invalid_corpus(
-        fixture, 35, {"file": "../escape.wav"}, "unsafe recording filename",
-    )
-    missing_field_rows = copy_rows(fixture.corpus_rows)
-    del missing_field_rows[35]["transcriptCandidate"]
-    write_jsonl(fixture.corpus_path, missing_field_rows)
-    expect_load_error(fixture.corpus_path, "missing fields: transcriptCandidate")
-    write_jsonl(fixture.corpus_path, fixture.corpus_rows)
 
 
 def expect_coverage_error(
@@ -187,31 +167,10 @@ def expect_coverage_error(
             fixture.recordings,
             corpus_path or fixture.corpus_path,
         )
-    except LabelQueueError as error:
+    except (CorpusReadError, LabelQueueError) as error:
         assert message in str(error), str(error)
     else:
         raise AssertionError(f"expected coverage failure containing: {message}")
-
-
-def expect_invalid_corpus(
-    fixture: LabelFixture,
-    row_index: int,
-    changes: JsonObject,
-    message: str,
-) -> None:
-    rows = copy_rows(fixture.corpus_rows)
-    rows[row_index].update(changes)
-    write_jsonl(fixture.corpus_path, rows)
-    expect_load_error(fixture.corpus_path, message)
-
-
-def expect_load_error(path: Path, message: str) -> None:
-    try:
-        load_corpus(path)
-    except LabelQueueError as error:
-        assert message in str(error), str(error)
-    else:
-        raise AssertionError(f"expected corpus failure containing: {message}")
 
 
 def copy_rows(rows: list[JsonObject]) -> list[JsonObject]:
@@ -225,7 +184,7 @@ def write_jsonl(path: Path, rows: list[JsonObject]) -> None:
     )
 
 
-def status_counts(corpus: CorpusCoverage) -> dict[str, int]:
+def status_counts(corpus: Corpus) -> dict[str, int]:
     return {
         status: sum(
             entry.verification_status == status

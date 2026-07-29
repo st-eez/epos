@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 import tempfile
 
-from audit_accuracy import discover_best_signed_eval
+from audit_artifact import discover_best_signed_eval
 from audit_report import build_report, format_human
 from audit_self_test import run_self_test
 

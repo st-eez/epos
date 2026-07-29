@@ -1,81 +1,14 @@
-"""Signed labeled-corpus artifact selection and accuracy classification."""
+"""Classify signed labeled-corpus accuracy against the authoritative corpus."""
 
 from __future__ import annotations
 
 from collections import Counter, defaultdict
-import json
 from pathlib import Path
-import re
 from typing import Any
 
+from audit_artifact import artifact_is_balanced, baseline_arm, read_rows
 from audit_common import ACCURACY_BUCKETS, percentage
-
-
-def read_rows(path: Path) -> tuple[list[dict[str, Any]], int]:
-    rows, malformed = [], 0
-    try:
-        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
-    except OSError:
-        return [], 0
-    for line in lines:
-        if not line.strip():
-            continue
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            malformed += 1
-            continue
-        if isinstance(value, dict):
-            rows.append(value)
-        else:
-            malformed += 1
-    return rows, malformed
-
-
-def baseline_arm(rows: list[dict[str, Any]], requested: str | None) -> str | None:
-    arms = sorted({str(row["arm"]) for row in rows if row.get("arm") is not None})
-    if requested:
-        return requested
-    for preferred in ("baseline", "speech-progressive-fast", "production"):
-        if preferred in arms:
-            return preferred
-    current = sorted({str(row["arm"]) for row in rows
-                      if row.get("arm") is not None
-                      and "current production" in str(row.get("configuration", "")).lower()})
-    if len(current) == 1:
-        return current[0]
-    return arms[0] if len(arms) == 1 else None
-
-
-def discover_best_signed_eval(directory: Path) -> Path | None:
-    candidates = [path for path in directory.glob("*signed*.jsonl") if path.is_file()]
-    scored = []
-    for path in candidates:
-        rows, _ = read_rows(path)
-        arm = baseline_arm(rows, None)
-        count = sum(arm is not None and str(row.get("arm")) == arm for row in rows)
-        scored.append((
-            count,
-            artifact_is_balanced(rows),
-            path.stat().st_mtime_ns,
-            path.name,
-            path,
-        ))
-    return max(scored)[-1] if scored else None
-
-
-def artifact_is_balanced(rows: list[dict[str, Any]]) -> bool:
-    by_arm: dict[str, list[str]] = defaultdict(list)
-    for row in rows:
-        arm, file = row.get("arm"), row.get("file")
-        if arm is None or not isinstance(file, str) or not file:
-            return False
-        by_arm[str(arm)].append(file)
-    file_sets = [set(files) for files in by_arm.values()]
-    return len(file_sets) > 1 and all(
-        len(files) == len(file_set)
-        for files, file_set in zip(by_arm.values(), file_sets, strict=True)
-    ) and all(file_set == file_sets[0] for file_set in file_sets[1:])
+from corpus_reader import CorpusEntry, CorpusReadError, load_corpus
 
 
 def natural(value: Any) -> int | None:
@@ -95,7 +28,6 @@ SCORE_FIELDS = (
     "transcriptScore",
     "score",
 )
-SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 def score_with_source(row: dict[str, Any]) -> tuple[dict[str, int], str] | None:
@@ -149,38 +81,22 @@ def classify(row: dict[str, Any]) -> tuple[str, dict[str, int], bool] | None:
     return bucket, row_score, sum(value > 0 for value in contributions.values()) > 1
 
 
-def corpus_index(path: Path) -> tuple[dict[str, dict[str, Any]], str | None, int]:
+def authoritative_corpus(path: Path) -> tuple[dict[str, CorpusEntry], str | None]:
+    """Load the corpus with the same strictness the label queue requires.
+
+    The audit reports rather than raises: an unreadable or hand-edited corpus
+    must degrade to historical evidence, never crash and never verify.
+    """
     if not path.is_file():
-        return {}, f"authoritative corpus is unavailable: {path}", 0
-    rows, malformed = read_rows(path)
-    indexed: dict[str, dict[str, Any]] = {}
-    for row in rows:
-        file = row.get("file")
-        transcript = row.get("transcriptCandidate")
-        valid = (
-            row.get("schemaVersion") == 2
-            and isinstance(file, str) and bool(file)
-            and isinstance(row.get("audioSHA256"), str)
-            and SHA256.fullmatch(row["audioSHA256"]) is not None
-            and (transcript is None or isinstance(transcript, str))
-            and row.get("verificationStatus") in {
-                "human_confirmed", "inferred", "unlabeled"
-            }
-            and file not in indexed
-        )
-        if not valid:
-            malformed += 1
-            continue
-        indexed[file] = row
-    if malformed:
-        return {}, f"authoritative corpus has {malformed} malformed or duplicate rows", malformed
-    if not indexed:
-        return {}, "authoritative corpus has no valid rows", 0
-    return indexed, None, 0
+        return {}, f"authoritative corpus is unavailable: {path}"
+    try:
+        return load_corpus(path).entries_by_file, None
+    except (OSError, CorpusReadError) as error:
+        return {}, f"authoritative corpus is unavailable: rejected by strict validation: {error}"
 
 
 def matches_confirmed_reference(
-    row: dict[str, Any], corpus: dict[str, dict[str, Any]]
+    row: dict[str, Any], corpus: dict[str, CorpusEntry]
 ) -> bool:
     file = row.get("file")
     reference = row.get("humanIntendedTranscript")
@@ -190,9 +106,9 @@ def matches_confirmed_reference(
         authoritative
         and isinstance(reference, str)
         and isinstance(digest, str)
-        and authoritative["verificationStatus"] == "human_confirmed"
-        and authoritative["audioSHA256"] == digest
-        and authoritative["transcriptCandidate"] == reference
+        and authoritative.verification_status == "human_confirmed"
+        and authoritative.audio_sha256 == digest
+        and authoritative.transcript_candidate == reference
     )
 
 
@@ -209,7 +125,7 @@ def accuracy_report(
         reason = "baseline arm is ambiguous; pass --eval-arm" if arm is None else "selected baseline arm has no rows"
         return {"available": False, "evalSource": str(path), "baselineArm": arm,
                 "reason": reason, "malformedRows": file_malformed}
-    corpus, corpus_error, corpus_malformed = corpus_index(corpus_path)
+    corpus, corpus_error = authoritative_corpus(corpus_path)
     counts, errors = Counter(), Counter()
     components, score_sources = defaultdict(Counter), Counter()
     mixed, selected_malformed, scored, joined = 0, 0, 0, 0
@@ -262,7 +178,6 @@ def accuracy_report(
         "verifiedAccuracy": verified_accuracy,
         "corpusSource": str(corpus_path),
         "corpusReason": corpus_error,
-        "corpusMalformedRows": corpus_malformed,
         "referenceJoinedRows": joined,
         "scoredRows": scored,
         "scoreSource": (

@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 
+from corpus_reader import CorpusReadError
 from label_artifact import (
     build_candidates,
     load_rows,
@@ -104,7 +105,7 @@ def main() -> int:
                 },
                 replace=args.replace,
             )
-    except (OSError, LabelQueueError) as error:
+    except (OSError, CorpusReadError, LabelQueueError) as error:
         print(f"label: {error}", file=sys.stderr)
         return 1
 

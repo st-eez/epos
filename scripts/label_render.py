@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 from label_artifact import PRODUCTION_ALTERNATIVES
-from label_corpus import CorpusCoverage
+from corpus_reader import Corpus
 from label_queue import QueueEntry
 
 
@@ -20,7 +20,7 @@ def render_jsonl(
     entries: list[QueueEntry],
     source_name: str,
     source_sha256: str,
-    corpus: CorpusCoverage,
+    corpus: Corpus,
     corpus_name: str,
 ) -> str:
     return "".join(
@@ -41,7 +41,7 @@ def render_jsonl(
 def render_markdown(
     entries: list[QueueEntry],
     recordings_directory: Path,
-    corpus: CorpusCoverage,
+    corpus: Corpus,
 ) -> str:
     lines = [
         "# Epos audio label queue",
@@ -89,7 +89,7 @@ def entry_row(
     entry: QueueEntry,
     source_name: str,
     source_sha256: str,
-    corpus: CorpusCoverage,
+    corpus: Corpus,
     corpus_name: str,
 ) -> JsonObject:
     candidate = entry.candidate
