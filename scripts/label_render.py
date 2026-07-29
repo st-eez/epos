@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TypeAlias
 
 from label_artifact import PRODUCTION_ALTERNATIVES
+from label_corpus import CorpusCoverage
 from label_queue import QueueEntry
 
 
@@ -19,17 +20,29 @@ def render_jsonl(
     entries: list[QueueEntry],
     source_name: str,
     source_sha256: str,
+    corpus: CorpusCoverage,
+    corpus_name: str,
 ) -> str:
     return "".join(
         json.dumps(
-            entry_row(entry, source_name, source_sha256),
+            entry_row(
+                entry,
+                source_name,
+                source_sha256,
+                corpus,
+                corpus_name,
+            ),
             sort_keys=True,
         ) + "\n"
         for entry in entries
     )
 
 
-def render_markdown(entries: list[QueueEntry], recordings_directory: Path) -> str:
+def render_markdown(
+    entries: list[QueueEntry],
+    recordings_directory: Path,
+    corpus: CorpusCoverage,
+) -> str:
     lines = [
         "# Epos audio label queue",
         "",
@@ -40,6 +53,7 @@ def render_markdown(entries: list[QueueEntry], recordings_directory: Path) -> st
     ]
     for entry in entries:
         candidate = entry.candidate
+        corpus_entry = corpus.entries_by_file[candidate.file]
         lines.extend([
             f"## {entry.rank}. `{candidate.file}`",
             "",
@@ -51,10 +65,17 @@ def render_markdown(entries: list[QueueEntry], recordings_directory: Path) -> st
             f"minimum {format_number(candidate.confidence_minimum)}",
             f"- Maximum alternative word edits: {candidate.max_alternative_word_edits}",
             f"- Canonicalizer changed text: {str(candidate.canonicalizer_changed).lower()}",
+            f"- Corpus verification status: `{corpus_entry.verification_status}`",
             f"- Audio: `{recordings_directory / candidate.file}`",
             "- Human intended transcript:",
             "",
         ])
+        if corpus_entry.transcript_candidate is not None:
+            lines.insert(
+                len(lines) - 3,
+                "- Historical transcript candidate, not ground truth: "
+                f"{corpus_entry.transcript_candidate}",
+            )
         if candidate.alternatives:
             lines.append("Alternatives:")
             lines.append("")
@@ -68,8 +89,11 @@ def entry_row(
     entry: QueueEntry,
     source_name: str,
     source_sha256: str,
+    corpus: CorpusCoverage,
+    corpus_name: str,
 ) -> JsonObject:
     candidate = entry.candidate
+    corpus_entry = corpus.entries_by_file[candidate.file]
     spans: list[JsonObject] = [
         {
             "recognizedSpan": span.recognized_span,
@@ -91,6 +115,8 @@ def entry_row(
     provenance: JsonObject = {
         "sourceArtifact": source_name,
         "sourceArtifactSHA256": source_sha256,
+        "sourceCorpus": corpus_name,
+        "sourceCorpusSHA256": corpus.sha256,
         "sourceVariant": PRODUCTION_ALTERNATIVES,
         "sourceEvalSchemaVersion": 1,
         "audioSHA256": candidate.audio_sha256,
@@ -108,6 +134,9 @@ def entry_row(
         "reasonCodes": list(candidate.reason_codes),
         "status": "unreviewed",
         "humanIntendedTranscript": None,
+        "sourceVerificationStatus": corpus_entry.verification_status,
+        "historicalTranscriptCandidate": corpus_entry.transcript_candidate,
+        "historicalTranscriptCandidateIsGroundTruth": False,
         "productionTranscript": candidate.production_transcript,
         "canonicalizedTranscript": candidate.canonicalized_transcript,
         "recognizerEvidenceIsGroundTruth": False,

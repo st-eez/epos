@@ -43,6 +43,11 @@ def main() -> int:
         type=Path,
         default=Path.home() / "Library" / "Caches" / "Epos" / "recordings",
     )
+    parser.add_argument(
+        "--corpus",
+        type=Path,
+        default=repo_root / ".build" / "evals" / "evaluation-corpus-v2.jsonl",
+    )
     parser.add_argument("--replace", action="store_true")
     parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
@@ -59,14 +64,15 @@ def main() -> int:
         input_path = args.input or discover_input(repo_root)
         source_rows, source_sha256 = load_rows(input_path)
         candidates = build_candidates(source_rows)
-        validate_recording_coverage(
+        corpus = validate_recording_coverage(
             candidates,
             args.recordings,
-            args.recordings / "ground-truth.jsonl",
+            args.corpus,
         )
         entries = select_queue(candidates)
         validate_output_paths(
             input_path,
+            args.corpus,
             args.output,
             args.markdown,
             args.recordings,
@@ -81,10 +87,23 @@ def main() -> int:
                     "output exists; pass --replace to overwrite: "
                     + ", ".join(str(path) for path in collisions)
                 )
-            write_outputs({
-                args.output: render_jsonl(entries, input_path.name, source_sha256),
-                args.markdown: render_markdown(entries, args.recordings),
-            })
+            write_outputs(
+                {
+                    args.output: render_jsonl(
+                        entries,
+                        input_path.name,
+                        source_sha256,
+                        corpus,
+                        args.corpus.name,
+                    ),
+                    args.markdown: render_markdown(
+                        entries,
+                        args.recordings,
+                        corpus,
+                    ),
+                },
+                replace=args.replace,
+            )
     except (OSError, LabelQueueError) as error:
         print(f"label: {error}", file=sys.stderr)
         return 1
@@ -96,29 +115,39 @@ def main() -> int:
 
 
 def discover_input(repo_root: Path) -> Path:
-    candidates = sorted(
-        (repo_root / ".build" / "evals").glob("unlabeled*-context-*.jsonl"),
-        key=lambda path: (path.stat().st_mtime_ns, path.name),
-        reverse=True,
-    )
-    if not candidates:
-        raise LabelQueueError("no unlabeled context replay artifact found")
-    return candidates[0]
+    evals = repo_root / ".build" / "evals"
+    for pattern in (
+        "reviewable*-context-*.jsonl",
+        "unlabeled*-context-*.jsonl",
+    ):
+        candidates = sorted(
+            evals.glob(pattern),
+            key=lambda path: (path.stat().st_mtime_ns, path.name),
+            reverse=True,
+        )
+        if candidates:
+            return candidates[0]
+    raise LabelQueueError("no reviewable context replay artifact found")
 
 
 def validate_output_paths(
     input_path: Path,
+    corpus_path: Path,
     output_path: Path,
     markdown_path: Path,
     recordings_directory: Path,
 ) -> None:
-    resolved_input = input_path.resolve()
+    resolved_inputs = {input_path.resolve(), corpus_path.resolve()}
     resolved_outputs = {output_path.resolve(), markdown_path.resolve()}
     resolved_recordings = recordings_directory.resolve()
     if len(resolved_outputs) != 2:
         raise LabelQueueError("JSONL and Markdown outputs must be different paths")
-    if resolved_input in resolved_outputs:
-        raise LabelQueueError("outputs must not replace the replay input")
+    source_collisions = resolved_inputs & resolved_outputs
+    if source_collisions:
+        raise LabelQueueError(
+            "outputs must not replace replay or corpus inputs: "
+            + ", ".join(str(path) for path in sorted(source_collisions))
+        )
     protected_outputs = sorted(
         str(path) for path in resolved_outputs
         if path.is_relative_to(resolved_recordings)
@@ -148,7 +177,7 @@ def output_locks(paths: tuple[Path, Path]):
             handle.close()
 
 
-def write_outputs(outputs: dict[Path, str]) -> None:
+def write_outputs(outputs: dict[Path, str], *, replace: bool) -> None:
     staged: dict[Path, Path] = {}
     backups: dict[Path, Path] = {}
     replaced: list[Path] = []
@@ -164,7 +193,7 @@ def write_outputs(outputs: dict[Path, str]) -> None:
             ) as stream:
                 stream.write(content)
                 staged[target] = Path(stream.name)
-            if target.is_file():
+            if replace and target.is_file():
                 with tempfile.NamedTemporaryFile(
                     dir=target.parent,
                     prefix=f".{target.name}.backup.",
@@ -174,7 +203,10 @@ def write_outputs(outputs: dict[Path, str]) -> None:
                 shutil.copyfile(target, backups[target])
 
         for target, staged_path in staged.items():
-            os.replace(staged_path, target)
+            if replace:
+                os.replace(staged_path, target)
+            else:
+                os.link(staged_path, target)
             replaced.append(target)
     except OSError:
         for target in reversed(replaced):
