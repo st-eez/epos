@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+corpus_script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$corpus_script_dir/corpus_cli.py" "$@"
