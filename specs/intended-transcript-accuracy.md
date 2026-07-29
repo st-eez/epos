@@ -200,3 +200,41 @@ Standalone numeric ordinals are part of the conservative stream baseline. The
 114-row corpus contains two independent `1st` -> `first` misses, the transformation
 preserves numeric meaning, and corpus evaluation must show no regressions before
 it ships.
+
+## 2026-07-29 unlabeled recording queue
+
+Saved recordings without a human-confirmed intended transcript are useful for
+finding uncertainty and recurring recognizer behavior, but they are not accuracy
+ground truth. Epos must never copy its own transcript or an inferred transcript
+into `ground-truth.jsonl` automatically.
+
+Use `scripts/label` to rank one replay artifact into a bounded review queue. The
+command selects exactly one `production-alternatives` row per recording and
+prioritizes:
+
+- word-level disagreement between the top transcript and Apple alternatives;
+- low mean or minimum token confidence;
+- a change made by the production canonicalizer;
+- the same minimal top-versus-alternative difference recurring across recordings;
+- disagreement among the three production recognizer modes.
+
+Case and `. , ! ? ; :` punctuation do not count as recognizer disagreement.
+Other symbols remain meaningful. Recognizer agreement is never evidence that a
+transcript is correct.
+
+The default 30-row queue contains the 24 highest-ranked recordings, three
+additional canonicalizer-changed recordings, and three low-score controls. It
+rejects incomplete corpus coverage, already-labeled files, missing recordings,
+unsafe filenames, malformed replay rows, and accidental output replacement.
+Queue rows have `status: "unreviewed"` and contain no proposed intended
+transcript. Their provenance includes the source artifact hash, correction
+dictionary fingerprint, and exact correction record IDs applied to the
+recognizer output. The replay also records each WAV's SHA-256 digest. Queue
+generation re-hashes every current WAV and rejects changed audio or inconsistent
+replay metadata.
+
+The existing 114-row manifest remains the frozen baseline/holdout contract for
+the correction promotion gate. Human-confirmed transcripts from this queue must
+go into a separate provenance-aware manifest until expanding that gate becomes
+an explicit migration; never append them silently to the frozen manifest.
+Existing queue output is never overwritten unless `--replace` is explicit.

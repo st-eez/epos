@@ -149,7 +149,9 @@ enum AlternativeTranscriptReranker {
 }
 
 struct SpeechContextEvalRow: Codable {
+    let evalSchemaVersion: Int
     let file: String
+    let audioSHA256: String
     let localeIdentifier: String
     let audioDurationSeconds: Double
     let humanIntendedTranscript: String?
@@ -175,6 +177,8 @@ struct SpeechContextEvalRow: Codable {
     let variantAlternativeTranscriptCandidates: [String]
     let variantConfidenceMean: Double?
     let variantConfidenceMinimum: Double?
+    let correctionDictionaryFingerprint: String
+    let appliedCorrectionRecordIDs: [String]
     let bestAlternativeTranscript: String?
     let bestAlternativeTranscriptScore: TranscriptWordErrorScore?
     let bestAlternativeTranscriptConfidenceMean: Double?

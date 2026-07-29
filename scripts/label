@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+
+label_script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec python3 "$label_script_dir/label_cli.py" "$@"

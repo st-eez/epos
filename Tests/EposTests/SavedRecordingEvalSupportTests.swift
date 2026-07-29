@@ -249,7 +249,9 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
             PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: $0)
         }
         return SpeechContextEvalRow(
+            evalSchemaVersion: 1,
             file: "sample.wav",
+            audioSHA256: String(repeating: "0", count: 64),
             localeIdentifier: "en-US",
             audioDurationSeconds: 1,
             humanIntendedTranscript: reference,
@@ -275,6 +277,8 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
             variantAlternativeTranscriptCandidates: bestAlternativeTranscript.map { [$0] } ?? [],
             variantConfidenceMean: 0.8,
             variantConfidenceMinimum: 0.7,
+            correctionDictionaryFingerprint: String(repeating: "0", count: 64),
+            appliedCorrectionRecordIDs: [],
             bestAlternativeTranscript: bestAlternativeTranscript,
             bestAlternativeTranscriptScore: bestAlternativeScore,
             bestAlternativeTranscriptConfidenceMean: bestAlternativeTranscript == nil ? nil : 0.9,

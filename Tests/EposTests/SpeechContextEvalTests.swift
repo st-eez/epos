@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 @testable import Epos
 
@@ -51,7 +52,11 @@ final class SpeechContextEvalTests: XCTestCase {
         )
         try XCTSkipIf(selectedRecordings.isEmpty, "No .wav recordings found at \(recordingsDirectory.path)")
 
-        let canonicalizer = Self.canonicalizer(environment: environment)
+        let correctionDictionary = Self.correctionDictionary(environment: environment)
+        let canonicalizer = TranscriptCanonicalizer(
+            rules: CorrectionRuleCompiler.compile(records: correctionDictionary.records)
+        )
+        let correctionDictionaryFingerprint = try Self.fingerprint(correctionDictionary)
         let variants = Self.contextVariants(canonicalizer: canonicalizer)
         let baselineVariant = variants[0]
         try SavedRecordingEvalSupport.prepareOutput(outputURL)
@@ -60,6 +65,7 @@ final class SpeechContextEvalTests: XCTestCase {
         var rows: [SpeechContextEvalRow] = []
         for recording in selectedRecordings {
             let audioDuration = try SavedRecordingEvalSupport.durationSeconds(recording: recording)
+            let audioSHA256 = try Self.fileFingerprint(recording)
             var results: [SpeechContextVariantResult] = []
             for variant in variants {
                 let started = Date()
@@ -142,7 +148,9 @@ final class SpeechContextEvalTests: XCTestCase {
                 )
 
                 let row = SpeechContextEvalRow(
+                    evalSchemaVersion: 1,
                     file: recording.lastPathComponent,
+                    audioSHA256: audioSHA256,
                     localeIdentifier: locale.identifier,
                     audioDurationSeconds: audioDuration,
                     humanIntendedTranscript: humanIntendedTranscript,
@@ -168,6 +176,8 @@ final class SpeechContextEvalTests: XCTestCase {
                     variantAlternativeTranscriptCandidates: result.alternativeTranscripts,
                     variantConfidenceMean: result.confidenceMean,
                     variantConfidenceMinimum: result.confidenceMinimum,
+                    correctionDictionaryFingerprint: correctionDictionaryFingerprint,
+                    appliedCorrectionRecordIDs: correctionDictionary.appliedRecordIDs(in: result.text),
                     bestAlternativeTranscript: bestAlternative?.text,
                     bestAlternativeTranscriptScore: bestAlternative?.score,
                     bestAlternativeTranscriptConfidenceMean: bestAlternative?.confidenceMean,
@@ -204,17 +214,31 @@ final class SpeechContextEvalTests: XCTestCase {
         return recordings.filter { manifest.transcript(for: $0) != nil }
     }
 
-    private static func canonicalizer(environment: [String: String]) -> TranscriptCanonicalizer {
+    private static func correctionDictionary(
+        environment: [String: String]
+    ) -> CorrectionDictionary {
         let domain = environment["EPOS_EVAL_DEFAULTS_DOMAIN"]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         guard let domain, !domain.isEmpty else {
-            return TranscriptCanonicalizer.load()
+            return CorrectionDictionary.load()
         }
 
         guard let defaults = UserDefaults(suiteName: domain) else {
-            return TranscriptCanonicalizer.load()
+            return CorrectionDictionary.load()
         }
-        return TranscriptCanonicalizer.load(from: defaults)
+        return CorrectionDictionary.load(from: defaults)
+    }
+
+    private static func fingerprint(_ dictionary: CorrectionDictionary) throws -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(dictionary.records)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func fileFingerprint(_ url: URL) throws -> String {
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func alternativeReranking(
