@@ -33,25 +33,18 @@ enum TranscriptDeterministicCleaner {
         return apply(removed: removed, replacements: replacements, to: segments)
     }
 
-    /// The partial-safe disfluency pass — strip hard fillers, then collapse stuttered
-    /// function-word repeats — over ALREADY-canonicalized text. The single transform
-    /// shared by the live insertion closure and the polish baseline (`makePolisher`),
-    /// so the text streamed on screen and the text the final reconcile types are the
-    /// same string. Without this shared seam the polish-off final (the default) re-types
-    /// the raw, filler/stutter-laden tail and undoes the live cleaning on every deletable
-    /// target. It is the subset of `clean` that is safe on volatile partials — no
-    /// ordinals, `so`/`like` opener, or grammar reflow that would act on unstable text.
+    /// The conservative disfluency pass used for the canonicalized final baseline:
+    /// strip hard fillers, then collapse stuttered function-word repeats. It excludes
+    /// ordinals, the `so`/`like` opener, and grammar reflow so the default polish-off
+    /// path cannot make broad edits.
     static func streamClean(_ canonicalized: String) -> String {
         collapseAdjacentDuplicates(stripStandaloneFillers(canonicalized))
     }
 
     /// Removes ONLY standalone hard fillers (`um`/`uh`/`er`/`hmm`) and the comma
-    /// that punctuated each — nothing else. Safe to run on volatile partials in the
-    /// live insertion path, where the full `clean` pass (ordinals, the `so`/`like`
-    /// opener, grammar) would flicker or act on not-yet-stable text. Applied via
-    /// `streamClean` to both the streamed partials and the final polish baseline, so the
-    /// filler never flickers on screen and never survives into the final inserted text.
-    /// Same exact-token set and acronym guard as `clean`, so the two never disagree.
+    /// that punctuated each — nothing else. Applied via `streamClean` to the final
+    /// polish baseline. Uses the same exact-token set and acronym guard as `clean`,
+    /// so the two never disagree.
     static func stripStandaloneFillers(_ text: String) -> String {
         let segments = Self.segments(from: text)
         var removed: Set<Int> = []

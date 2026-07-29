@@ -543,7 +543,7 @@ final class CorrectionEvidenceTests: XCTestCase {
                 rawCharacterCount: "open CMUX".count
             ),
             effectiveOutcome: .disabled,
-            applied: false,
+            applied: true,
             finalInsertedTranscript: "open CMUX",
             recordingID: "rec-1"
         )
@@ -599,13 +599,12 @@ final class CorrectionEvidenceTests: XCTestCase {
         let observer = EvidenceFakeTargetObserver()
         observer.applicationBundleIdentifier = "com.example.editor"
         observer.windowTitle = "Draft.md"
-        let session = ProgressiveTranscriptInsertionSession(
+        let session = FinalTranscriptInsertionSession(
             insertionSession: EvidenceNoopTextInsertionSession(),
-            canonicalize: { $0 },
             target: observer
         )
 
-        session.acceptFinalTranscript("open widget pro")
+        _ = session.insertFinal("open widget pro")
         coordinator.recordCorrectionEvidence(
             rawTranscript: "open widget pro",
             polishResult: PolishResult(
@@ -650,15 +649,13 @@ final class CorrectionEvidenceTests: XCTestCase {
             guardRejectionReason: nil
         ))
         let observer = EvidenceFakeTargetObserver()
-        observer.exposesText = true
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
-        let session = ProgressiveTranscriptInsertionSession(
+        let session = FinalTranscriptInsertionSession(
             insertionSession: EvidenceNoopTextInsertionSession(),
-            canonicalize: { $0 },
             target: observer
         )
 
-        session.acceptFinalTranscript("widget pro")
+        _ = session.insertFinal("widget pro")
         session.finish()
         observer.value = "open WidgetPro please"
         coordinator.scheduleObservedUserEditCapture(
@@ -697,17 +694,15 @@ final class CorrectionEvidenceTests: XCTestCase {
             guardRejectionReason: nil
         ))
         let observer = EvidenceFakeTargetObserver()
-        observer.exposesText = true
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
-        observer.value = "open widget pro please"
-        let session = ProgressiveTranscriptInsertionSession(
+        let session = FinalTranscriptInsertionSession(
             insertionSession: EvidenceNoopTextInsertionSession(),
-            canonicalize: { $0 },
             target: observer
         )
 
-        session.acceptFinalTranscript("widget pro")
+        _ = session.insertFinal("widget pro")
         session.finish()
+        observer.value = "open widget pro please"
         coordinator.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
@@ -750,16 +745,14 @@ final class CorrectionEvidenceTests: XCTestCase {
             guardRejectionReason: nil
         ))
         let observer = EvidenceFakeTargetObserver()
-        observer.exposesText = true
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
         observer.value = "open WidgetPro please"
-        let session = ProgressiveTranscriptInsertionSession(
+        let session = FinalTranscriptInsertionSession(
             insertionSession: EvidenceNoopTextInsertionSession(),
-            canonicalize: { $0 },
             target: observer
         )
 
-        session.acceptFinalTranscript("widget pro")
+        _ = session.insertFinal("widget pro")
         session.finish()
         coordinator.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
@@ -856,15 +849,13 @@ final class CorrectionEvidenceTests: XCTestCase {
             guardRejectionReason: nil
         ))
         let observer = EvidenceFakeTargetObserver()
-        observer.exposesText = true
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
-        let session = ProgressiveTranscriptInsertionSession(
+        let session = FinalTranscriptInsertionSession(
             insertionSession: EvidenceNoopTextInsertionSession(),
-            canonicalize: { $0 },
             target: observer
         )
 
-        session.acceptFinalTranscript("widget pro")
+        _ = session.insertFinal("widget pro")
         session.finish()
         // The inserted segment was wiped: only the baseline prefix/suffix remain.
         observer.value = "open  please"
@@ -882,30 +873,25 @@ final class CorrectionEvidenceTests: XCTestCase {
 private final class EvidenceFakeTargetObserver: InsertionTargetObserver {
     var focusChanged = false
     var value: String?
-    var exposesText = false
     var insertionContext: InsertionTargetContext?
     var applicationBundleIdentifier: String?
     var windowTitle: String?
-    private var everReadNonEmptyValue = false
 
     func captureBaseline() {}
+    func hasCapturedTarget() -> Bool { true }
     func focusChangedSinceStart() -> Bool { focusChanged }
     func observedValue() -> String? {
-        if let value, !value.isEmpty { everReadNonEmptyValue = true }
-        return value
+        return value ?? insertionContext.map { $0.prefix + $0.selectedText + $0.suffix }
     }
-    func observedSelectedRange() -> InsertionTargetTextRange? { nil }
-    func exposesTextValue() -> Bool { exposesText }
-    func hasReflectedTextValue() -> Bool { everReadNonEmptyValue }
-    func verifiesFocusIdentity() -> Bool { false }
+    func observedSelectedRange() -> InsertionTargetTextRange? { insertionContext?.selectedRange }
+    func requiresTextContextValidation() -> Bool { insertionContext != nil }
     func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
     func targetApplicationBundleIdentifier() -> String? { applicationBundleIdentifier }
     func targetWindowTitle() -> String? { windowTitle }
 }
 
 private final class EvidenceNoopTextInsertionSession: TextInsertionSession {
-    func insert(_ text: String) {}
-    func deleteBackward(count: Int) {}
+    func insert(_ text: String) -> Bool { true }
     func finish() {}
     func cancel() {}
 }

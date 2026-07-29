@@ -10,7 +10,7 @@ public final class RecordingIndicatorController {
     private var panel: NSPanel?
     private let log = EposLogger(category: "indicator")
 
-    private static let panelSize = CGSize(width: 180, height: 90)
+    private static let panelSize = CGSize(width: 360, height: 110)
 
     public init() {}
 

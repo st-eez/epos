@@ -2,22 +2,6 @@ import ApplicationServices
 import AppKit
 import Foundation
 
-/// What the session is allowed to do this reconcile, given what we observed about
-/// the on-screen target. Computed by `InsertionTargetGuard.decide` — a pure
-/// function — so the policy is unit-testable without any Accessibility I/O.
-public enum InsertionGuardDecision: Equatable {
-    /// Target is consistent (or we deliberately did not check this cycle).
-    /// Proceed with the normal backspace-and-retype reconcile.
-    case proceed
-    /// On-screen text diverged from what we believe we typed. Stop deleting for
-    /// the rest of the session and only append new text from here on — an
-    /// append can never corrupt existing content.
-    case stopAppendOnly
-    /// Focus left the home field. No insertion can land safely (even an append
-    /// would type into the wrong place), so cancel all further insertion.
-    case abort
-}
-
 public struct InsertionTargetTextRange: Equatable {
     public let location: Int
     public let length: Int
@@ -30,35 +14,27 @@ public struct InsertionTargetTextRange: Equatable {
 
 public struct InsertionTargetContext: Equatable {
     public let prefix: String
+    public let selectedText: String
     public let suffix: String
+    public let selectedRange: InsertionTargetTextRange
 
-    public init(prefix: String, suffix: String) {
+    public init(
+        prefix: String,
+        selectedText: String = "",
+        suffix: String,
+        selectedRange: InsertionTargetTextRange? = nil
+    ) {
         self.prefix = prefix
+        self.selectedText = selectedText
         self.suffix = suffix
-    }
-
-    func matches(value: String, expected: String, selectedRange: InsertionTargetTextRange?) -> Bool {
-        guard value == prefix + expected + suffix else { return false }
-        return caretMatches(expected: expected, selectedRange: selectedRange)
-    }
-
-    func caretMatches(expected: String, selectedRange: InsertionTargetTextRange?) -> Bool {
-        let expectedCaret = (prefix + expected).utf16.count
-        return selectedRange == InsertionTargetTextRange(location: expectedCaret, length: 0)
-    }
-
-    func initialSelectionMatches(value: String, selectedRange: InsertionTargetTextRange?) -> Bool {
-        guard let selectedRange,
-              selectedRange.length > 0,
-              value.hasPrefix(prefix),
-              value.hasSuffix(suffix),
-              value.utf16.count >= prefix.utf16.count + suffix.utf16.count else {
-            return false
-        }
-        return selectedRange == InsertionTargetTextRange(
+        self.selectedRange = selectedRange ?? InsertionTargetTextRange(
             location: prefix.utf16.count,
-            length: value.utf16.count - prefix.utf16.count - suffix.utf16.count
+            length: selectedText.utf16.count
         )
+    }
+
+    func matchesBaseline(value: String, selectedRange: InsertionTargetTextRange) -> Bool {
+        value == prefix + selectedText + suffix && selectedRange == self.selectedRange
     }
 
     func insertedText(in value: String) -> String? {
@@ -75,118 +51,31 @@ public struct InsertionTargetContext: Equatable {
     }
 }
 
-/// What the observer saw when asked to check the target before a reconcile.
-public enum InsertionTargetObservation: Equatable {
-    /// The focused element no longer matches the session's home element.
-    case focusChanged
-    /// Focus is unchanged and the full on-screen value was read.
-    case value(String)
-    /// Focus is unchanged, the full on-screen value was read, and the observer
-    /// captured the original insertion span. This is the safe mid-field path:
-    /// `prefix + expected + suffix` may be consistent even when the full field no
-    /// longer ends with `expected`.
-    case positionedValue(String, context: InsertionTargetContext, selectedRange: InsertionTargetTextRange?)
-    /// Focus is unchanged, the read came back empty, AND this element exposes its
-    /// text via Accessibility (we have read a non-empty value from it earlier this
-    /// session). An empty read from a text-exposing field is genuine divergence —
-    /// our text vanished — so a delete here would corrupt content that isn't ours.
-    case emptyExposed
-    /// Focus is unchanged and the read is uninformative: it failed, or the app
-    /// exposes no editable text at all (web/Electron terminals such as cmux return
-    /// empty regardless of content). Neither confirms nor denies our text, so a
-    /// delete is allowed (the cheap focus check is the only guard this cycle).
-    case notRead
-}
-
-extension InsertionTargetObservation {
-    /// Build the observation from a raw Accessibility value read and whether this
-    /// element has REFLECTED our text before. A non-empty read is always a usable
-    /// `.value`. An empty or failed read is `.emptyExposed` when the element has shown
-    /// real text this session (a native field that just lost our text → divergence) and
-    /// `.notRead` when it never has (cmux/Electron advertise `kAXValue` but expose
-    /// nothing → uninformative, keep self-correcting). The discriminator is reflection,
-    /// not advertisement: a field that merely advertises the attribute but never returns
-    /// content must NOT make an empty read look like divergence, or it strands every
-    /// dictation whose early partial gets revised (it can neither delete the stale guess
-    /// nor append the correction). An empty string classifies identically to nil:
-    /// keeping this at the boundary means neither `.value("")` nor
-    /// `.positionedValue("", …)` ever reaches `decide` from the live path.
-    public static func read(
-        _ value: String?,
-        hasReflectedText: Bool,
-        context: InsertionTargetContext? = nil,
-        selectedRange: InsertionTargetTextRange? = nil
-    ) -> InsertionTargetObservation {
-        if let value, !value.isEmpty {
-            if let context {
-                return .positionedValue(value, context: context, selectedRange: selectedRange)
-            }
-            return .value(value)
-        }
-        return hasReflectedText ? .emptyExposed : .notRead
-    }
-}
-
-public enum InsertionTargetGuard {
-    /// Pure decision: given what we believe we typed (`expected`) and what we
-    /// observed about the target, decide what the session may do.
-    ///
-    /// Without insertion context, divergence is `!observed.hasSuffix(expected)` —
-    /// `hasSuffix`, not `==`, so content that existed in the field *before* our
-    /// caret is tolerated. When the observer captured the original field value and
-    /// selection, mid-field insertion is also safe if the current value still equals
-    /// `prefix + expected + suffix` and the caret is exactly after `expected`.
-    public static func decide(
-        expected: String,
-        observed: InsertionTargetObservation
-    ) -> InsertionGuardDecision {
-        evaluate(expected: expected, observed: observed).decision
-    }
-}
-
 /// Observes the focused Accessibility target so the insertion session can tell
-/// whether its backspace-and-retype is still landing in the field it started in.
+/// whether its one final write is still landing in the field it started in.
 ///
 /// Two checks with very different costs:
 /// - `focusChangedSinceStart()` copies the system-wide focused element and
 ///   compares its owning process to the home element's. Cheap for text-exposing
 ///   targets; AX-opaque targets add up to five attribute reads, each bounded by
-///   a short messaging timeout — bounded, safe per reconcile.
-/// - `observedValue()` reads `kAXValueAttribute` off the LIVE focused element (the
-///   whole field's text). The expensive call; the session gates it to the
-///   pre-delete moment only. Reading current focus — not a start-of-session
-///   snapshot — is what lets a same-app field move surface as value divergence.
+///   a short messaging timeout.
+/// - `observedValue()` reads `kAXValueAttribute` once before final insertion.
 public protocol InsertionTargetObserver: AnyObject {
     /// Record the currently focused element as "home". Call at session start.
     func captureBaseline()
+    /// True only when a focused target was captured at session start.
+    func hasCapturedTarget() -> Bool
     /// True if the focused element changed since `captureBaseline()`. Cheap for
     /// text-exposing targets; timeout-bounded signature reads for opaque ones.
     func focusChangedSinceStart() -> Bool
     /// The focused element's full text value, or nil if it can't be read.
-    /// Expensive — do not call on every partial.
+    /// Read once immediately before final insertion.
     func observedValue() -> String?
     /// The current selected text range/caret, when the focused element exposes it.
     func observedSelectedRange() -> InsertionTargetTextRange?
-    /// True when the element advertises editable text at all — its `kAXValue`
-    /// attribute exists at baseline OR it has read back non-empty this session. Gates
-    /// whether a value read is worth attempting; it does NOT decide whether an empty
-    /// read is divergence (an Electron terminal such as cmux advertises `kAXValue` yet
-    /// never returns content — see `hasReflectedTextValue`). Cheap.
-    func exposesTextValue() -> Bool
-    /// True once this element has actually READ BACK our text (a non-empty value this
-    /// session). This is the discriminator for an empty read: a field that has reflected
-    /// text and now reads empty has genuinely diverged (`.emptyExposed` → append-only, no
-    /// blind delete); a field that advertises `kAXValue` but has NEVER reflected text is
-    /// AX-opaque (cmux/Electron) and an empty read is uninformative (`.notRead` → keep
-    /// self-correcting). Merely advertising the attribute is not reflection. Cheap.
-    func hasReflectedTextValue() -> Bool
-    /// True when `focusChangedSinceStart()` proves same-ELEMENT identity for the home
-    /// field (a text-exposing native control compared via `CFEqual`). A passing focus
-    /// check then pins the field, so a divergent value during a pure append is
-    /// same-field mutation (autocorrect, IME), not a same-app field move. False when
-    /// only the pid/opaque-signature checks ran — there the value read is the last
-    /// backstop against typing into another field.
-    func verifiesFocusIdentity() -> Bool
+    /// True when the captured element advertises editable text and therefore
+    /// requires a readable baseline value and selection before insertion.
+    func requiresTextContextValidation() -> Bool
     /// The original text split around the insertion selection at session start.
     func baselineInsertionContext() -> InsertionTargetContext?
     /// The bundle identifier for the app that owned the insertion target at baseline.
@@ -195,18 +84,15 @@ public protocol InsertionTargetObserver: AnyObject {
     func targetWindowTitle() -> String?
 }
 
-/// A no-op observer: focus never changes, value never readable. The session then
-/// always `.proceed`s, preserving the pre-guard behavior. Used by tests and the
-/// one-shot final-insertion path, where guarding adds nothing.
+/// A no-op observer used by isolated insertion tests.
 public final class NullInsertionTargetObserver: InsertionTargetObserver {
     public init() {}
     public func captureBaseline() {}
+    public func hasCapturedTarget() -> Bool { true }
     public func focusChangedSinceStart() -> Bool { false }
     public func observedValue() -> String? { nil }
     public func observedSelectedRange() -> InsertionTargetTextRange? { nil }
-    public func exposesTextValue() -> Bool { false }
-    public func hasReflectedTextValue() -> Bool { false }
-    public func verifiesFocusIdentity() -> Bool { false }
+    public func requiresTextContextValidation() -> Bool { false }
     public func baselineInsertionContext() -> InsertionTargetContext? { nil }
     public func targetApplicationBundleIdentifier() -> String? { nil }
     public func targetWindowTitle() -> String? { nil }
@@ -227,27 +113,17 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private var homeApplicationBundleIdentifier: String?
     private var homeWindowTitle: String?
     private var homeOpaqueFocusSignature: InsertionTargetFocusSignature?
-    /// True when the home element advertises `kAXValueAttribute` at session start.
-    /// Set once at `captureBaseline`, before any delete. It gates whether a value read is
-    /// worth attempting (`exposesTextValue`) and whether the focus check can prove
-    /// same-ELEMENT identity (`verifiesFocusIdentity`, which CFEquals the home element).
-    /// It does NOT decide whether an empty read is divergence — that is
-    /// `everReadNonEmptyValue` (reflection), so a field that merely advertises but never
-    /// reflects (cmux/Electron) keeps self-correcting instead of blind-aborting.
-    private var homeElementAdvertisesValue = false
+    /// A native field is treated as readable only when both its value and selection
+    /// were captured. AX controls can advertise value attributes while returning no
+    /// usable text; those must use the opaque-target path.
+    private var homeHasReadableTextContext = false
     private var insertionContext: InsertionTargetContext?
-    /// Latched once any read returns real text. This — NOT mere advertisement — is the
-    /// discriminator for an empty read: a field that has reflected our text and now reads
-    /// empty has diverged (`.emptyExposed`), while one that never reflected (cmux/Electron,
-    /// even if it advertises `kAXValue`) reads empty uninformatively and keeps
-    /// self-correcting.
-    private var everReadNonEmptyValue = false
     private let log = EposLogger(category: "inject")
 
     public init() {
         systemWide = AXUIElementCreateSystemWide()
         // Bound every AX message so a wedged accessibility server in the target
-        // app can't stall the main-actor reconcile. Generous relative to a normal
+        // app can't stall final insertion. Generous relative to a normal
         // focused-element copy (sub-millisecond) but a hard ceiling on hangs.
         AXUIElementSetMessagingTimeout(systemWide, 0.25)
     }
@@ -265,85 +141,72 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             )?.bundleIdentifier
         }
         homeWindowTitle = windowTitle(of: baseline)
-        homeElementAdvertisesValue = advertisesValueAttribute(baseline)
-        homeOpaqueFocusSignature = homeElementAdvertisesValue ? nil : focusSignature(of: baseline)
         if let value = textValue(of: baseline), let selectedRange = selectedTextRange(of: baseline) {
             insertionContext = Self.context(in: value, selectedRange: selectedRange)
         }
+        homeHasReadableTextContext = insertionContext != nil
+        homeOpaqueFocusSignature = homeHasReadableTextContext ? nil : focusSignature(of: baseline)
     }
 
     public func focusChangedSinceStart() -> Bool {
-        // No baseline pid (couldn't read focus/owner at start) → we can't prove focus
-        // moved, so don't fire the focus guard. The live value read still bounds deletes:
-        // it reads whatever element holds focus now, so divergence there latches append-only.
+        // No baseline pid means focus identity was unavailable at fn press.
         guard let homePid else { return false }
         let current: AXUIElement
         switch copyFocusedElementDetailed() {
         case .element(let element):
             current = element
-        case .failure(let error) where Self.focusReadFailureIndicatesFocusChange(error):
-            // Focus genuinely unreadable (field/window went away, nothing focused).
-            // Treat as changed: continuing to type blind risks the wrong target.
+        case .failure(let error):
+            // Final-only delivery has not typed anything yet. An unreadable target is
+            // therefore safe to refuse and unsafe to guess about.
             log.info(
-                "insertion guard: focused element unreadable mid-session (AXError \(error.rawValue)); treating as focus change"
+                "insertion guard: focused element unreadable before final insertion " +
+                    "(AXError \(error.rawValue)); refusing insertion"
             )
             return true
-        case .failure(let error):
-            // Transient messaging failure: the target app is momentarily unresponsive
-            // under the 0.25s messaging timeout, NOT evidence that focus moved. Like a
-            // one-sided-nil signature read (see `InsertionTargetFocusSignature`), this
-            // is "unknown, never a change" — a false abort here cancels the session and
-            // silently drops the rest of the utterance, while the value-read and frame
-            // backstops still bound any damage from a genuinely missed move.
-            log.info(
-                "insertion guard: focused element read failed transiently mid-session (AXError \(error.rawValue)); treating as unknown, not a focus change"
-            )
-            return false
         }
         // Compare by owning process first, not element identity. A Chromium/Electron terminal
-        // such as cmux hands back a fresh AXUIElement for the same field between
-        // keystrokes, so `CFEqual` on the element reported a change and aborted
-        // mid-dictation even though focus never left the app. The pid is stable across
+        // such as cmux can hand back a fresh AXUIElement for the same field. The pid is stable across
         // that churn and still changes when focus moves to another app — the case the
         // guard protects in every app. For text-exposing native controls, also compare
-        // element identity so same-app field moves are caught before even the first
-        // append; AX-opaque controls still skip the identity check because their element
-        // churn is what broke cmux.
+        // element identity so same-app field moves are caught before insertion.
         guard let currentPid = pid(of: current) else { return true }
         guard currentPid == homePid else {
             log.info("insertion guard: focus left the app mid-session (pid \(homePid) -> \(currentPid))")
             return true
         }
-        if homeElementAdvertisesValue,
+        if homeHasReadableTextContext,
            let homeElement,
            !CFEqual(current, homeElement) {
             log.info("insertion guard: focused text element changed within app pid \(homePid)")
             return true
         }
-        if !homeElementAdvertisesValue,
-           let homeOpaqueFocusSignature,
-           InsertionTargetFocusSignature.changedWithinSameProcess(
-            from: homeOpaqueFocusSignature,
-            to: focusSignature(of: current)
-           ) {
-            log.info("insertion guard: focused opaque element signature changed within app pid \(homePid)")
-            return true
+        if !homeHasReadableTextContext {
+            if let homeWindowTitle,
+               let currentWindowTitle = windowTitle(of: current),
+               currentWindowTitle != homeWindowTitle {
+                log.info("insertion guard: opaque target window changed within app pid \(homePid)")
+                return true
+            }
+            if let homeElement, CFEqual(current, homeElement) {
+                return false
+            }
+            guard InsertionTargetFocusSignature.provesSameTarget(
+                from: homeOpaqueFocusSignature,
+                to: focusSignature(of: current)
+            ) else {
+                log.info("insertion guard: opaque target identity is ambiguous within app pid \(homePid)")
+                return true
+            }
         }
         return false
     }
 
+    public func hasCapturedTarget() -> Bool { homePid != nil }
+
     public func observedValue() -> String? {
-        // Read the element that holds focus RIGHT NOW, not a start-of-session snapshot.
-        // Deciding from current truth is what makes a same-app field move detectable: it
-        // reads the new field, whose text won't end with our committed text → divergence
-        // → append-only. cmux/Electron churn reads the same (fresh) node → empty → not
-        // text-exposing → uninformative, so self-correction proceeds exactly as before.
-        // A cross-app move is already aborted by `focusChangedSinceStart`'s pid check,
-        // before any reconcile reaches this read.
+        // Read the element that holds focus now, immediately before final insertion.
         guard let focused = copyFocusedElement() else { return nil }
-        guard let text = textValue(of: focused) else { return nil }
-        if !text.isEmpty { everReadNonEmptyValue = true }
-        return text
+        return textValue(of: focused)
     }
 
     public func observedSelectedRange() -> InsertionTargetTextRange? {
@@ -351,24 +214,13 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         return selectedTextRange(of: focused)
     }
 
-    public func exposesTextValue() -> Bool { homeElementAdvertisesValue || everReadNonEmptyValue }
-
-    public func hasReflectedTextValue() -> Bool { everReadNonEmptyValue }
-
-    public func verifiesFocusIdentity() -> Bool { homeElementAdvertisesValue && homeElement != nil }
+    public func requiresTextContextValidation() -> Bool { homeHasReadableTextContext }
 
     public func baselineInsertionContext() -> InsertionTargetContext? { insertionContext }
 
     public func targetApplicationBundleIdentifier() -> String? { homeApplicationBundleIdentifier }
 
     public func targetWindowTitle() -> String? { homeWindowTitle }
-
-    private func advertisesValueAttribute(_ element: AXUIElement) -> Bool {
-        var names: CFArray?
-        let result = AXUIElementCopyAttributeNames(element, &names)
-        guard result == .success, let attributes = names as? [String] else { return false }
-        return attributes.contains(kAXValueAttribute as String)
-    }
 
     private func textValue(of element: AXUIElement) -> String? {
         var value: CFTypeRef?
@@ -421,18 +273,9 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         let signature = InsertionTargetFocusSignature(
             role: stringAttribute(of: element, kAXRoleAttribute as String),
             subrole: stringAttribute(of: element, kAXSubroleAttribute as String),
-            identifier: stringAttribute(of: element, kAXIdentifierAttribute as String),
-            frame: focusFrame(of: element)
+            identifier: stringAttribute(of: element, kAXIdentifierAttribute as String)
         )
         return signature.isInformative ? signature : nil
-    }
-
-    private func focusFrame(of element: AXUIElement) -> InsertionTargetFocusFrame? {
-        guard let position = pointValue(of: element, kAXPositionAttribute as String),
-              let size = sizeValue(of: element, kAXSizeAttribute as String) else {
-            return nil
-        }
-        return InsertionTargetFocusFrame(position: position, size: size)
     }
 
     private func stringAttribute(of element: AXUIElement, _ attribute: String) -> String? {
@@ -441,30 +284,6 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         guard result == .success, let text = value as? String else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private func pointValue(of element: AXUIElement, _ attribute: String) -> CGPoint? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        guard result == .success, let axValue = value else { return nil }
-        var point = CGPoint.zero
-        // CFTypeRef of an AXValue; force-cast is safe after the point attribute succeeds
-        // and `AXValueGetValue` validates the wrapped type.
-        // swiftlint:disable:next force_cast
-        guard AXValueGetValue((axValue as! AXValue), .cgPoint, &point) else { return nil }
-        return point
-    }
-
-    private func sizeValue(of element: AXUIElement, _ attribute: String) -> CGSize? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        guard result == .success, let axValue = value else { return nil }
-        var size = CGSize.zero
-        // CFTypeRef of an AXValue; force-cast is safe after the size attribute succeeds
-        // and `AXValueGetValue` validates the wrapped type.
-        // swiftlint:disable:next force_cast
-        guard AXValueGetValue((axValue as! AXValue), .cgSize, &size) else { return nil }
-        return size
     }
 
     private static func context(
@@ -491,12 +310,14 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         }
         return InsertionTargetContext(
             prefix: String(value[..<start]),
-            suffix: String(value[end...])
+            selectedText: String(value[start..<end]),
+            suffix: String(value[end...]),
+            selectedRange: selectedRange
         )
     }
 
     /// Owning process of an element. `AXUIElementGetPid` is a local lookup (no IPC to the
-    /// target app), so this stays cheap enough to run on every reconcile.
+    /// target app), so this is cheap enough for the final guard.
     private func pid(of element: AXUIElement) -> pid_t? {
         var processID: pid_t = 0
         return AXUIElementGetPid(element, &processID) == .success ? processID : nil
@@ -508,21 +329,6 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     enum FocusedElementRead {
         case element(AXUIElement)
         case failure(AXError)
-    }
-
-    /// Pure classification of a failed focused-element fetch. `cannotComplete`
-    /// ("the accessible application is unresponsive") and `apiDisabled` are
-    /// transient messaging failures — they say nothing about where focus is, so
-    /// they must read as "unknown", never as a focus change. Everything else
-    /// (`invalidUIElement`, `noValue`, …) is an identity failure: the element is
-    /// gone or nothing is focused, which keeps the abort behavior.
-    static func focusReadFailureIndicatesFocusChange(_ error: AXError) -> Bool {
-        switch error {
-        case .cannotComplete, .apiDisabled:
-            return false
-        default:
-            return true
-        }
     }
 
     private func copyFocusedElement() -> AXUIElement? {

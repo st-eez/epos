@@ -13,16 +13,16 @@ public struct RecordingIndicator: View {
             state: coordinator.state,
             finalizationPhase: coordinator.finalizationPhase,
             amplitude: coordinator.amplitude,
-            startUnavailable: coordinator.startUnavailable
+            startUnavailable: coordinator.startUnavailable,
+            insertionUnavailable: coordinator.insertionUnavailable,
+            transcriptPreview: coordinator.displayText
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 20)
     }
 }
 
-/// Compact, non-interactive recording pill: a status dot + live audio meter.
-/// The transcript itself streams straight into the focused field, so the pill
-/// never echoes it — it only signals that Epos is listening and how loud.
+/// Compact, non-interactive recording pill with a volatile transcript preview.
 struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
     let finalizationPhase: FinalizationPhase
@@ -30,6 +30,8 @@ struct RecordingIndicatorSurface: View {
     /// Flash a red "Not ready" notice: a held-fn dictation was dropped because
     /// bootstrap finished without a capture format.
     let startUnavailable: Bool
+    let insertionUnavailable: Bool
+    let transcriptPreview: String
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
     private let teal = EposPalette.teal
@@ -39,35 +41,71 @@ struct RecordingIndicatorSurface: View {
         state: CoordinatorState,
         finalizationPhase: FinalizationPhase = .finalizingSpeech,
         amplitude: Float,
-        startUnavailable: Bool = false
+        startUnavailable: Bool = false,
+        insertionUnavailable: Bool = false,
+        transcriptPreview: String = ""
     ) {
         self.state = state
         self.finalizationPhase = finalizationPhase
         self.amplitude = amplitude
         self.startUnavailable = startUnavailable
+        self.insertionUnavailable = insertionUnavailable
+        self.transcriptPreview = transcriptPreview
     }
 
     var body: some View {
-        HStack(spacing: 8) {
-            statusDot
-            if state == .recording {
-                amplitudeMeter
-            } else {
-                activitySpinner
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                statusDot
+                if state == .recording {
+                    amplitudeMeter
+                } else {
+                    activitySpinner
+                }
+                Text(noticeText ?? Self.statusText(state: state, finalizationPhase: finalizationPhase))
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.88))
+                    .lineLimit(1)
             }
-            Text(startUnavailable ? "Not ready" : Self.statusText(state: state, finalizationPhase: finalizationPhase))
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.white.opacity(0.88))
-                .lineLimit(1)
-                .frame(width: 58, alignment: .leading)
+            if state == .recording, !transcriptPreview.isEmpty {
+                Text(transcriptPreview)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.72))
+                    .lineLimit(1)
+                    .truncationMode(.head)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
-        .frame(width: 126, height: 36)
-        .padding(.horizontal, 12)
-        .background(.ultraThinMaterial, in: Capsule(style: .continuous))
-        .background(Capsule(style: .continuous).fill(panelColor.opacity(0.9)))
+        .frame(width: 304, alignment: .leading)
+        .frame(minHeight: 36, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .background(
+            RoundedRectangle(cornerRadius: 18, style: .continuous)
+                .fill(panelColor.opacity(0.9))
+        )
         .overlay(surfaceStroke)
         .shadow(color: .black.opacity(0.17), radius: 12, x: 0, y: 6)
         .animation(.easeOut(duration: 0.08), value: amplitude)
+    }
+
+    private var noticeText: String? {
+        if insertionUnavailable { return "Not inserted" }
+        if startUnavailable { return "Not ready" }
+        return nil
+    }
+
+    private var surfaceStroke: some View {
+        RoundedRectangle(cornerRadius: 18, style: .continuous)
+            .strokeBorder(
+                LinearGradient(
+                    colors: [.white.opacity(0.18), .white.opacity(0.07), teal.opacity(0.1)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ),
+                lineWidth: 1
+            )
     }
 
     private var statusDot: some View {
@@ -96,20 +134,8 @@ struct RecordingIndicatorSurface: View {
             .frame(width: 24, height: 20)
     }
 
-    private var surfaceStroke: some View {
-        Capsule(style: .continuous)
-            .strokeBorder(
-                LinearGradient(
-                    colors: [.white.opacity(0.18), .white.opacity(0.07), teal.opacity(0.1)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1
-            )
-    }
-
     private var statusColor: Color {
-        if startUnavailable { return EposPalette.red }
+        if startUnavailable || insertionUnavailable { return EposPalette.red }
         return switch state {
         case .recording: teal
         case .finalizing: amber

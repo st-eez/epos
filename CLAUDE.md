@@ -1,9 +1,9 @@
 # Epos
 
 Epos is a menu-bar, push-to-talk dictation app for macOS 26+. Hold the fn key and
-speak: words stream live into whatever text field has focus. Release fn and the
-transcript finalizes in place. Transcription is fully on-device (Apple
-`SpeechTranscriber`).
+speak: volatile recognition appears in Epos's HUD. Release fn and the authoritative
+final transcript is inserted once into the field captured at fn press. Transcription
+is fully on-device (Apple `SpeechTranscriber`).
 
 `specs/baseline.md` is the spec and source of truth. Before changing architecture
 or scope, re-read it; if the work doesn't fit, update the spec first. Scope is
@@ -18,23 +18,23 @@ FnHotkey                               (fn-only push-to-talk; hold to record)
     ↓  AudioCapture                    (48 kHz mic → 16 kHz mono PCM)
 Transcriber                            (SpeechAnalyzer + SpeechTranscriber, en-US)
     ↓  volatile partials + growing per-segment finals
-TranscriptCanonicalizer                (deterministic alias/jargon + spoken-symbol fix)
+RecordingIndicator                    (memory-only volatile preview)
+    ↓  fn release
+TranscriptPolisher + Canonicalizer     (safe cleanup + deterministic jargon fix)
     ↓
-ProgressiveTranscriptInsertionSession  (converges the field on the transcript)
-    ↓  InsertionTargetGuard            (AX safety check on every delete/append)
-TextInsertionBackend                   (synthesized keystrokes → focused app)
+FinalTranscriptInsertionSession       (verifies the fn-press field)
+    ↓
+TextInsertionBackend                  (one synthesized-keystroke write)
 ```
 
 `AppCoordinator` owns the recording state machine and wires every stage; the menu
-bar UI shows volatile partials. Correction aliases are attached to the recognizer
-as speech context, and the canonicalizer runs on every partial AND final as the
-authoritative jargon fix.
+bar HUD shows volatile partials. Correction aliases are attached to the recognizer
+as speech context, and the canonicalizer owns the authoritative final jargon fix.
 
-Insertion converges by backspacing the divergent suffix and retyping, so revisions
-correct live. Every delete/append pays an AX read first; when a target's reads
-prove unreliable (Electron compose boxes, cleared fields), the session latches
-**append-only**: it never deletes again and only appends new tails sliced against
-a transcript anchor, so existing text is never corrupted.
+The insertion session captures focus, readable value, caret, and selection at fn
+press. Before the one final write it verifies that context is unchanged. Opaque
+Electron targets use their process and focus signature. A mismatch writes nothing
+and shows "Not inserted"; Epos never restores focus or issues corrective backspaces.
 
 On fn release the coordinator finalizes. The optional `TranscriptPolisher`
 (`polishEnabled`, default OFF) may rewrite the final transcript behind a
@@ -63,10 +63,12 @@ open /Applications/Epos.app
   executables, and launching a DerivedData `.app` can leave `/Applications/Epos.app`
   stale. Treat raw `xcodebuild` as compile verification only.
 - Insertion correctness is NOT unit-testable: verifying it means dictating with the
-  installed app into real target apps. Unit tests drive the reconcile logic through
+  installed app into real target apps. Unit tests drive the final-write guard through
   fake backends/observers (`Tests/EposTests/InsertionTargetGuardTests.swift`).
 - Skipped tests are env-gated eval harnesses (`EPOS_RUN_*`) that replay saved
   dogfood recordings or call local models; they are opt-in, not broken.
+- `scripts/bench [count]` installs a signed Debug app and runs the five-arm Apple
+  preset comparison inside that app identity. It replaces `/Applications/Epos.app`.
 - `swift test` writes into the dogfood diagnostic log — exclude test bursts before
   mining logs for real-usage bugs.
 
@@ -115,7 +117,7 @@ diagnostic log under `~/Library/Caches/Epos/logs/` (one file per day). Subsystem
 Reuse an existing category before inventing a new one.
 
 The diagnostic log is the primary bug-investigation surface: every recording gets
-a `recordingID`, and insertion logs each reconcile decision. It is a local
+a `recordingID`, and insertion logs each final-write decision. It is a local
 dogfood/debug surface and may include transcript text when the transcript is the
 behavior under test.
 
@@ -167,8 +169,8 @@ as a background capture rig:
 | `Speech/Correction*.swift` | User-editable alias dictionary; learns from AX edit evidence |
 | `Speech/TranscriptPolisher*.swift`, `*Polish*.swift` | Opt-in LLM polish: engines, guard, prompts, fallback |
 | `Speech/TranscriptDeterministicCleaner.swift` | Guard-proven hard-filler cleanup (polish fallback path) |
-| `Inject/ProgressiveTranscriptInsertion.swift` | Streaming reconcile; append-only latch + anchor |
-| `Inject/InsertionTargetGuard.swift`, `InsertionTargetFocusSignature.swift` | AX safety: when a delete/append is safe; same-app focus-move detection |
+| `Inject/FinalTranscriptInsertion.swift` | Captures the fn-press target; issues at most one final write |
+| `Inject/InsertionTargetGuard.swift`, `InsertionTargetFocusSignature.swift` | AX safety: final target/value/caret/selection validation |
 | `Inject/TextInsertionBackend.swift` | Keystroke synthesis backend |
 | `Permissions/PermissionsGate.swift` | Mic / speech / accessibility TCC gating |
 | `Diagnostics/EposLogger.swift` | Unified logging + app-owned diagnostic file log |

@@ -646,143 +646,35 @@ final class SmokeTests: XCTestCase {
         )
     }
 
-    func testProgressiveInsertionStreamsEachPartialImmediately() {
+    func testFinalInsertionWritesOnce() {
         let backend = RecordingTextInsertionBackend()
-        let session = ProgressiveTranscriptInsertionSession(
-            insertionSession: backend.startInsertionSession(),
-            canonicalize: { $0 }
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession()
         )
 
-        session.acceptPartialTranscript("hello")
-        session.acceptPartialTranscript("hello world")
-        session.acceptPartialTranscript("hello world from")
-        session.acceptPartialTranscript("hello world from epos")
-        session.acceptFinalTranscript("hello world from epos")
+        XCTAssertTrue(session.insertFinal("hello world from epos"))
+        XCTAssertFalse(session.insertFinal("duplicate"))
         session.finish()
 
-        // Each partial appends its new tail with no confirmation delay; the final
-        // equals the committed text and is a no-op.
-        XCTAssertEqual(backend.insertedTexts, ["hello", " world", " from", " epos"])
+        XCTAssertEqual(backend.insertedTexts, ["hello world from epos"])
         XCTAssertEqual(backend.fieldText, "hello world from epos")
         XCTAssertEqual(backend.finishCount, 1)
         XCTAssertEqual(backend.cancelCount, 0)
     }
 
-    func testProgressiveInsertionCorrectsRevisionLiveOnPartials() {
+    func testFinalInsertionCancelWritesNothing() {
         let backend = RecordingTextInsertionBackend()
-        let session = ProgressiveTranscriptInsertionSession(
-            insertionSession: backend.startInsertionSession(),
-            canonicalize: { $0 }
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession()
         )
 
-        session.acceptPartialTranscript("open the")
-        session.acceptPartialTranscript("open the door")
-        // The partial revises an already-typed word ("the" -> "a"); the session
-        // backspaces the diverged suffix and retypes it live, no waiting for a final.
-        session.acceptPartialTranscript("open a door")
-        session.acceptFinalTranscript("open a door")
-        session.finish()
-
-        XCTAssertEqual(
-            backend.operations,
-            [.insert("open the"), .insert(" door"), .delete(8), .insert("a door")]
-        )
-        XCTAssertEqual(backend.fieldText, "open a door")
-    }
-
-    func testProgressiveInsertionAppliesCanonicalizerBeforeStreaming() {
-        let backend = RecordingTextInsertionBackend()
-        let canonicalizer = TranscriptCanonicalizer()
-        let session = ProgressiveTranscriptInsertionSession(
-            insertionSession: backend.startInsertionSession(),
-            canonicalize: canonicalizer.canonicalize
-        )
-
-        session.acceptPartialTranscript("run dash dash verbose mode")
-        session.acceptPartialTranscript("run dash dash verbose mode now")
-        session.acceptFinalTranscript("run dash dash verbose mode now")
-        session.finish()
-
-        XCTAssertEqual(backend.insertedTexts, ["run --verbose mode", " now"])
-        XCTAssertEqual(backend.fieldText, "run --verbose mode now")
-    }
-
-    func testProgressiveInsertionSelfCorrectsLiveWhenPartialRevisesTypedWord() {
-        let backend = RecordingTextInsertionBackend()
-        let session = ProgressiveTranscriptInsertionSession(
-            insertionSession: backend.startInsertionSession(),
-            canonicalize: { $0 }
-        )
-
-        session.acceptPartialTranscript("hello world foo")
-        // Each revising partial backspaces the diverged suffix and retypes it, so
-        // the correction lands live instead of waiting for the segment final.
-        session.acceptPartialTranscript("hello world bar")
-        session.acceptPartialTranscript("hello there bar")
-        session.acceptFinalTranscript("hello there bar")
-        session.finish()
-
-        XCTAssertEqual(
-            backend.operations,
-            [
-                .insert("hello world foo"),
-                .delete(3), .insert("bar"),
-                .delete(9), .insert("there bar")
-            ]
-        )
-        // The field converges exactly to the recognizer's final transcript.
-        XCTAssertEqual(backend.fieldText, "hello there bar")
-        XCTAssertEqual(backend.finishCount, 1)
-        XCTAssertEqual(backend.cancelCount, 0)
-    }
-
-    func testProgressiveInsertionCancelClosesSessionWithoutFinishing() {
-        let backend = RecordingTextInsertionBackend()
-        let session = ProgressiveTranscriptInsertionSession(
-            insertionSession: backend.startInsertionSession(),
-            canonicalize: { $0 }
-        )
-
-        session.acceptPartialTranscript("hello world from")
-        session.acceptPartialTranscript("hello world from epos")
         session.cancel()
-        // Post-cancel calls are no-ops; cancel is idempotent.
-        session.acceptPartialTranscript("hello world from epos now")
+        XCTAssertFalse(session.insertFinal("late"))
         session.cancel()
 
-        XCTAssertEqual(backend.insertedTexts, ["hello world from", " epos"])
+        XCTAssertEqual(backend.insertedTexts, [])
         XCTAssertEqual(backend.cancelCount, 1)
         XCTAssertEqual(backend.finishCount, 0)
-    }
-
-    func testProgressiveInsertionRepeatedFinalCommitInsertsOnce() {
-        // Mirrors the coordinator flow where handleFinalTranscriptSegment and
-        // insertFinalTranscript both call acceptFinalTranscript with the same text.
-        let backend = RecordingTextInsertionBackend()
-        let session = ProgressiveTranscriptInsertionSession(
-            insertionSession: backend.startInsertionSession(),
-            canonicalize: { $0 }
-        )
-
-        session.acceptPartialTranscript("hello world from")
-        session.acceptPartialTranscript("hello world from epos")
-        session.acceptFinalTranscript("hello world from epos")
-        session.acceptFinalTranscript("hello world from epos")
-        session.finish()
-
-        XCTAssertEqual(backend.insertedTexts, ["hello world from", " epos"])
-        XCTAssertEqual(backend.finishCount, 1)
-    }
-
-    @MainActor
-    func testCoordinatorFinalInsertionUsesProgressiveSession() {
-        let backend = RecordingTextInsertionBackend()
-        let coordinator = AppCoordinator(textInsertion: backend, autoStart: false)
-
-        coordinator.insertFinalTranscript("hello final")
-
-        XCTAssertEqual(backend.insertedTexts, ["hello final"])
-        XCTAssertEqual(backend.finishCount, 1)
     }
 
     func testDiagnosticLogSinkWritesDirectFile() throws {
@@ -1286,12 +1178,9 @@ private final class RecordingTextInsertionBackend: TextInsertionBackend {
             self.backend = backend
         }
 
-        func insert(_ text: String) {
+        func insert(_ text: String) -> Bool {
             backend.record(.insert(text))
-        }
-
-        func deleteBackward(count: Int) {
-            backend.record(.delete(count))
+            return true
         }
 
         func finish() {

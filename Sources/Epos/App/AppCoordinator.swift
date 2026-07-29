@@ -30,6 +30,8 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var settings: Settings
     /// True while the indicator pill flashes the dropped-start notice; read by `RecordingIndicator`.
     @Published public private(set) var startUnavailable = false
+    /// True while the indicator reports that the guarded final write was refused.
+    @Published public private(set) var insertionUnavailable = false
 
     /// Running display: committed finals + in-progress partial. The partial replaces
     /// only the tail because `SpeechTranscriber` emits volatile partials for the
@@ -40,6 +42,7 @@ public final class AppCoordinator: ObservableObject {
     private let audio: AudioCapture
     private let transcriber: Transcriber
     private let textInsertion: TextInsertionBackend
+    private let insertionTargetObserverFactory: @MainActor () -> any InsertionTargetObserver
     private let polishEngine: any PolishEngine
     private let permissions: PermissionsGate
     private let assets: AssetManager
@@ -58,7 +61,7 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptionTask: Task<Void, Never>?
     /// Cached at bootstrap; nil until then. Internal so latch tests can install one.
     var captureFormat: AVAudioFormat?
-    private var textInsertionSession: ProgressiveTranscriptInsertionSession?
+    private var textInsertionSession: FinalTranscriptInsertionSession?
     private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
     private let includeTranscriptTextInDiagnostics: Bool
@@ -89,6 +92,7 @@ public final class AppCoordinator: ObservableObject {
         hotkey: FnHotkey = FnHotkey(),
         audio: AudioCapture = AudioCapture(),
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
+        insertionTargetObserverFactory: (@MainActor () -> any InsertionTargetObserver)? = nil,
         settings: Settings = Settings.load(),
         polishEngine: (any PolishEngine)? = nil,
         diagnostics: DiagnosticLogSink = .shared,
@@ -102,6 +106,9 @@ public final class AppCoordinator: ObservableObject {
         self.hotkey = hotkey
         self.audio = audio
         self.textInsertion = textInsertion
+        self.insertionTargetObserverFactory = insertionTargetObserverFactory ?? {
+            AXInsertionTargetObserver()
+        }
         self.polishEngine = polishEngine ?? PolishEngineFactory.makeDefault()
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.correctionEvidence = correctionEvidence
@@ -159,18 +166,10 @@ public final class AppCoordinator: ObservableObject {
     }
 
     /// Built once per recording so a mid-session settings change cannot alter the
-    /// finalization behavior of an already-running dictation. Internal so a test can
-    /// assert the final polish baseline applies the same `streamClean` the live closure
-    /// does — the seam where a polish-off final used to revert the on-screen cleaning.
+    /// finalization behavior of an already-running dictation.
     func makePolisher() -> TranscriptPolisher {
-        // Snapshot the value-type canonicalizer so the guard validates — and the
-        // polisher returns — the exact string the live closure streamed on screen. That
-        // closure is `streamClean(canonicalize(rawStream))`, and `acceptFinalPolishedTranscript`
-        // types the polisher output verbatim (no second canonicalize), so the polisher
-        // MUST apply the same `streamClean`. Without it the polish-off default re-typed the
-        // raw, filler/stutter-laden tail at finalization and reverted the on-screen cleaning
-        // on every deletable target. The snapshot also freezes the rules for this recording,
-        // matching the build-once-per-recording intent.
+        // Snapshot correction rules at fn press. The same canonicalization feeds
+        // the final retention guard and the one authoritative insertion.
         let canonicalizer = corrections.canonicalizer
         // Only walk the correction rules for known terms when polish is on; when it's
         // off (the default) the polisher short-circuits at its `enabled` gate and never
@@ -277,6 +276,17 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
+    private func flashInsertionUnavailableNotice() {
+        insertionUnavailable = true
+        indicator.show()
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 2_500_000_000)
+            guard let self, self.insertionUnavailable else { return }
+            self.insertionUnavailable = false
+            if self.state == .idle { self.indicator.hide() }
+        }
+    }
+
     private func bindHotkey() {
         hotkey.onPress = { [weak self] in self?.startRecording() }
         hotkey.onRelease = { [weak self] in self?.finishRecording() }
@@ -285,11 +295,9 @@ public final class AppCoordinator: ObservableObject {
 
     public func startRecording() {
         guard state == .idle else {
-            // A press during the finalize/polish window — the `await polisher.polish`
-            // widens `.finalizing` by up to the generation time, and the user is starting
-            // their next utterance. Abandon the in-flight polish so the window collapses
-            // (utterance 1 keeps its already-typed raw text), and latch the press for
-            // replay at `.finalizing → .idle`.
+            // A press during the finalize/polish window starts the user's next
+            // utterance. Abandon in-flight polish so the first final can be inserted,
+            // then replay this press when the coordinator returns to idle.
             if state == .finalizing {
                 pendingDeferredStart = true
                 activePolisher?.abandonInFlightPolish()
@@ -318,20 +326,10 @@ public final class AppCoordinator: ObservableObject {
         finalText = ""
         partial = ""
         amplitude = 0
-        textInsertionSession = ProgressiveTranscriptInsertionSession(
+        insertionUnavailable = false
+        textInsertionSession = FinalTranscriptInsertionSession(
             insertionSession: textInsertion.startInsertionSession(),
-            // Strip hard fillers AND collapse stuttered function-word repeats ("the the")
-            // from every partial BEFORE it is typed. The recognizer floats "uh"/"um" and
-            // stutters in volatile partials; cleaning them here keeps them from flickering
-            // on screen during streaming. `makePolisher` applies the SAME `streamClean` to
-            // the final baseline so the cleaned text also survives finalization — without
-            // that the final reconcile would re-type the raw tail and undo this. Both passes
-            // are conservative (hard fillers only; a closed allow-list of always-stutter
-            // words) so they never touch meaning.
-            canonicalize: { [corrections] text in
-                TranscriptDeterministicCleaner.streamClean(corrections.canonicalize(text))
-            },
-            target: AXInsertionTargetObserver()
+            target: insertionTargetObserverFactory()
         )
         transcriptTiming.start()
         indicator.show()
@@ -397,7 +395,7 @@ public final class AppCoordinator: ObservableObject {
             try audio.start(targetFormat: format)
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
-            dogfood.stop(keeping: false)
+            dogfood.stop(keeping: shouldSaveAudioSamples)
             cancelTextInsertionSession()
             await resetSessionStateBeforeIdle()
             log.info("recording done (finalChars=0 failed=true)")
@@ -419,31 +417,26 @@ public final class AppCoordinator: ObservableObject {
         }
 
         audio.stop()
-        // Promote unconditionally — including after a `.failed` event. The trailing
-        // partial is already typed on screen; on the success path finals clear
-        // `partial`, so this only fires when no `.final` settled it. Gating it on
-        // failure made the empty-`finalText` branch below RETRACT (backspace) the
-        // words the user just watched land, which is worse than committing the
-        // best-effort partial.
+        // Preserve a trailing recognizer partial when no later final arrives.
         promotePartialTranscriptAsFallbackFinalIfNeeded()
 
         let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        dogfood.stop(keeping: shouldSaveAudioSamples && hasTranscribedText)
+        // Empty and failed sessions are the samples needed to diagnose silence,
+        // wrong-input, capture, and recognizer failures.
+        dogfood.stop(keeping: shouldSaveAudioSamples)
 
         if hasTranscribedText {
             // Opt-in LLM polish runs once on the final transcript while the
             // indicator is still up (state == .finalizing) on the per-recording
             // polisher prewarmed at start. It never throws and falls back to the raw
-            // text, so the reconcile below is unchanged when polish is off,
+            // text, so final insertion is unchanged when polish is off,
             // unavailable, or rejected by the guard.
             finalizationPhase = polisher.willAttemptPolish ? .polishing : .inserting
             let polishStartedAt = Date()
             let result = await polisher.polish(finalText)
             finalizationPhase = .inserting
-            // Insert reports whether keystrokes actually landed; if the append-only
-            // latch suppressed the polish retype, downgrade `.applied` so the log
-            // can't claim a polish the user never received.
             let applied = insertFinalTranscript(result.text)
+            if !applied { flashInsertionUnavailableNotice() }
             let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
             let insertedTranscript = textInsertionSession?.insertedTranscript
             if let evidenceID = recordCorrectionEvidenceIfEnabled(
@@ -482,7 +475,7 @@ public final class AppCoordinator: ObservableObject {
             )
             finishTextInsertionSession()
         } else {
-            cancelTextInsertionSession(retractInsertedText: true)
+            cancelTextInsertionSession()
         }
 
         let finalChars = finalText.count
@@ -493,13 +486,11 @@ public final class AppCoordinator: ObservableObject {
 
     func handlePartialTranscript(_ text: String) {
         partial = text
-        textInsertionSession?.acceptPartialTranscript(displayText)
     }
 
     func handleFinalTranscriptSegment(_ text: String) {
         finalText += text
         partial = ""
-        textInsertionSession?.acceptFinalTranscript(finalText)
     }
 
     func promotePartialTranscriptAsFallbackFinalIfNeeded() {
@@ -509,29 +500,15 @@ public final class AppCoordinator: ObservableObject {
 
         let fallbackFinalText = finalText + partial
         partial = ""
-        _ = textInsertionSession?.acceptFallbackFinalTranscript(fallbackFinalText)
         finalText = fallbackFinalText
         log.info("recording promoted partial fallback finalChars=\(self.finalText.count)")
     }
 
-    /// Insert the final (already-canonicalized, already-guard-validated) text and
-    /// report whether keystrokes landed. Routes through the polished-final path so
-    /// the validated string is typed verbatim (no second canonicalize pass).
+    /// Insert the already-canonicalized final text through the fn-press session.
     @discardableResult
     func insertFinalTranscript(_ text: String) -> Bool {
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        if let textInsertionSession {
-            return textInsertionSession.acceptFinalPolishedTranscript(text)
-        }
-
-        let oneShotSession = ProgressiveTranscriptInsertionSession(
-            insertionSession: textInsertion.startInsertionSession(),
-            canonicalize: { [corrections] text in corrections.canonicalize(text) },
-            target: AXInsertionTargetObserver()
-        )
-        let applied = oneShotSession.acceptFinalPolishedTranscript(text)
-        oneShotSession.finish()
-        return applied
+        return textInsertionSession?.insertFinal(text) ?? false
     }
 
     @discardableResult
@@ -543,9 +520,13 @@ public final class AppCoordinator: ObservableObject {
         applied: Bool,
         finalInsertedTranscript: String? = nil,
         recordingID: String? = nil,
-        session: ProgressiveTranscriptInsertionSession? = nil
+        session: FinalTranscriptInsertionSession? = nil
     ) -> String? {
-        guard enabled, finalInsertedTranscript != nil else { return nil }
+        guard enabled,
+              applied,
+              finalInsertedTranscript == polishResult.text else {
+            return nil
+        }
         return recordCorrectionEvidence(
             rawTranscript: rawTranscript,
             polishResult: polishResult,
@@ -565,7 +546,7 @@ public final class AppCoordinator: ObservableObject {
         applied: Bool,
         finalInsertedTranscript: String? = nil,
         recordingID: String? = nil,
-        session: ProgressiveTranscriptInsertionSession? = nil
+        session: FinalTranscriptInsertionSession? = nil
     ) -> String {
         let canonicalizedRaw = corrections.canonicalize(rawTranscript)
         return correctionEvidence.record(CorrectionEvidence(
@@ -588,7 +569,7 @@ public final class AppCoordinator: ObservableObject {
     func scheduleObservedUserEditCapture(
         evidenceID: String,
         finalInsertedTranscript: String,
-        session: ProgressiveTranscriptInsertionSession?
+        session: FinalTranscriptInsertionSession?
     ) {
         cancelObservedEditCaptureChecks()
         guard let session else { return }
@@ -632,7 +613,7 @@ public final class AppCoordinator: ObservableObject {
     func captureObservedUserEdit(
         evidenceID: String,
         finalInsertedTranscript: String,
-        session: ProgressiveTranscriptInsertionSession
+        session: FinalTranscriptInsertionSession
     ) -> Bool {
         guard let observedInsertedText = session.observedInsertedText(),
               observedInsertedText != finalInsertedTranscript,
@@ -715,7 +696,7 @@ public final class AppCoordinator: ObservableObject {
             log.info("polish abandoned: new recording requested (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
         case .suppressedByInsertion:
             log.info(
-                "polish suppressed: insertion append-only " +
+                "polish suppressed: guarded final insertion refused " +
                     "(rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
                     engineDetail
             )
@@ -736,12 +717,8 @@ public final class AppCoordinator: ObservableObject {
         textInsertionSession = nil
     }
 
-    private func cancelTextInsertionSession(retractInsertedText: Bool = false) {
-        if retractInsertedText {
-            textInsertionSession?.cancelAndRetractInsertedText()
-        } else {
-            textInsertionSession?.cancel()
-        }
+    private func cancelTextInsertionSession() {
+        textInsertionSession?.cancel()
         textInsertionSession = nil
     }
 
@@ -758,7 +735,7 @@ public final class AppCoordinator: ObservableObject {
         audio.onAmplitude = nil
         audio.onRawBuffer = nil
         await transcriber.finish()
-        indicator.hide()
+        if !insertionUnavailable { indicator.hide() }
         amplitude = 0
         partial = ""
         transcriptionTask = nil

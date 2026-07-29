@@ -175,8 +175,7 @@ private final class NoOpInsertionBackend: TextInsertionBackend {
 }
 
 private final class NoOpInsertionSession: TextInsertionSession {
-    func insert(_ text: String) {}
-    func deleteBackward(count: Int) {}
+    func insert(_ text: String) -> Bool { true }
     func finish() {}
     func cancel() {}
 }

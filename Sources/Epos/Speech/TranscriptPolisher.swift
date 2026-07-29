@@ -270,7 +270,7 @@ public struct TranscriptPolisher: Sendable {
     }
 
     /// Downgrade a `.applied` outcome when the insertion layer reports that no
-    /// keystrokes actually landed (the append-only latch suppressed the retype),
+    /// keystrokes actually landed (the final target guard refused the write),
     /// so observability never claims a polish the user didn't receive.
     public static func effectivePolishOutcome(_ result: PolishResult, applied: Bool) -> PolishOutcome {
         ((result.outcome == .applied || result.outcome == .deterministicCleanup) && !applied)
