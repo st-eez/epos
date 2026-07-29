@@ -20,6 +20,7 @@ public final class CorrectionStore: ObservableObject {
     }
 
     public var rules: [TranscriptCanonicalizer.Rule] { canonicalizer.rules }
+    public var isReadOnly: Bool { dictionary.isReadOnly }
 
     public var resolvedSuggestionRecordIDs: Set<String> {
         Set(dictionary.records.compactMap { record in
@@ -32,24 +33,45 @@ public final class CorrectionStore: ObservableObject {
         canonicalizer.canonicalize(text)
     }
 
-    /// Persist `rules` and refresh the live canonicalizer so the next insertion uses them.
-    public func save(_ rules: [TranscriptCanonicalizer.Rule]) {
-        let records = recordsPreservingResolvedSuggestions(from: rules)
-        TranscriptCanonicalizer.saveRules(rules, to: defaults)
-        CorrectionDictionary.saveRecords(records, to: defaults)
-        dictionary = CorrectionDictionary(records: records)
+    /// Persist editor-owned records without flattening stable record identity and
+    /// person lexicons through the runtime `Rule` representation.
+    public func saveEditorRecords(_ records: [CorrectionRecord]) {
+        guard !isReadOnly else { return }
+        let visibleRecordIDs = Set(dictionary.records.compactMap { record -> String? in
+            guard record.status == .active,
+                  !CorrectionRuleCompiler.compile(records: [record]).isEmpty else {
+                return nil
+            }
+            return record.id
+        })
+        let editedIDs = Set(records.map(\.id))
+        let hiddenRecords = dictionary.records.filter {
+            !visibleRecordIDs.contains($0.id) && !editedIDs.contains($0.id)
+        }
+        let savedRecords = records + hiddenRecords
+
+        guard CorrectionDictionary.saveRecords(savedRecords, to: defaults) else { return }
+        dictionary = CorrectionDictionary(records: savedRecords)
         canonicalizer = TranscriptCanonicalizer(
-            rules: CorrectionRuleCompiler.compile(records: dictionary.records)
+            rules: CorrectionRuleCompiler.compile(records: savedRecords)
         )
     }
 
     @discardableResult
     public func acceptPromotion(_ assessment: CorrectionPromotionAssessment) -> Bool {
+        guard !isReadOnly else { return false }
         guard let promotedRecord = assessment.promotedRecord else { return false }
         if let existing = dictionary.records.first(where: { $0.id == assessment.record.id }),
            existing.source == .suggested,
            existing.status != .suggested {
             return false
+        }
+
+        if hasEquivalentActiveRecord(to: promotedRecord) {
+            var resolvedMarker = assessment.record
+            resolvedMarker.status = .disabled
+            upsertRecord(resolvedMarker)
+            return true
         }
 
         upsertRecord(promotedRecord)
@@ -58,6 +80,7 @@ public final class CorrectionStore: ObservableObject {
 
     @discardableResult
     public func rejectSuggestion(_ assessment: CorrectionPromotionAssessment) -> Bool {
+        guard !isReadOnly else { return false }
         guard assessment.record.status == .suggested else { return false }
         if let existing = dictionary.records.first(where: { $0.id == assessment.record.id }),
            existing.status == .active {
@@ -77,40 +100,20 @@ public final class CorrectionStore: ObservableObject {
             dictionary.records.append(record)
         }
 
-        CorrectionDictionary.saveRecords(dictionary.records, to: defaults)
+        guard CorrectionDictionary.saveRecords(dictionary.records, to: defaults) else { return }
         canonicalizer = TranscriptCanonicalizer(
             rules: CorrectionRuleCompiler.compile(records: dictionary.records)
         )
     }
 
-    private func recordsPreservingResolvedSuggestions(
-        from rules: [TranscriptCanonicalizer.Rule]
-    ) -> [CorrectionRecord] {
-        var records = CorrectionDictionary.records(from: rules)
-        let resolvedSuggestions = dictionary.records.filter { record in
-            record.source == .suggested && record.status != .suggested
+    private func hasEquivalentActiveRecord(to record: CorrectionRecord) -> Bool {
+        let rules = CorrectionRuleCompiler.compile(records: [record])
+        guard !rules.isEmpty else { return false }
+        return dictionary.records.contains { candidate in
+            candidate.id != record.id &&
+                candidate.status == .active &&
+                CorrectionRuleCompiler.compile(records: [candidate]) == rules
         }
-
-        for suggestion in resolvedSuggestions {
-            if let index = records.firstIndex(where: { $0.id == suggestion.id }) {
-                records[index] = suggestion
-                continue
-            }
-
-            if let rule = CorrectionRuleCompiler.compile(records: [suggestion]).first,
-               let equivalentIndex = records.firstIndex(where: { candidate in
-                   candidate.source != .builtIn &&
-                       CorrectionRuleCompiler.compile(records: [candidate]).first == rule
-               }) {
-                records[equivalentIndex] = suggestion
-                continue
-            }
-
-            if suggestion.status == .rejected {
-                records.append(suggestion)
-            }
-        }
-
-        return records
     }
+
 }

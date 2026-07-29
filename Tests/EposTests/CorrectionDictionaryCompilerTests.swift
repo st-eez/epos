@@ -86,6 +86,33 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
         )
     }
 
+    func testSemanticAliasPunctuationMustBePresent() {
+        let canonicalizer = TranscriptCanonicalizer(rules: [
+            .init(canonical: "CPlusPlus", aliases: ["C++"]),
+            .init(canonical: "GitFile", aliases: [".git"]),
+            .init(canonical: "FooCall", aliases: ["foo()"]),
+            .init(canonical: "--", aliases: ["dash++dash"])
+        ])
+
+        XCTAssertEqual(
+            canonicalizer.canonicalize("C git foo dash dash verbose"),
+            "C git foo dash dash verbose"
+        )
+        XCTAssertEqual(
+            canonicalizer.canonicalize("C++ .git foo() dash++dash"),
+            "CPlusPlus GitFile FooCall --"
+        )
+    }
+
+    func testContextMatchingUsesWholeTokens() {
+        let canonicalizer = TranscriptCanonicalizer(rules: [
+            .init(canonical: "WidgetPro", aliases: ["widget pro"], contexts: ["ask"])
+        ])
+
+        XCTAssertEqual(canonicalizer.canonicalize("task widget pro"), "task widget pro")
+        XCTAssertEqual(canonicalizer.canonicalize("ask widget pro"), "ask WidgetPro")
+    }
+
     func testCompiledVocabularyMatchesDefaultVocabulary() {
         let defaultCanonicalizer = TranscriptCanonicalizer()
         let compiledCanonicalizer = TranscriptCanonicalizer(
@@ -163,6 +190,11 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
                 )
             ]
         )
+        XCTAssertEqual(
+            TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: records))
+                .canonicalize("dash dash verbose"),
+            "dash dash verbose"
+        )
     }
 
     func testPersonLexiconCompilesAmbiguousAliasesAsNameSlotRules() {
@@ -195,7 +227,7 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
         )
     }
 
-    func testPersonLexiconDoesNotBiasRecognizerTowardAmbiguousAliases() {
+    func testPersonLexiconBiasesRecognizerTowardCanonicalOnly() {
         let canonicalizer = TranscriptCanonicalizer(
             rules: CorrectionRuleCompiler.compile(records: [
                 CorrectionRecord(
@@ -212,7 +244,7 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
         )
 
         XCTAssertTrue(canonicalizer.speechContextualStrings.contains("Test Person"))
-        XCTAssertTrue(canonicalizer.speechContextualStrings.contains("tas"))
+        XCTAssertFalse(canonicalizer.speechContextualStrings.contains("tas"))
         XCTAssertFalse(canonicalizer.speechContextualStrings.contains("steph"))
         XCTAssertFalse(canonicalizer.speechContextualStrings.contains("step"))
         XCTAssertFalse(canonicalizer.speechContextualStrings.contains("stuff"))

@@ -13,7 +13,7 @@ struct CorrectionDraftRow: View {
         HStack(alignment: .top, spacing: 10) {
             orderControls
                 .frame(width: 56)
-            correctionField("spoken phrase, another phrase", text: $row.aliasesText, isInvalid: row.aliases.isEmpty)
+            heardPhrasesFields
                 .frame(minWidth: 330, maxWidth: .infinity)
             correctionField("replacement", text: $row.canonical, isInvalid: row.trimmedCanonical.isEmpty)
                 .frame(width: 170)
@@ -31,6 +31,30 @@ struct CorrectionDraftRow: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
+    }
+
+    @ViewBuilder
+    private var heardPhrasesFields: some View {
+        if row.matchStrategy == .personNameSlot {
+            VStack(spacing: 4) {
+                correctionField(
+                    "name-context phrase, another phrase",
+                    text: $row.aliasesText,
+                    isInvalid: row.aliases.isEmpty
+                )
+                correctionField(
+                    "always-safe phrase (optional)",
+                    text: $row.safeAliasesText,
+                    isInvalid: false
+                )
+            }
+        } else {
+            correctionField(
+                "spoken phrase, another phrase",
+                text: $row.aliasesText,
+                isInvalid: row.aliases.isEmpty
+            )
+        }
     }
 
     private var orderControls: some View {

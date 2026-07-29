@@ -1,16 +1,43 @@
 import Foundation
 
 enum CorrectionMatchContext {
+    static func uniqueAliases(_ aliases: [String]) -> [String] {
+        var seen: Set<String> = []
+        return aliases.filter { alias in
+            let key = alias.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard !key.isEmpty, !seen.contains(key) else { return false }
+            seen.insert(key)
+            return true
+        }
+    }
+
     static func regex(forAlias alias: String) -> NSRegularExpression? {
-        let parts = alias
-            .split { !$0.isLetter && !$0.isNumber }
-            .map(String.init)
+        let nsAlias = alias as NSString
+        let fullRange = NSRange(location: 0, length: nsAlias.length)
+        let tokenMatches = aliasTokenRegex?.matches(in: alias, range: fullRange) ?? []
+        guard !tokenMatches.isEmpty else { return nil }
 
-        guard !parts.isEmpty else { return nil }
+        var body = ""
+        var cursor = 0
+        for (index, tokenMatch) in tokenMatches.enumerated() {
+            let separatorRange = NSRange(
+                location: cursor,
+                length: tokenMatch.range.location - cursor
+            )
+            if separatorRange.length > 0 {
+                let separator = nsAlias.substring(with: separatorRange)
+                let isInternal = index > 0
+                body += separatorPattern(separator, isInternal: isInternal)
+            }
+            body += NSRegularExpression.escapedPattern(
+                for: nsAlias.substring(with: tokenMatch.range)
+            )
+            cursor = tokenMatch.range.location + tokenMatch.range.length
+        }
+        if cursor < nsAlias.length {
+            body += NSRegularExpression.escapedPattern(for: nsAlias.substring(from: cursor))
+        }
 
-        let body = parts
-            .map(NSRegularExpression.escapedPattern(for:))
-            .joined(separator: #"(?:[\s,\-\.']+)"#)
         // Unicode-aware boundaries: an accented letter neighbor (e.g. "caféepos")
         // is still mid-word, so ASCII-only [A-Za-z0-9] classes are too narrow.
         let pattern = #"(?<![\p{L}\p{N}])"# + body + #"(?![\p{L}\p{N}])"#
@@ -50,9 +77,15 @@ enum CorrectionMatchContext {
 
     static func hasContext(_ contexts: [String], before range: NSRange, in text: NSString) -> Bool {
         let prefix = normalizedWindow(before: range, in: text, maxLength: 64)
+        let prefixTokens = prefix.split(separator: " ").map(String.init)
         return contexts.contains { context in
-            let normalizedContext = normalizedPhrase(context)
-            return !normalizedContext.isEmpty && prefix.contains(normalizedContext)
+            let contextTokens = normalizedPhrase(context).split(separator: " ").map(String.init)
+            guard !contextTokens.isEmpty, contextTokens.count <= prefixTokens.count else {
+                return false
+            }
+            return (0...(prefixTokens.count - contextTokens.count)).contains { start in
+                Array(prefixTokens[start..<(start + contextTokens.count)]) == contextTokens
+            }
         }
     }
 
@@ -141,6 +174,18 @@ enum CorrectionMatchContext {
         guard !phraseTokens.isEmpty, tokens.count >= phraseTokens.count else { return false }
         return Array(tokens.prefix(phraseTokens.count)) == phraseTokens
     }
+
+    private static func separatorPattern(_ separator: String, isInternal: Bool) -> String {
+        let flexibleSeparators = CharacterSet.whitespacesAndNewlines
+            .union(CharacterSet(charactersIn: #",-.'"#))
+        if isInternal,
+           separator.unicodeScalars.allSatisfy({ flexibleSeparators.contains($0) }) {
+            return #"(?:[\s,\-\.']+)"#
+        }
+        return NSRegularExpression.escapedPattern(for: separator)
+    }
+
+    private static let aliasTokenRegex = try? NSRegularExpression(pattern: #"[\p{L}\p{N}]+"#)
 
     private static let personPrecedingCues = [
         "ask",

@@ -2,6 +2,87 @@ import XCTest
 @testable import Epos
 
 final class CorrectionDictionaryPersistenceTests: XCTestCase {
+    func testFutureDictionaryLoadsReadableRecordsWithoutRewritingStorage() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let futureJSON = """
+        {"version": 2, "futureDictionaryField": "preserve me", "records": [
+          {"id": "builtin.yesterday-saying", "kind": "replacement", "canonical": "future canonical", \
+        "aliases": ["future alias"], "contexts": [], "source": "builtIn", "status": "disabled", \
+        "futureRecordField": {"meaning": "preserve me too"}}
+        ]}
+        """
+        let legacyJSON = #"{"version":1,"rules":[],"futureLegacyField":"preserve me"}"#
+        defaults.set(futureJSON, forKey: CorrectionDictionary.recordsDefaultsKey)
+        defaults.set(legacyJSON, forKey: TranscriptCanonicalizer.rulesDefaultsKey)
+
+        let loaded = CorrectionDictionary.load(from: defaults)
+
+        XCTAssertEqual(
+            loaded.records,
+            [
+                CorrectionRecord(
+                    id: "builtin.yesterday-saying",
+                    kind: .replacement,
+                    canonical: "future canonical",
+                    aliases: ["future alias"],
+                    source: .builtIn,
+                    status: .disabled
+                )
+            ]
+        )
+        XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), futureJSON)
+        XCTAssertEqual(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey), legacyJSON)
+    }
+
+    @MainActor
+    func testCorrectionStoreRefusesToSaveFutureDictionary() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let futureJSON = """
+        {"version": 2, "futureDictionaryField": "preserve me", "records": [
+          {"id": "manual.future", "kind": "replacement", "canonical": "Future", \
+        "aliases": ["future"], "contexts": [], "source": "manual", "status": "active"}
+        ]}
+        """
+        let legacyJSON = #"{"version":1,"rules":[],"futureLegacyField":"preserve me"}"#
+        defaults.set(futureJSON, forKey: CorrectionDictionary.recordsDefaultsKey)
+        defaults.set(legacyJSON, forKey: TranscriptCanonicalizer.rulesDefaultsKey)
+        let store = CorrectionStore(defaults: defaults)
+
+        XCTAssertTrue(store.isReadOnly)
+        store.saveEditorRecords(CorrectionDictionary.defaultRecords)
+        XCTAssertFalse(CorrectionDictionary.saveRecords(CorrectionDictionary.defaultRecords, to: defaults))
+
+        XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), futureJSON)
+        XCTAssertEqual(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey), legacyJSON)
+        XCTAssertEqual(store.dictionary.records.map(\.id), ["manual.future"])
+    }
+
+    @MainActor
+    func testFutureDictionaryWithChangedRecordsShapeRemainsProtected() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let futureJSON = """
+        {"version": 2, "records": {"items": [{"id": "future.record"}]}}
+        """
+        defaults.set(futureJSON, forKey: CorrectionDictionary.recordsDefaultsKey)
+
+        let store = CorrectionStore(defaults: defaults)
+
+        XCTAssertTrue(store.isReadOnly)
+        XCTAssertTrue(store.dictionary.records.isEmpty)
+        store.saveEditorRecords(CorrectionDictionary.defaultRecords)
+        XCTAssertFalse(CorrectionDictionary.saveRecords(CorrectionDictionary.defaultRecords, to: defaults))
+        XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), futureJSON)
+    }
+
     func testDictionaryMigratesPersistedBuiltInRecordsToCurrentDefinitions() throws {
         struct StoredDictionary: Codable {
             var version: Int
@@ -39,6 +120,7 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(persisted.records.count, 1)
     }
 
+    @MainActor
     func testDictionaryKeepsReadableRecordsWhenOneRecordIsUndecodable() throws {
         // One record carrying an unknown enum case (written by a future build that
         // was then downgraded) must not fail the whole array decode — that silently
@@ -61,8 +143,12 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let loaded = CorrectionDictionary.load(from: defaults)
 
         XCTAssertEqual(loaded.records.map(\.id), ["manual.cmux"])
-        // The stripped set is not persisted by the load — the original blob stays
-        // intact until the user's own next save.
+        XCTAssertTrue(loaded.isReadOnly)
+        let store = CorrectionStore(defaults: defaults)
+        XCTAssertTrue(store.isReadOnly)
+        store.saveEditorRecords(CorrectionDictionary.defaultRecords)
+        XCTAssertFalse(CorrectionDictionary.saveRecords(CorrectionDictionary.defaultRecords, to: defaults))
+        // Neither load nor an explicit save may overwrite the unreadable record.
         XCTAssertEqual(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey), json)
     }
 
@@ -178,50 +264,49 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         })
     }
 
-    func testCurrentManualSavePersistsNonDefaultRulesAsManualRecords() throws {
+    func testCurrentManualRecordSavePersistsNonDefaultRules() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let rule = TranscriptCanonicalizer.Rule(
+        let record = CorrectionRecord(
+            id: "manual.widget-pro",
+            kind: .replacement,
             canonical: "WidgetPro",
-            aliases: ["widget pro"]
+            aliases: ["widget pro"],
+            source: .manual,
+            status: .active
         )
 
-        TranscriptCanonicalizer.saveRules([rule], to: defaults)
+        CorrectionDictionary.saveRecords([record], to: defaults)
 
-        let record = try XCTUnwrap(CorrectionDictionary.load(from: defaults).records.first)
-        XCTAssertEqual(record.source, .manual)
-        XCTAssertEqual(record.canonical, "WidgetPro")
-        XCTAssertEqual(record.aliases, ["widget pro"])
+        let loaded = try XCTUnwrap(CorrectionDictionary.load(from: defaults).records.first)
+        XCTAssertEqual(loaded, record)
         XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open widget pro"), "open WidgetPro")
     }
 
     @MainActor
-    func testCorrectionStoreSavesRulesAsDictionaryRecords() throws {
+    func testCorrectionStoreSavesEditorRecords() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let store = CorrectionStore(defaults: defaults)
-        store.save([
-            .init(canonical: "WidgetPro", aliases: ["widget pro"], contexts: ["open"])
-        ])
+        let record = CorrectionRecord(
+            id: "manual.widget-pro",
+            kind: .replacement,
+            canonical: "WidgetPro",
+            aliases: ["widget pro"],
+            contexts: ["open"],
+            source: .manual,
+            status: .active
+        )
+        store.saveEditorRecords([record])
 
         XCTAssertNotNil(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
         XCTAssertEqual(
             CorrectionDictionary.load(from: defaults).records,
-            [
-                CorrectionRecord(
-                    id: "manual.0.widgetpro",
-                    kind: .replacement,
-                    canonical: "WidgetPro",
-                    aliases: ["widget pro"],
-                    contexts: ["open"],
-                    source: .manual,
-                    status: .active
-                )
-            ]
+            [record]
         )
         XCTAssertEqual(CorrectionStore(defaults: defaults).canonicalize("open widget pro"), "open WidgetPro")
         XCTAssertEqual(CorrectionStore(defaults: defaults).canonicalize("open siemux"), "open siemux")
@@ -307,8 +392,8 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         )
 
         let store = CorrectionStore(defaults: defaults)
-        let editorRules = CorrectionDraft.fromRules(store.rules).map(\.rule)
-        store.save(editorRules)
+        let editorRecords = CorrectionDraft.fromRecords(store.dictionary.records).map(\.record)
+        store.saveEditorRecords(editorRecords)
 
         let saved = CorrectionDictionary.load(from: defaults)
         let canonicalizer = TranscriptCanonicalizer(
@@ -437,6 +522,56 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
     }
 
     @MainActor
+    func testAcceptingEquivalentSuggestionPreservesExistingRecordIdentity() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let existing = CorrectionRecord(
+            id: "imported.widget-pro",
+            kind: .replacement,
+            canonical: "WidgetPro",
+            aliases: ["widget pro"],
+            source: .imported,
+            status: .active
+        )
+        XCTAssertTrue(CorrectionDictionary.saveRecords([existing], to: defaults))
+        let store = CorrectionStore(defaults: defaults)
+        let evidence = [
+            editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
+            editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
+        ]
+        let suggestion = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
+        let assessment = CorrectionPromotionGate.assess(
+            record: suggestion,
+            evidence: evidence,
+            activeRecords: [existing]
+        )
+
+        XCTAssertTrue(store.acceptPromotion(assessment))
+        let resolved = try XCTUnwrap(store.dictionary.records.last)
+        XCTAssertEqual(store.dictionary.records.first, existing)
+        XCTAssertEqual(resolved.id, suggestion.id)
+        XCTAssertEqual(resolved.source, .suggested)
+        XCTAssertEqual(resolved.status, .disabled)
+
+        let unsaved = CorrectionRecord(
+            id: "manual.other",
+            kind: .replacement,
+            canonical: "Other",
+            aliases: ["other phrase"],
+            source: .manual,
+            status: .active
+        )
+        store.saveEditorRecords(CorrectionDraft.fromRecords(store.dictionary.records).map(\.record) + [unsaved])
+
+        let saved = CorrectionDictionary.load(from: defaults).records
+        XCTAssertEqual(saved.first, existing)
+        XCTAssertTrue(saved.contains(resolved))
+        XCTAssertTrue(saved.contains(unsaved))
+    }
+
+    @MainActor
     func testCorrectionStoreRejectsBlockedPromotion() throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
@@ -501,7 +636,7 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let rejectedAssessment = CorrectionPromotionGate.assess(record: rejectedRecord, evidence: rejectedEvidence)
         XCTAssertTrue(store.rejectSuggestion(rejectedAssessment))
 
-        store.save(store.rules)
+        store.saveEditorRecords(CorrectionDraft.fromRecords(store.dictionary.records).map(\.record))
 
         let records = CorrectionDictionary.load(from: defaults).records
         XCTAssertEqual(records.first { $0.id == "suggested.widget-pro.to-widgetpro" }?.status, .active)
@@ -527,7 +662,7 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
         XCTAssertTrue(store.acceptPromotion(assessment))
 
-        store.save([])
+        store.saveEditorRecords([])
 
         XCTAssertNil(CorrectionDictionary.load(from: defaults).records.first { $0.id == record.id })
         XCTAssertEqual(CorrectionStore(defaults: defaults).canonicalize("open widget pro"), "open widget pro")
@@ -548,7 +683,7 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
         XCTAssertTrue(store.rejectSuggestion(assessment))
 
-        store.save([])
+        store.saveEditorRecords([])
 
         let rejected = try XCTUnwrap(CorrectionDictionary.load(from: defaults).records.first { $0.id == record.id })
         XCTAssertEqual(rejected.status, .rejected)

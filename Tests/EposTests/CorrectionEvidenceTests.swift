@@ -397,7 +397,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         XCTAssertEqual(dictionary.appliedRecordIDs(in: "next step"), [String]())
     }
 
-    func testAppliedRuleIDsIncludeCascadedRules() {
+    func testRulesMatchOnlyOriginalTranscriptAndAppliedIDsAgree() {
         let dictionary = CorrectionDictionary(records: [
             CorrectionRecord(
                 id: "first",
@@ -421,9 +421,40 @@ final class CorrectionEvidenceTests: XCTestCase {
             TranscriptCanonicalizer(
                 rules: CorrectionRuleCompiler.compile(records: dictionary.records)
             ).canonicalize("foo"),
-            "Baz"
+            "bar"
         )
-        XCTAssertEqual(dictionary.appliedRecordIDs(in: "foo"), ["first", "second"])
+        XCTAssertEqual(dictionary.appliedRecordIDs(in: "foo"), ["first"])
+    }
+
+    func testDashDashFlagAttributionRequiresActiveRule() {
+        let active = CorrectionRecord(
+            id: "flag",
+            kind: .spokenCommand,
+            canonical: "--",
+            aliases: ["dash dash"],
+            source: .manual,
+            status: .active
+        )
+        let activeDictionary = CorrectionDictionary(records: [active])
+
+        XCTAssertEqual(
+            TranscriptCanonicalizer(
+                rules: CorrectionRuleCompiler.compile(records: activeDictionary.records)
+            ).canonicalize("dash dash verbose"),
+            "--verbose"
+        )
+        XCTAssertEqual(activeDictionary.appliedRecordIDs(in: "dash dash verbose"), ["flag"])
+
+        var disabled = active
+        disabled.status = .disabled
+        let disabledDictionary = CorrectionDictionary(records: [disabled])
+        XCTAssertEqual(
+            TranscriptCanonicalizer(
+                rules: CorrectionRuleCompiler.compile(records: disabledDictionary.records)
+            ).canonicalize("dash dash verbose"),
+            "dash dash verbose"
+        )
+        XCTAssertEqual(disabledDictionary.appliedRecordIDs(in: "dash dash verbose"), [])
     }
 
     @MainActor

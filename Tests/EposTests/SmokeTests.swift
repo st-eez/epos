@@ -455,14 +455,20 @@ final class SmokeTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let rules = [
-            TranscriptCanonicalizer.Rule(
-                canonical: "WidgetPro",
-                aliases: ["widget pro"],
-                contexts: ["open"]
-            )
-        ]
-        TranscriptCanonicalizer.saveRules(rules, to: defaults)
+        CorrectionDictionary.saveRecords(
+            [
+                CorrectionRecord(
+                    id: "manual.widget-pro",
+                    kind: .replacement,
+                    canonical: "WidgetPro",
+                    aliases: ["widget pro"],
+                    contexts: ["open"],
+                    source: .manual,
+                    status: .active
+                )
+            ],
+            to: defaults
+        )
 
         let canonicalizer = TranscriptCanonicalizer.load(from: defaults)
 
@@ -489,7 +495,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey))
     }
 
-    func testCanonicalizerSavesEmptyRuleList() {
+    func testCanonicalizerLoadsEmptyDictionary() {
         let suiteName = "EposTests-\(UUID().uuidString)"
         guard let defaults = UserDefaults(suiteName: suiteName) else {
             XCTFail("Unable to create test defaults")
@@ -497,9 +503,9 @@ final class SmokeTests: XCTestCase {
         }
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        TranscriptCanonicalizer.saveRules([], to: defaults)
+        CorrectionDictionary.saveRecords([], to: defaults)
 
-        XCTAssertNotNil(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey))
+        XCTAssertNotNil(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
         XCTAssertTrue(TranscriptCanonicalizer.rules(from: defaults).isEmpty)
         XCTAssertEqual(TranscriptCanonicalizer.load(from: defaults).canonicalize("open siemux"), "open siemux")
     }
@@ -511,7 +517,18 @@ final class SmokeTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
         let store = CorrectionStore(defaults: defaults)
-        store.save([.init(canonical: "WidgetPro", aliases: ["widget pro"])])
+        store.saveEditorRecords(
+            [
+                CorrectionRecord(
+                    id: "manual.widget-pro",
+                    kind: .replacement,
+                    canonical: "WidgetPro",
+                    aliases: ["widget pro"],
+                    source: .manual,
+                    status: .active
+                )
+            ]
+        )
 
         // Live instance reflects the save without a reload.
         XCTAssertEqual(store.canonicalize("open widget pro"), "open WidgetPro")
@@ -1016,7 +1033,7 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(canonicalizer.canonicalVocabularyStrings, ["CMUX", "Epos"])
     }
 
-    func testSpeechContextualStringsIncludesUsefulUnguardedAliases() {
+    func testSpeechContextualStringsExcludesPostHocErrorAliases() {
         let canonicalizer = TranscriptCanonicalizer(rules: [
             .init(canonical: "CMUX", aliases: ["see mux"]),
             .init(canonical: "--", aliases: ["dash dash"]),
@@ -1028,7 +1045,7 @@ final class SmokeTests: XCTestCase {
 
         XCTAssertEqual(
             canonicalizer.speechContextualStrings,
-            ["CMUX", "see mux", "dash dash", "slash", "cmox", "Epos", "Aster"]
+            ["CMUX", "Epos", "Aster"]
         )
     }
 

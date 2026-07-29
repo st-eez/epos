@@ -29,6 +29,7 @@ struct CorrectionsEditorView: View {
         }
         .frame(minWidth: 980, minHeight: 460)
         .background(Color(nsColor: .windowBackgroundColor))
+        .disabled(store.isReadOnly)
         .onAppear(perform: reload)
     }
 
@@ -153,7 +154,10 @@ struct CorrectionsEditorView: View {
 
     @ViewBuilder
     private var statusLabel: some View {
-        if hasInvalidRows {
+        if store.isReadOnly {
+            Label("Read-only: contains unsupported correction data", systemImage: "lock.fill")
+                .foregroundStyle(.secondary)
+        } else if hasInvalidRows {
             Label("Complete highlighted entries", systemImage: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
         } else if hasUnsavedChanges {
@@ -187,11 +191,11 @@ struct CorrectionsEditorView: View {
     }
 
     private func restoreDefaults() {
-        rows = CorrectionDraft.fromRules(TranscriptCanonicalizer.defaultRules)
+        rows = CorrectionDraft.fromRecords(CorrectionDictionary.defaultRecords)
     }
 
     private func reload() {
-        let loadedRows = CorrectionDraft.fromRules(store.rules)
+        let loadedRows = CorrectionDraft.fromRecords(store.dictionary.records)
         rows = loadedRows
         savedRows = loadedRows
         reloadSuggestions()
@@ -222,14 +226,20 @@ struct CorrectionsEditorView: View {
         // reorders (rule precedence is order-dependent). Merge just the accepted
         // rule into both lists so the unsaved diff stays exactly the user's edits.
         let accepted = CorrectionDraft.newDrafts(
-            in: CorrectionDraft.fromRules(store.rules),
+            in: CorrectionDraft.fromRecords(store.dictionary.records),
             notIn: savedRows
         )
         // A user may have already typed the same correction as an unsaved row —
         // appending it again would show (and later persist) a duplicate. The row
         // still joins savedRows: the store now owns that rule, so the matching
         // unsaved row correctly stops counting as an edit.
-        rows.append(contentsOf: accepted.filter { !rows.contains($0) })
+        for acceptedDraft in accepted {
+            if let matchingIndex = rows.firstIndex(of: acceptedDraft) {
+                rows[matchingIndex] = rows[matchingIndex].adoptingRecordIdentity(from: acceptedDraft)
+            } else {
+                rows.append(acceptedDraft)
+            }
+        }
         savedRows.append(contentsOf: accepted)
         reloadSuggestions()
     }
@@ -245,6 +255,6 @@ func saveCorrectionDrafts(
     _ drafts: [CorrectionDraft],
     to store: CorrectionStore
 ) -> [CorrectionDraft] {
-    store.save(drafts.map(\.rule))
-    return CorrectionDraft.fromRules(store.rules)
+    store.saveEditorRecords(drafts.map(\.record))
+    return CorrectionDraft.fromRecords(store.dictionary.records)
 }

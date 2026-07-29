@@ -1,13 +1,14 @@
 # Recognition bias & transcriber choice: decision
 
-**Decision (2026-05-28, updated 2026-06-02):** Epos uses Apple
+**Decision (2026-05-28, updated 2026-07-29):** Epos uses Apple
 `SpeechTranscriber` + the `TranscriptCanonicalizer` post-hoc correction layer. It
 does **not** use `DictationTranscriber` or a custom language model. Domain-jargon
 accuracy is still improved primarily by growing the canonicalizer's alias list.
-The live path now also passes the same correction vocabulary as lightweight
-`AnalysisContext.contextualStrings` because it is bounded, local, and cheap, but
-current saved-recording evals show no measurable transcript improvement from
-that recognizer hint.
+The live path also passes canonical correction vocabulary as lightweight
+`AnalysisContext.contextualStrings` because it is bounded, local, and cheap.
+Post-hoc aliases are excluded because many are observed recognizer errors rather
+than desired vocabulary. Current saved-recording evals show no measurable
+transcript improvement from either canonical-only or alias-inclusive hints.
 
 This doc records the empirical justification that `baseline.md` references.
 
@@ -89,8 +90,8 @@ Both marginal.
   mishearings surface. Remaining gaps (e.g. "Semux"→CMUX, "Stas"→Stath) are alias
   adds, not a transcriber switch.
 - `AnalysisContext.contextualStrings` is an auxiliary, best-effort recognizer
-  hint. It should use the alias-inclusive correction vocabulary, while polish
-  prompts should use canonical spellings only.
+  hint. It uses canonical spellings only; post-hoc error aliases stay confined
+  to the deterministic correction layer.
 - Unsolved by every approach tested: "stuff"→Stath (a common word, deliberately not
   aliased to avoid corrupting normal speech).
 

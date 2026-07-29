@@ -42,9 +42,16 @@ public struct CorrectionDictionary: Equatable, Sendable {
     private static let log = EposLogger(category: "corrections")
 
     public var records: [CorrectionRecord]
+    public let isReadOnly: Bool
 
     public init(records: [CorrectionRecord] = Self.defaultRecords) {
         self.records = records
+        self.isReadOnly = false
+    }
+
+    private init(records: [CorrectionRecord], isReadOnly: Bool) {
+        self.records = records
+        self.isReadOnly = isReadOnly
     }
 
     public static func load(from defaults: UserDefaults = .standard) -> CorrectionDictionary {
@@ -55,20 +62,26 @@ public struct CorrectionDictionary: Equatable, Sendable {
         if result.shouldRemoveLegacyRules {
             defaults.removeObject(forKey: TranscriptCanonicalizer.rulesDefaultsKey)
         }
-        return CorrectionDictionary(records: result.records)
+        return CorrectionDictionary(records: result.records, isReadOnly: result.isReadOnly)
     }
 
     public static func records(from defaults: UserDefaults = .standard) -> [CorrectionRecord] {
         storedRecords(from: defaults).records
     }
 
-    public static func saveRecords(_ records: [CorrectionRecord], to defaults: UserDefaults = .standard) {
+    @discardableResult
+    public static func saveRecords(
+        _ records: [CorrectionRecord],
+        to defaults: UserDefaults = .standard
+    ) -> Bool {
+        guard !hasProtectedStoredDictionary(in: defaults) else { return false }
         let storedDictionary = StoredDictionary(version: storedDictionaryVersion, records: records)
-        guard let data = try? JSONEncoder().encode(storedDictionary) else { return }
+        guard let data = try? JSONEncoder().encode(storedDictionary) else { return false }
         defaults.set(String(decoding: data, as: UTF8.self), forKey: recordsDefaultsKey)
+        return true
     }
 
-    public static func records(from rules: [TranscriptCanonicalizer.Rule]) -> [CorrectionRecord] {
+    private static func records(from rules: [TranscriptCanonicalizer.Rule]) -> [CorrectionRecord] {
         var defaultPairs = builtInRuleMigrationPairs()
 
         return rules.enumerated().map { index, rule in
@@ -275,8 +288,24 @@ public struct CorrectionDictionary: Equatable, Sendable {
 
     private static func storedRecords(from defaults: UserDefaults) -> StoredRecordsResult {
         if let rawDictionary = defaults.string(forKey: recordsDefaultsKey),
-           let data = rawDictionary.data(using: .utf8),
-           let storedDictionary = try? JSONDecoder().decode(TolerantStoredDictionary.self, from: data) {
+           let data = rawDictionary.data(using: .utf8) {
+            let storedVersion = try? JSONDecoder().decode(StoredDictionaryVersion.self, from: data).version
+            // A newer build may attach semantics to fields this version ignores.
+            // Protect its envelope before trying to decode the current records
+            // shape because the newer schema may have changed that shape too.
+            if let storedVersion, storedVersion > storedDictionaryVersion {
+                let readableRecords = (
+                    try? JSONDecoder().decode(TolerantStoredDictionary.self, from: data)
+                )?.records ?? []
+                return StoredRecordsResult(
+                    records: readableRecords,
+                    migratedRecords: nil,
+                    shouldRemoveLegacyRules: false,
+                    isReadOnly: true
+                )
+            }
+
+            if let storedDictionary = try? JSONDecoder().decode(TolerantStoredDictionary.self, from: data) {
             // Per-record tolerance: one record carrying an unknown enum case or a
             // future-added field must not throw away the WHOLE dictionary — that
             // silently reset every user correction to defaults, and the next save
@@ -302,8 +331,10 @@ public struct CorrectionDictionary: Equatable, Sendable {
             return StoredRecordsResult(
                 records: migrated.records,
                 migratedRecords: migrated.didChange && canPersistMigration ? migrated.records : nil,
-                shouldRemoveLegacyRules: migrated.didChange && canPersistMigration
+                shouldRemoveLegacyRules: migrated.didChange && canPersistMigration,
+                isReadOnly: storedDictionary.undecodableRecordCount > 0
             )
+            }
         }
 
         let migratedRules = migratedRulesFromFlatStorage(defaults)
@@ -311,8 +342,22 @@ public struct CorrectionDictionary: Equatable, Sendable {
         return StoredRecordsResult(
             records: migratedRecords,
             migratedRecords: migratedRules.shouldPersist ? migratedRecords : nil,
-            shouldRemoveLegacyRules: migratedRules.shouldPersist
+            shouldRemoveLegacyRules: migratedRules.shouldPersist,
+            isReadOnly: false
         )
+    }
+
+    private static func hasProtectedStoredDictionary(in defaults: UserDefaults) -> Bool {
+        guard let rawDictionary = defaults.string(forKey: recordsDefaultsKey),
+              let data = rawDictionary.data(using: .utf8) else {
+            return false
+        }
+        if let storedVersion = try? JSONDecoder().decode(StoredDictionaryVersion.self, from: data).version,
+           storedVersion > storedDictionaryVersion {
+            return true
+        }
+        return (try? JSONDecoder().decode(TolerantStoredDictionary.self, from: data))?
+            .undecodableRecordCount ?? 0 > 0
     }
 
     private static func migratedRulesFromFlatStorage(_ defaults: UserDefaults) -> MigratedRules {
@@ -423,6 +468,10 @@ private extension CorrectionDictionary {
         var records: [CorrectionRecord]
     }
 
+    struct StoredDictionaryVersion: Decodable {
+        var version: Int
+    }
+
     /// Load-side counterpart of `StoredDictionary` that decodes records one by one,
     /// keeping the readable ones instead of letting a single bad record (an unknown
     /// enum case written by a future build, say) fail the whole array and silently
@@ -463,6 +512,7 @@ private extension CorrectionDictionary {
         var records: [CorrectionRecord]
         var migratedRecords: [CorrectionRecord]?
         var shouldRemoveLegacyRules: Bool
+        var isReadOnly: Bool
     }
 
     struct MigratedRules {
@@ -470,104 +520,4 @@ private extension CorrectionDictionary {
         var shouldPersist: Bool
     }
 
-}
-
-public struct CorrectionRecord: Codable, Equatable, Identifiable, Sendable {
-    public enum Kind: String, Codable, Equatable, Sendable {
-        case lexicon
-        case replacement
-        case snippet
-        case spokenCommand
-        case formattingPolicy
-    }
-
-    public enum Source: String, Codable, Equatable, Sendable {
-        case builtIn
-        case manual
-        case suggested
-        case imported
-        case mined
-    }
-
-    public enum Status: String, Codable, Equatable, Sendable {
-        case active
-        case disabled
-        case suggested
-        case rejected
-    }
-
-    public enum LexiconClass: String, Codable, Equatable, Sendable {
-        case generic
-        case person
-    }
-
-    public var id: String
-    public var kind: Kind
-    public var canonical: String
-    public var aliases: [String]
-    public var ambiguousAliases: [String]
-    public var contexts: [String]
-    public var lexiconClass: LexiconClass
-    public var source: Source
-    public var status: Status
-
-    public init(
-        id: String,
-        kind: Kind,
-        canonical: String,
-        aliases: [String] = [],
-        ambiguousAliases: [String] = [],
-        contexts: [String] = [],
-        lexiconClass: LexiconClass = .generic,
-        source: Source,
-        status: Status
-    ) {
-        self.id = id
-        self.kind = kind
-        self.canonical = canonical
-        self.aliases = aliases
-        self.ambiguousAliases = ambiguousAliases
-        self.contexts = contexts
-        self.lexiconClass = lexiconClass
-        self.source = source
-        self.status = status
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case id
-        case kind
-        case canonical
-        case aliases
-        case ambiguousAliases
-        case contexts
-        case lexiconClass
-        case source
-        case status
-    }
-
-    public init(from decoder: any Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        id = try container.decode(String.self, forKey: .id)
-        kind = try container.decode(Kind.self, forKey: .kind)
-        canonical = try container.decode(String.self, forKey: .canonical)
-        aliases = try container.decodeIfPresent([String].self, forKey: .aliases) ?? []
-        ambiguousAliases = try container.decodeIfPresent([String].self, forKey: .ambiguousAliases) ?? []
-        contexts = try container.decodeIfPresent([String].self, forKey: .contexts) ?? []
-        lexiconClass = try container.decodeIfPresent(LexiconClass.self, forKey: .lexiconClass) ?? .generic
-        source = try container.decode(Source.self, forKey: .source)
-        status = try container.decode(Status.self, forKey: .status)
-    }
-
-    public func encode(to encoder: any Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(id, forKey: .id)
-        try container.encode(kind, forKey: .kind)
-        try container.encode(canonical, forKey: .canonical)
-        try container.encode(aliases, forKey: .aliases)
-        try container.encode(ambiguousAliases, forKey: .ambiguousAliases)
-        try container.encode(contexts, forKey: .contexts)
-        try container.encode(lexiconClass, forKey: .lexiconClass)
-        try container.encode(source, forKey: .source)
-        try container.encode(status, forKey: .status)
-    }
 }
