@@ -4,7 +4,7 @@ import XCTest
 
 /// A fn press while `startRecording` cannot run it yet — the launch window before
 /// `bootstrap()` has cached `captureFormat` (23 real drops in 12 days of dogfood
-/// logs), or the finalize/polish window — used to be silently dropped. These pin
+/// logs), or the finalize window — used to be silently dropped. These pin
 /// the unified deferred-start latch contract: the press is latched instead of
 /// dropped, the replay consumes the latch exactly once, replays only while fn is
 /// still physically held (including a debounce re-check so an in-progress release

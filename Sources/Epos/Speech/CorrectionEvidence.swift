@@ -12,9 +12,6 @@ public struct CorrectionEvidence: Codable, Equatable, Identifiable, Sendable {
     public var windowTitle: String?
     public var urlString: String?
     public var appliedRuleIDs: [String]
-    public var polishOutcome: String
-    public var engineOutcome: String?
-    public var guardRejectionReason: String?
 
     public init(
         id: String,
@@ -27,10 +24,7 @@ public struct CorrectionEvidence: Codable, Equatable, Identifiable, Sendable {
         applicationBundleIdentifier: String? = nil,
         windowTitle: String? = nil,
         urlString: String? = nil,
-        appliedRuleIDs: [String],
-        polishOutcome: String,
-        engineOutcome: String?,
-        guardRejectionReason: String?
+        appliedRuleIDs: [String]
     ) {
         self.id = id
         self.observedAt = observedAt
@@ -43,9 +37,6 @@ public struct CorrectionEvidence: Codable, Equatable, Identifiable, Sendable {
         self.windowTitle = windowTitle
         self.urlString = urlString
         self.appliedRuleIDs = appliedRuleIDs
-        self.polishOutcome = polishOutcome
-        self.engineOutcome = engineOutcome
-        self.guardRejectionReason = guardRejectionReason
     }
 }
 
@@ -192,23 +183,5 @@ public enum CorrectionCandidateSuggester {
         }
 
         return suggestions
-    }
-}
-
-extension PolishOutcome {
-    var evidenceName: String {
-        switch self {
-        case .disabled: "disabled"
-        case .unavailable: "unavailable"
-        case .timedOut: "timed-out"
-        case .tooLong: "too-long"
-        case .sameText: "same-text"
-        case .guardRejected: "guard-rejected"
-        case .deterministicCleanup: "deterministic-cleanup"
-        case .engineFailed: "engine-failed"
-        case .abandoned: "abandoned"
-        case .suppressedByInsertion: "suppressed-by-insertion"
-        case .applied: "applied"
-        }
     }
 }

@@ -556,10 +556,6 @@ final class SmokeTests: XCTestCase {
             "Finishing"
         )
         XCTAssertEqual(
-            RecordingIndicatorSurface.statusText(state: .finalizing, finalizationPhase: .polishing),
-            "Polishing"
-        )
-        XCTAssertEqual(
             RecordingIndicatorSurface.statusText(state: .finalizing, finalizationPhase: .inserting),
             "Updating"
         )
@@ -901,91 +897,6 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(contents.contains("displayText="))
     }
 
-    @MainActor
-    func testCoordinatorPolishRejectionLogRedactsRawAndCandidateTextByDefault() throws {
-        let directory = try makeTemporaryDirectory()
-        let sink = DiagnosticLogSink(
-            configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
-            directory: directory
-        )
-        let coordinator = AppCoordinator(
-            textInsertion: RecordingTextInsertionBackend(),
-            diagnostics: sink,
-            autoStart: false
-        )
-        let rejection = PolishGuardRejection(
-            reason: .contentTokensChanged,
-            candidateText: "Test first thing.\nNext line",
-            candidateCharacterCount: 27,
-            diff: "kind=raw-token-changed hint=ordinal-normalization"
-        )
-
-        coordinator.logPolishOutcome(
-            outcome: .guardRejected,
-            rawText: "test 1st thing\nnext line",
-            polishedCount: 0,
-            rawCount: 24,
-            guardRejection: rejection,
-            elapsedMs: 12
-        )
-        sink.flush()
-
-        let files = try FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        )
-        XCTAssertEqual(files.count, 1)
-        let contents = try String(contentsOf: files[0], encoding: .utf8)
-        XCTAssertTrue(contents.contains("polish rejected: retention guard"))
-        XCTAssertTrue(contents.contains("rawText=<redacted>"))
-        XCTAssertFalse(contents.contains("test 1st thing"))
-        XCTAssertFalse(contents.contains("Test first thing"))
-        XCTAssertFalse(contents.contains("candidateText="))
-        XCTAssertTrue(contents.contains("reason=content-tokens-changed"))
-        XCTAssertTrue(contents.contains("candidateChars=27"))
-        XCTAssertTrue(contents.contains("hint=ordinal-normalization"))
-    }
-
-    @MainActor
-    func testCoordinatorPolishRejectionLogCanOptIntoRawAndCandidateText() throws {
-        let directory = try makeTemporaryDirectory()
-        let sink = DiagnosticLogSink(
-            configuration: .init(enabled: true, maxFileBytes: 100_000, maxFileCount: 7),
-            directory: directory
-        )
-        let coordinator = AppCoordinator(
-            textInsertion: RecordingTextInsertionBackend(),
-            diagnostics: sink,
-            includeTranscriptTextInDiagnostics: true,
-            autoStart: false
-        )
-        let rejection = PolishGuardRejection(
-            reason: .contentTokensChanged,
-            candidateText: "Test first thing.\nNext line",
-            candidateCharacterCount: 27,
-            diff: "kind=raw-token-changed hint=ordinal-normalization"
-        )
-
-        coordinator.logPolishOutcome(
-            outcome: .guardRejected,
-            rawText: "test 1st thing\nnext line",
-            polishedCount: 0,
-            rawCount: 24,
-            guardRejection: rejection,
-            elapsedMs: 12
-        )
-        sink.flush()
-
-        let files = try FileManager.default.contentsOfDirectory(
-            at: directory,
-            includingPropertiesForKeys: nil
-        )
-        XCTAssertEqual(files.count, 1)
-        let contents = try String(contentsOf: files[0], encoding: .utf8)
-        XCTAssertTrue(contents.contains(#"rawText="test 1st thing\nnext line""#))
-        XCTAssertTrue(contents.contains(#"candidateText="Test first thing.\nNext line""#))
-    }
-
     func testDogfoodTapDiscardsRecordingWhenTranscriptIsEmpty() throws {
         let directory = try makeTemporaryDirectory()
         let tap = DogfoodTap(recordingsDirectory: directory)
@@ -1018,19 +929,6 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.volatileResults))
         XCTAssertTrue(Transcriber.speechPreset.reportingOptions.contains(.fastResults))
         XCTAssertFalse(Transcriber.speechPreset.reportingOptions.contains(.alternativeTranscriptions))
-    }
-
-    func testCanonicalVocabularyStringsSkipsPureSymbolsAndDeduplicates() {
-        let canonicalizer = TranscriptCanonicalizer(rules: [
-            .init(canonical: "CMUX", aliases: ["see mux"]),
-            .init(canonical: "--", aliases: ["dash dash"]),
-            .init(canonical: "/", aliases: ["slash"]),
-            .init(canonical: "cmux", aliases: ["cmox"]),
-            .init(canonical: "Epos", aliases: ["epos"])
-        ])
-
-        // Pure-punctuation canonicals are dropped; case-insensitive duplicates collapse.
-        XCTAssertEqual(canonicalizer.canonicalVocabularyStrings, ["CMUX", "Epos"])
     }
 
     func testSpeechContextualStringsExcludesPostHocErrorAliases() {
@@ -1131,10 +1029,7 @@ private func correctionEvidence(id: String, final: String, edited: String) -> Co
         canonicalizedTranscript: final,
         finalInsertedTranscript: final,
         userEditedTranscript: edited,
-        appliedRuleIDs: [],
-        polishOutcome: "disabled",
-        engineOutcome: nil,
-        guardRejectionReason: nil
+        appliedRuleIDs: []
     )
 }
 

@@ -1,12 +1,7 @@
 import Foundation
 @testable import Epos
 
-enum PolishEvalScoring {
-    static func retainsFiller(_ text: String) -> Bool {
-        let words = text.lowercased().split { !$0.isLetter }.map(String.init)
-        return !PolishVocabulary.singleFillers.isDisjoint(with: Set(words))
-    }
-
+enum TranscriptEvalScoring {
     static func wordErrorTokens(_ text: String) -> [String] {
         let lowercased = text.lowercased()
         let pattern = #"[$/]?[a-z0-9]+(?:[.'_-][a-z0-9]+)*|--+"#

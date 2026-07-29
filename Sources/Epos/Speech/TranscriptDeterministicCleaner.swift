@@ -1,42 +1,24 @@
 import Foundation
 
-/// A tiny, deterministic cleanup pass for transforms the retention guard can prove:
-/// hard filler tokens, comma-delimited opening `so`/`like`, exact standalone
-/// numeric ordinal formatting, and the measured `seems to getting` grammar miss.
-/// It deliberately does not remove ambiguous phrase fillers such as "you know"
-/// or bare `like`/`so`.
+/// A tiny, deterministic cleanup pass restricted to transforms that provably keep
+/// every content word: hard filler tokens, stuttered function-word repeats, and
+/// exact standalone numeric ordinal formatting. It deliberately does not remove
+/// ambiguous phrase fillers such as "you know", bare `like`/`so`, or reflow grammar —
+/// broader edits were measured against local LLM polish and rejected (see
+/// `specs/polish-model-benchmark.md`).
 public enum TranscriptDeterministicCleaner {
-    static func clean(_ text: String) -> String {
-        let segments = Self.segments(from: text)
-        var removed: Set<Int> = []
-        var replacements: [Int: String] = [:]
+    /// Single-token disfluencies this pass may drop. Deliberately MINIMAL: only the
+    /// pure non-words with no content sense. `so` and `like` are excluded because
+    /// their spoken uses are ambiguous content ("so we shipped it", "seems like"),
+    /// and "basically" because it is a content-bearing degree adverb
+    /// ("basically identical" != "identical"). Multi-token phrases ("you know",
+    /// "kind of", …) are likewise not droppable: each has a common content use this
+    /// pass cannot distinguish from a verbal tic.
+    static let hardFillers: Set<String> = ["um", "uh", "er", "hmm"]
 
-        for (index, segment) in segments.enumerated() where segment.isWord {
-            guard let normalized = segment.normalized else { continue }
-            if PolishVocabulary.singleFillers.contains(normalized), !isAcronym(segment.text) {
-                removed.insert(index)
-            } else if let ordinalWord = ordinalWord(forNumericOrdinal: normalized) {
-                replacements[index] = ordinalWord
-            } else if normalized == "getting", isMissingBeBeforeGetting(at: index, in: segments) {
-                replacements[index] = "be getting"
-            }
-        }
-
-        while let leadingIndex = firstKeptWordIndex(in: segments, removed: removed),
-              let normalized = segments[leadingIndex].normalized,
-              (normalized == "so" || normalized == "like"),
-              gapAfterWordContainsComma(leadingIndex, in: segments, removed: removed) {
-            removed.insert(leadingIndex)
-        }
-
-        guard !removed.isEmpty || !replacements.isEmpty else { return text }
-        return apply(removed: removed, replacements: replacements, to: segments)
-    }
-
-    /// The conservative disfluency pass used for the canonicalized final baseline:
-    /// strip hard fillers, collapse stuttered function-word repeats, then spell
-    /// standalone numeric ordinals. It excludes the `so`/`like` opener and grammar
-    /// reflow so the default polish-off path cannot make broad edits.
+    /// The conservative disfluency pass applied to every streamed partial/final and
+    /// to the canonicalized final transcript: strip hard fillers, collapse stuttered
+    /// function-word repeats, then spell standalone numeric ordinals.
     public static func streamClean(_ canonicalized: String) -> String {
         normalizeNumericOrdinals(
             collapseAdjacentDuplicates(stripStandaloneFillers(canonicalized))
@@ -44,15 +26,13 @@ public enum TranscriptDeterministicCleaner {
     }
 
     /// Removes ONLY standalone hard fillers (`um`/`uh`/`er`/`hmm`) and the comma
-    /// that punctuated each — nothing else. Applied via `streamClean` to the final
-    /// polish baseline. Uses the same exact-token set and acronym guard as `clean`,
-    /// so the two never disagree.
+    /// that punctuated each — nothing else.
     static func stripStandaloneFillers(_ text: String) -> String {
         let segments = Self.segments(from: text)
         var removed: Set<Int> = []
         for (index, segment) in segments.enumerated() where segment.isWord {
             guard let normalized = segment.normalized else { continue }
-            if PolishVocabulary.singleFillers.contains(normalized), !isAcronym(segment.text) {
+            if hardFillers.contains(normalized), !isAcronym(segment.text) {
                 removed.insert(index)
             }
         }
@@ -84,7 +64,7 @@ public enum TranscriptDeterministicCleaner {
     /// acronym beside its lowercase homonym is preserved ("the OR or the ICU" keeps the
     /// conjunction) — matching `stripStandaloneFillers`. Like that pass it is safe on volatile
     /// partials and is applied via `streamClean` to both the streamed text and the final
-    /// polish baseline, so a collapsed stutter never flickers back on screen at finalization.
+    /// transcript, so a collapsed stutter never flickers back on screen at finalization.
     /// Missing a stutter is harmless; collapsing a real repeat would change meaning, so the
     /// set stays conservative.
     static func collapseAdjacentDuplicates(_ text: String) -> String {
@@ -209,25 +189,6 @@ public enum TranscriptDeterministicCleaner {
         return segments
     }
 
-    private static func firstKeptWordIndex(in segments: [Segment], removed: Set<Int>) -> Int? {
-        segments.indices.first { segments[$0].isWord && !removed.contains($0) }
-    }
-
-    private static func gapAfterWordContainsComma(
-        _ wordIndex: Int,
-        in segments: [Segment],
-        removed: Set<Int>
-    ) -> Bool {
-        var index = segments.index(after: wordIndex)
-        while index < segments.endIndex {
-            let segment = segments[index]
-            if segment.isWord && !removed.contains(index) { return false }
-            if !segment.isWord && segment.text.contains(",") { return true }
-            index = segments.index(after: index)
-        }
-        return false
-    }
-
     private static func normalizeWhitespaceAndCommas(_ text: String) -> String {
         text
             .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
@@ -250,23 +211,6 @@ public enum TranscriptDeterministicCleaner {
 
     private static func isAcronym(_ token: String) -> Bool {
         token.count > 1 && token == token.uppercased() && token != token.lowercased()
-    }
-
-    private static func isMissingBeBeforeGetting(at index: Int, in segments: [Segment]) -> Bool {
-        guard let previousIndex = previousWordIndex(before: index, in: segments),
-              segments[previousIndex].normalized == "to",
-              let seemIndex = previousWordIndex(before: previousIndex, in: segments),
-              ["seem", "seems", "seemed"].contains(segments[seemIndex].normalized ?? ""),
-              gapBetweenWordsIsWhitespace(seemIndex, previousIndex, in: segments),
-              gapBetweenWordsIsWhitespace(previousIndex, index, in: segments) else {
-            return false
-        }
-        return true
-    }
-
-    private static func previousWordIndex(before index: Int, in segments: [Segment]) -> Int? {
-        guard index > segments.startIndex else { return nil }
-        return segments[..<index].indices.reversed().first { segments[$0].isWord }
     }
 
     private static func gapBetweenWordsIsWhitespace(

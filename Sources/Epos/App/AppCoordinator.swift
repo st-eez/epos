@@ -14,7 +14,6 @@ public enum FinalizationPhase: Equatable {
     /// transcript). Idle reads of this are never shown; the UI only consults it
     /// while `state == .finalizing`.
     case finalizingSpeech
-    case polishing
     case inserting
 }
 
@@ -43,7 +42,6 @@ public final class AppCoordinator: ObservableObject {
     private let transcriber: Transcriber
     private let textInsertion: TextInsertionBackend
     private let insertionTargetObserverFactory: @MainActor () -> any InsertionTargetObserver
-    private let polishEngine: any PolishEngine
     private let permissions: PermissionsGate
     private let assets: AssetManager
     private let recordingIDGenerator: @Sendable () -> String
@@ -66,9 +64,8 @@ public final class AppCoordinator: ObservableObject {
     private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
     private var currentReliabilityRecording: ReliabilityRecording?
-    private let includeTranscriptTextInDiagnostics: Bool
     /// Single deferred-start latch, set when a press arrives while `startRecording`
-    /// cannot run it yet: the finalize/polish window (state != .idle) or the launch
+    /// cannot run it yet: the finalize window (state != .idle) or the launch
     /// window before `bootstrap()` cached `captureFormat`. The key stays down, so the
     /// edge-triggered hotkey emits no new press — an unlatched press is silently
     /// dropped (23 real launch-window drops in 12 days of dogfood logs).
@@ -79,10 +76,6 @@ public final class AppCoordinator: ObservableObject {
     /// Live fn-key state consulted before replaying a latched press. Injectable so
     /// tests can pin both replay outcomes; defaults to the hotkey's hardware read.
     private let isFnKeyHeld: @MainActor () -> Bool
-    /// The current recording's polisher, held so a re-press during finalize can abandon
-    /// its in-flight polish. Set at `startRecording`, cleared before returning to idle.
-    /// (Distinct from threading it into `runSession`, which is what actually runs the polish.)
-    private var activePolisher: TranscriptPolisher?
     private var didBootstrap = false
     private lazy var indicator: RecordingIndicatorController = {
         let controller = RecordingIndicatorController()
@@ -96,7 +89,6 @@ public final class AppCoordinator: ObservableObject {
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         insertionTargetObserverFactory: (@MainActor () -> any InsertionTargetObserver)? = nil,
         settings: Settings = Settings.load(),
-        polishEngine: (any PolishEngine)? = nil,
         diagnostics: DiagnosticLogSink = .shared,
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
@@ -111,17 +103,14 @@ public final class AppCoordinator: ObservableObject {
         self.insertionTargetObserverFactory = insertionTargetObserverFactory ?? {
             AXInsertionTargetObserver()
         }
-        self.polishEngine = polishEngine ?? PolishEngineFactory.makeDefault()
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
         self.reliabilityDiagnostics = diagnostics
         self.isFnKeyHeld = isFnKeyHeld ?? { [hotkey] in hotkey.isFunctionKeyDown }
         self.observedEditCaptureDelays = observedEditCaptureDelays
-        let includeTranscriptText = includeTranscriptTextInDiagnostics ?? TranscriptDiagnosticTextPolicy.load()
-        self.includeTranscriptTextInDiagnostics = includeTranscriptText
         self.transcriptTiming = TranscriptTimingDiagnostics(
-            includeTranscriptText: includeTranscriptText
+            includeTranscriptText: includeTranscriptTextInDiagnostics ?? TranscriptDiagnosticTextPolicy.load()
         )
         self.settings = settings
         self.permissions = PermissionsGate()
@@ -159,34 +148,14 @@ public final class AppCoordinator: ObservableObject {
         log.info("correction evidence capture \(enabled ? "enabled" : "disabled")")
     }
 
-    public var polishEnabled: Bool { settings.polishEnabled }
-
-    public func setPolishEnabled(_ enabled: Bool) {
-        guard settings.polishEnabled != enabled else { return }
-        settings.polishEnabled = enabled
-        settings.save()
-        log.info("dictation polish \(enabled ? "enabled" : "disabled")")
-    }
-
-    /// Built once per recording so a mid-session settings change cannot alter the
-    /// finalization behavior of an already-running dictation.
-    func makePolisher() -> TranscriptPolisher {
-        // Snapshot correction rules at fn press. The same canonicalization feeds
-        // the final retention guard and the one authoritative insertion.
+    /// The authoritative final-transcript transform, built once per recording so a
+    /// mid-session correction-rule edit cannot alter the finalization behavior of an
+    /// already-running dictation. It is the same `streamClean(canonicalize(...))` the
+    /// live indicator applies to every streamed partial, so the one final write cannot
+    /// re-type text the user already saw cleaned on screen.
+    func makeFinalTranscriptCleaner() -> @Sendable (String) -> String {
         let canonicalizer = corrections.canonicalizer
-        // Only walk the correction rules for known terms when polish is on; when it's
-        // off (the default) the polisher short-circuits at its `enabled` gate and never
-        // reads `knownTerms`, so computing them on the fn-press hot path is wasted work.
-        return TranscriptPolisher(
-            enabled: settings.polishEnabled,
-            engine: polishEngine,
-            knownTerms: settings.polishEnabled ? polishKnownTerms() : [],
-            canonicalize: { TranscriptDeterministicCleaner.streamClean(canonicalizer.canonicalize($0)) }
-        )
-    }
-
-    private func polishKnownTerms() -> [String] {
-        ["Epos"] + corrections.canonicalizer.canonicalVocabularyStrings
+        return { TranscriptDeterministicCleaner.streamClean(canonicalizer.canonicalize($0)) }
     }
 
     func speechContextualStrings() -> [String] {
@@ -298,13 +267,11 @@ public final class AppCoordinator: ObservableObject {
 
     public func startRecording() {
         guard state == .idle else {
-            // A press during the finalize/polish window starts the user's next
-            // utterance. Abandon in-flight polish so the first final can be inserted,
-            // then replay this press when the coordinator returns to idle.
+            // A press during the finalize window starts the user's next utterance:
+            // latch it and replay when the coordinator returns to idle.
             if state == .finalizing {
                 pendingDeferredStart = true
-                activePolisher?.abandonInFlightPolish()
-                log.info("start requested during finalize; abandoning polish, will retry at idle if fn held")
+                log.info("start requested during finalize; will retry at idle if fn held")
             }
             return
         }
@@ -343,15 +310,13 @@ public final class AppCoordinator: ObservableObject {
         )
         transcriptTiming.start()
         indicator.show()
-        let sessionPolisher = makePolisher()
+        let cleanFinalTranscript = makeFinalTranscriptCleaner()
         let contextualStrings = speechContextualStrings()
-        activePolisher = sessionPolisher
-        sessionPolisher.prewarm()
 
         transcriptionTask = Task { [weak self] in
             await self?.runSession(
                 format: format,
-                polisher: sessionPolisher,
+                cleanFinalTranscript: cleanFinalTranscript,
                 contextualStrings: contextualStrings
             )
         }
@@ -370,7 +335,7 @@ public final class AppCoordinator: ObservableObject {
 
     private func runSession(
         format: AVAudioFormat,
-        polisher: TranscriptPolisher,
+        cleanFinalTranscript: @Sendable (String) -> String,
         contextualStrings: [String]
     ) async {
         let transcriber = self.transcriber
@@ -444,27 +409,20 @@ public final class AppCoordinator: ObservableObject {
         dogfood.stop(keeping: shouldSaveAudioSamples)
 
         if hasTranscribedText {
-            // Opt-in LLM polish runs once on the final transcript while the
-            // indicator is still up (state == .finalizing) on the per-recording
-            // polisher prewarmed at start. It never throws and falls back to the raw
-            // text, so final insertion is unchanged when polish is off,
-            // unavailable, or rejected by the guard.
-            finalizationPhase = polisher.willAttemptPolish ? .polishing : .inserting
-            let polishStartedAt = Date()
-            let result = await polisher.polish(finalText)
+            // The authoritative final text: the per-recording canonicalize +
+            // conservative deterministic clean, matching what the indicator streamed.
+            let finalTranscript = cleanFinalTranscript(finalText)
             finalizationPhase = .inserting
-            let insertionResult = insertFinalTranscriptResult(result.text)
+            let insertionResult = insertFinalTranscriptResult(finalTranscript)
             let applied = insertionResult == .accepted
             if !applied { flashInsertionUnavailableNotice() }
-            let effectiveOutcome = TranscriptPolisher.effectivePolishOutcome(result, applied: applied)
             let insertedTranscript = textInsertionSession?.insertedTranscript
             if let evidenceID = recordCorrectionEvidenceIfEnabled(
                 enabled: shouldSaveCorrectionEvidence,
                 rawTranscript: finalText,
-                polishResult: result,
-                effectiveOutcome: effectiveOutcome,
+                finalTranscript: finalTranscript,
                 applied: applied,
-                finalInsertedTranscript: insertedTranscript == result.text ? insertedTranscript : nil,
+                finalInsertedTranscript: insertedTranscript == finalTranscript ? insertedTranscript : nil,
                 recordingID: sessionRecordingID,
                 session: textInsertionSession
             ) {
@@ -478,25 +436,11 @@ public final class AppCoordinator: ObservableObject {
                     )
                 }
             }
-            // Count raw and polished on the SAME normalization: both come from the
-            // polisher's own canonicalizer — `result.text` for `.applied` is
-            // canonicalize(polished), and `result.rawCharacterCount` is the matching
-            // canonicalize(raw) baseline `polish` already computed. Reusing it here
-            // avoids a third canonicalizer pass over the transcript in the finalize window.
-            logPolishOutcome(
-                outcome: effectiveOutcome,
-                rawText: result.text,
-                polishedCount: result.text.count,
-                rawCount: result.rawCharacterCount,
-                engineOutcome: result.engineOutcome,
-                guardRejection: result.guardRejection,
-                elapsedMs: millisecondsElapsed(since: polishStartedAt)
-            )
             emitFinalReliabilityOutcome(
                 reliability: reliability,
                 recognizerFailed: recognizerFailed,
                 insertionResult: insertionResult,
-                transcript: result.text,
+                transcript: finalTranscript,
                 session: textInsertionSession
             )
             finishTextInsertionSession()
@@ -580,8 +524,7 @@ public final class AppCoordinator: ObservableObject {
     func recordCorrectionEvidenceIfEnabled(
         enabled: Bool,
         rawTranscript: String,
-        polishResult: PolishResult,
-        effectiveOutcome: PolishOutcome,
+        finalTranscript: String,
         applied: Bool,
         finalInsertedTranscript: String? = nil,
         recordingID: String? = nil,
@@ -589,13 +532,12 @@ public final class AppCoordinator: ObservableObject {
     ) -> String? {
         guard enabled,
               applied,
-              finalInsertedTranscript == polishResult.text else {
+              finalInsertedTranscript == finalTranscript else {
             return nil
         }
         return recordCorrectionEvidence(
             rawTranscript: rawTranscript,
-            polishResult: polishResult,
-            effectiveOutcome: effectiveOutcome,
+            finalTranscript: finalTranscript,
             applied: applied,
             finalInsertedTranscript: finalInsertedTranscript,
             recordingID: recordingID,
@@ -606,8 +548,7 @@ public final class AppCoordinator: ObservableObject {
     @discardableResult
     func recordCorrectionEvidence(
         rawTranscript: String,
-        polishResult: PolishResult,
-        effectiveOutcome: PolishOutcome,
+        finalTranscript: String,
         applied: Bool,
         finalInsertedTranscript: String? = nil,
         recordingID: String? = nil,
@@ -620,14 +561,11 @@ public final class AppCoordinator: ObservableObject {
             recordingID: recordingID ?? currentRecordingID,
             rawTranscript: rawTranscript,
             canonicalizedTranscript: canonicalizedRaw,
-            finalInsertedTranscript: finalInsertedTranscript ?? (applied ? polishResult.text : canonicalizedRaw),
+            finalInsertedTranscript: finalInsertedTranscript ?? (applied ? finalTranscript : canonicalizedRaw),
             userEditedTranscript: nil,
             applicationBundleIdentifier: session?.targetApplicationBundleIdentifier(),
             windowTitle: session?.targetWindowTitle(),
-            appliedRuleIDs: corrections.dictionary.appliedRecordIDs(in: rawTranscript),
-            polishOutcome: effectiveOutcome.evidenceName,
-            engineOutcome: polishResult.engineOutcome?.rawValue,
-            guardRejectionReason: polishResult.guardRejection?.reason.rawValue
+            appliedRuleIDs: corrections.dictionary.appliedRecordIDs(in: rawTranscript)
         ))
     }
 
@@ -709,74 +647,6 @@ public final class AppCoordinator: ObservableObject {
         ))
     }
 
-    /// Local dogfood observability for the polish stage. Reads the policy's own
-    /// `PolishOutcome` so the log can't drift from the decision the polisher
-    /// actually made.
-    func logPolishOutcome(
-        outcome: PolishOutcome,
-        rawText: String,
-        polishedCount: Int,
-        rawCount: Int,
-        engineOutcome: PolishEngineOutcome? = nil,
-        guardRejection: PolishGuardRejection? = nil,
-        elapsedMs: Int
-    ) {
-        let engineDetail = engineOutcome.map { " engineOutcome=\($0.rawValue)" } ?? ""
-        switch outcome {
-        case .disabled:
-            log.info("polish off (elapsedMs=\(elapsedMs))")
-        case .unavailable:
-            log.info("polish skipped: model unavailable (elapsedMs=\(elapsedMs))")
-        case .timedOut:
-            log.info("polish timed out (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
-        case .tooLong:
-            log.info("polish skipped: input too long (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
-        case .sameText:
-            log.info("polish skipped: model returned same text (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
-        case .guardRejected:
-            let rawDetail = includeTranscriptTextInDiagnostics
-                ? "rawText=\(String(reflecting: rawText))"
-                : "rawText=<redacted>"
-            let detail = guardRejection?.logDescription(
-                includeTranscriptText: includeTranscriptTextInDiagnostics
-            ) ?? "reason=unknown"
-            log.info(
-                "polish rejected: retention guard " +
-                    "(\(rawDetail) \(detail) rawChars=\(rawCount) elapsedMs=\(elapsedMs))" +
-                    engineDetail
-            )
-        case .deterministicCleanup:
-            let rejectionDetail = guardRejection.map {
-                " guardRejected=\($0.logDescription(includeTranscriptText: includeTranscriptTextInDiagnostics))"
-            } ?? ""
-            log.info(
-                "polish deterministic cleanup applied " +
-                    "(rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
-                    rejectionDetail +
-                    engineDetail
-            )
-        case .engineFailed:
-            log.info("polish fallback: engine failed (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
-        case .abandoned:
-            log.info("polish abandoned: new recording requested (rawChars=\(rawCount) elapsedMs=\(elapsedMs))\(engineDetail)")
-        case .suppressedByInsertion:
-            log.info(
-                "polish suppressed: guarded final insertion refused " +
-                    "(rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
-                    engineDetail
-            )
-        case .applied:
-            log.info(
-                "polish applied (rawChars=\(rawCount) polishedChars=\(polishedCount) elapsedMs=\(elapsedMs))" +
-                    engineDetail
-            )
-        }
-    }
-
-    private func millisecondsElapsed(since start: Date) -> Int {
-        max(0, Int(Date().timeIntervalSince(start) * 1000))
-    }
-
     private func finishTextInsertionSession() {
         textInsertionSession?.finish()
         textInsertionSession = nil
@@ -804,7 +674,6 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         partial = ""
         transcriptionTask = nil
-        activePolisher = nil
         currentReliabilityRecording = nil
         transcriptTiming.finish()
         finalizationPhase = .finalizingSpeech

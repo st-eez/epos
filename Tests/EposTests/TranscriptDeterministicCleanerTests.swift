@@ -3,36 +3,34 @@ import XCTest
 
 final class TranscriptDeterministicCleanerTests: XCTestCase {
     func testRemovesOnlyHardFillersFromAmbiguousSpeech() {
-        let raw = "um so like we should uh ship it you know"
-
-        let cleaned = TranscriptDeterministicCleaner.clean(raw)
-
-        XCTAssertEqual(cleaned, "so like we should ship it you know")
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
-    }
-
-    func testRemovesCommaDelimitedOpeningDiscourseMarkers() {
-        let raw = "um, so, like, we should uh ship it"
-
-        let cleaned = TranscriptDeterministicCleaner.clean(raw)
-
-        XCTAssertEqual(cleaned, "we should ship it")
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("um so like we should uh ship it you know"),
+            "so like we should ship it you know"
+        )
     }
 
     func testKeepsBareSoAndLikeBecauseTheyAreAmbiguous() {
-        let raw = "so I was thinking like we could just um refactor the parser"
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean(
+                "so I was thinking like we could just um refactor the parser"
+            ),
+            "so I was thinking like we could just refactor the parser"
+        )
+    }
 
-        let cleaned = TranscriptDeterministicCleaner.clean(raw)
-
-        XCTAssertEqual(cleaned, "so I was thinking like we could just refactor the parser")
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
+    func testKeepsCommaDelimitedOpeningDiscourseMarkers() {
+        // Dropping a comma-delimited opening "so"/"like" was measured against LLM polish
+        // and removed with it: the opener is ambiguous content, so it must survive.
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("um, so, like, we should uh ship it"),
+            "so, like, we should ship it"
+        )
     }
 
     func testKeepsAcronymsThatNormalizeToFillers() {
         let raw = "go to the ER now"
 
-        XCTAssertEqual(TranscriptDeterministicCleaner.clean(raw), raw)
+        XCTAssertEqual(TranscriptDeterministicCleaner.streamClean(raw), raw)
     }
 
     func testStripStandaloneFillersRemovesHardFillersOnly() {
@@ -44,9 +42,8 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
     }
 
     func testStripStandaloneFillersLeavesOrdinalsAndOpenersUntouched() {
-        // The live strip must NOT do the full `clean` transforms (they act on
-        // not-yet-stable partials): the "so"/"like" opener and "1st" ordinal stay,
-        // only the hard filler "uh" goes.
+        // The filler pass is one stage of `streamClean`: the "so"/"like" opener and the
+        // "1st" ordinal are none of its business, only the hard filler "uh" goes.
         let raw = "so, like, the 1st thing uh matters"
 
         let stripped = TranscriptDeterministicCleaner.stripStandaloneFillers(raw)
@@ -72,60 +69,42 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
     }
 
     func testPreservesOneContentCommaAroundRemovedFiller() {
-        let raw = "buy milk, um, eggs"
-
-        let cleaned = TranscriptDeterministicCleaner.clean(raw)
-
-        XCTAssertEqual(cleaned, "buy milk, eggs")
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("buy milk, um, eggs"),
+            "buy milk, eggs"
+        )
     }
 
     func testDropsCommaTrailingARemovedFillerInsteadOfTransplantingIt() {
         // The comma after "um" punctuated the disfluency. Whitespace normalization
         // used to snap it onto the kept word ("let's eat, grandma"), inventing a
         // vocative; it must die with the filler instead.
-        let raw = "let's eat um, grandma"
-
-        let cleaned = TranscriptDeterministicCleaner.clean(raw)
-
-        XCTAssertEqual(cleaned, "let's eat grandma")
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("let's eat um, grandma"),
+            "let's eat grandma"
+        )
     }
 
     func testKeepsCommaOwnedByTheKeptWordWhenALaterFillerDrops() {
         // The comma before "um" belongs to "want"; only the disfluency's own
         // trailing comma is dropped.
-        let raw = "I want, um apples"
-
-        let cleaned = TranscriptDeterministicCleaner.clean(raw)
-
-        XCTAssertEqual(cleaned, "I want, apples")
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("I want, um apples"),
+            "I want, apples"
+        )
     }
 
     func testConvertsStandaloneNumericOrdinals() {
-        let first = "What should we test 1st to ensure that it's still working properly?"
-        let twentyFirst = "ship the 21st build after the 3rd smoke test"
-
         XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean(first),
+            TranscriptDeterministicCleaner.streamClean(
+                "What should we test 1st to ensure that it's still working properly?"
+            ),
             "What should we test first to ensure that it's still working properly?"
         )
         XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean(twentyFirst),
+            TranscriptDeterministicCleaner.streamClean("ship the 21st build after the 3rd smoke test"),
             "ship the twenty-first build after the third smoke test"
         )
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(
-            raw: first,
-            polished: TranscriptDeterministicCleaner.clean(first)
-        ))
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(
-            raw: twentyFirst,
-            polished: TranscriptDeterministicCleaner.clean(twentyFirst)
-        ))
-    }
-
-    func testStreamCleanConvertsStandaloneNumericOrdinals() {
         XCTAssertEqual(
             TranscriptDeterministicCleaner.streamClean("test 1st, 2nd, 3rd, and 21st"),
             "test first, second, third, and twenty-first"
@@ -134,42 +113,22 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
 
     func testDoesNotConvertMalformedOrEmbeddedNumericOrdinals() {
         XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("test 11st thing and ship the 22th build"),
+            TranscriptDeterministicCleaner.streamClean("test 11st thing and ship the 22th build"),
             "test 11st thing and ship the 22th build"
         )
         XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("open EPOS-1st and version1st before the release"),
+            TranscriptDeterministicCleaner.streamClean("open EPOS-1st and version1st before the release"),
             "open EPOS-1st and version1st before the release"
         )
     }
 
-    func testInsertsMissingBeOnlyForMeasuredSeemsToGettingPattern() {
-        let raw = "It seems to getting batched."
-        let cleaned = TranscriptDeterministicCleaner.clean(raw)
-
-        XCTAssertEqual(cleaned, "It seems to be getting batched.")
-        XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
-    }
-
-    func testStreamCleanKeepsMissingBePatternUnchanged() {
+    func testDoesNotReflowGrammar() {
+        // Grammar repair ("seems to getting" -> "seems to be getting") was an opt-in
+        // polish-path transform, removed with that stack: the always-on pass never
+        // rewrites words the user actually said.
         XCTAssertEqual(
             TranscriptDeterministicCleaner.streamClean("It seems to getting batched."),
             "It seems to getting batched."
-        )
-    }
-
-    func testDoesNotInsertMissingBeForOtherIngOrPunctuatedShapes() {
-        XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("It seems to bring the wrong file."),
-            "It seems to bring the wrong file."
-        )
-        XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("It seems, to getting batched."),
-            "It seems, to getting batched."
-        )
-        XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("I want to getting started."),
-            "I want to getting started."
         )
     }
 

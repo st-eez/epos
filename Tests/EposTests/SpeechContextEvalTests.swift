@@ -98,10 +98,10 @@ final class SpeechContextEvalTests: XCTestCase {
             let baseline = try XCTUnwrap(results.first)
             let humanIntendedTranscript = groundTruthManifest.transcript(for: recording)
             let baselineTranscriptScore = humanIntendedTranscript.map {
-                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: baseline.text)
+                TranscriptEvalScoring.wordErrorScore(reference: $0, hypothesis: baseline.text)
             }
             let baselineCanonicalizedTranscriptScore = humanIntendedTranscript.map {
-                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: baseline.canonicalizedText)
+                TranscriptEvalScoring.wordErrorScore(reference: $0, hypothesis: baseline.canonicalizedText)
             }
             for result in results.dropFirst() {
                 let contextReadbackMatches = Self.contextReadbackMatches(
@@ -119,10 +119,10 @@ final class SpeechContextEvalTests: XCTestCase {
                     )
                 }
                 let variantTranscriptScore = humanIntendedTranscript.map {
-                    PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: result.text)
+                    TranscriptEvalScoring.wordErrorScore(reference: $0, hypothesis: result.text)
                 }
                 let variantCanonicalizedTranscriptScore = humanIntendedTranscript.map {
-                    PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: result.canonicalizedText)
+                    TranscriptEvalScoring.wordErrorScore(reference: $0, hypothesis: result.canonicalizedText)
                 }
                 let bestAlternative = humanIntendedTranscript.flatMap { reference in
                     Self.bestAlternativeTranscript(
@@ -266,7 +266,7 @@ final class SpeechContextEvalTests: XCTestCase {
             .map { candidate in
                 (
                     text: candidate.text,
-                    score: PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: candidate.text),
+                    score: TranscriptEvalScoring.wordErrorScore(reference: reference, hypothesis: candidate.text),
                     confidenceMean: candidate.confidenceMean
                 )
             }

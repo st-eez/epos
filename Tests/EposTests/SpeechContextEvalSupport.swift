@@ -68,11 +68,11 @@ struct AlternativeTranscriptRerankingEvalResult: Codable, Equatable {
             topConfidenceMean: topConfidenceMean,
             confidenceDelta: confidenceDelta,
             transcriptScore: reference.map {
-                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: selectedTranscript)
+                TranscriptEvalScoring.wordErrorScore(reference: $0, hypothesis: selectedTranscript)
             },
             canonicalizedTranscript: canonicalizedTranscript,
             canonicalizedTranscriptScore: reference.map {
-                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: canonicalizedTranscript)
+                TranscriptEvalScoring.wordErrorScore(reference: $0, hypothesis: canonicalizedTranscript)
             }
         )
     }

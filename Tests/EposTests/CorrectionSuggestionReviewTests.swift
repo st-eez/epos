@@ -117,10 +117,7 @@ final class CorrectionSuggestionReviewTests: XCTestCase {
             userEditedTranscript: edited,
             applicationBundleIdentifier: bundleID,
             windowTitle: windowTitle,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
     }
 }

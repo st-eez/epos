@@ -5,7 +5,7 @@ import XCTest
 /// Raw Apple SpeechTranscriber eval over saved `.wav` captures.
 ///
 /// This intentionally disables Epos correction context, canonicalization, and
-/// polish. It measures only what Apple's recognizer returns for the audio.
+/// deterministic cleanup. It measures only what Apple's recognizer returns for the audio.
 ///
 ///   EPOS_RUN_RAW_STT_APPLE_EVAL=1 EPOS_EVAL_GROUND_TRUTH_ONLY=1 swift test --filter RawSpeechTranscriberEvalTests
 ///
@@ -55,7 +55,7 @@ final class RawSpeechTranscriberEvalTests: XCTestCase {
             let elapsed = Date().timeIntervalSince(started)
             let intended = manifest.transcript(for: recording)
             let score = intended.map {
-                PolishEvalScoring.wordErrorScore(reference: $0, hypothesis: transcription.text)
+                TranscriptEvalScoring.wordErrorScore(reference: $0, hypothesis: transcription.text)
             }
             let row = RawSpeechTranscriberEvalRow(
                 model: "apple-speechtranscriber",

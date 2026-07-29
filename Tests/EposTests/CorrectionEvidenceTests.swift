@@ -16,10 +16,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "open CMUX",
             finalInsertedTranscript: "open CMUX",
             userEditedTranscript: nil,
-            appliedRuleIDs: ["builtin.cmux"],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: ["builtin.cmux"]
         ))
 
         let reloaded = CorrectionEvidenceStore(defaults: defaults)
@@ -40,10 +37,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "open widget pro",
             finalInsertedTranscript: "open widget pro",
             userEditedTranscript: "open WidgetPro",
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
 
         let suggestions = CorrectionCandidateSuggester.suggestedRecords(from: [evidence])
@@ -70,10 +64,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "open widget pro.",
             finalInsertedTranscript: "open widget pro.",
             userEditedTranscript: "open WidgetPro.",
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
 
         let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
@@ -102,10 +93,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "open widget pro",
             finalInsertedTranscript: "open widget pro",
             userEditedTranscript: "open WidgetPro.",
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
 
         let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
@@ -134,10 +122,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "edit agents dot md,",
             finalInsertedTranscript: "edit agents dot md,",
             userEditedTranscript: "edit AGENTS.md,",
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
 
         let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
@@ -156,10 +141,7 @@ final class CorrectionEvidenceTests: XCTestCase {
                 canonicalizedTranscript: "open git ignore",
                 finalInsertedTranscript: "open git ignore",
                 userEditedTranscript: "open .gitignore",
-                appliedRuleIDs: [],
-                polishOutcome: "disabled",
-                engineOutcome: nil,
-                guardRejectionReason: nil
+                appliedRuleIDs: []
             ),
             CorrectionEvidence(
                 id: "evidence-2",
@@ -169,10 +151,7 @@ final class CorrectionEvidenceTests: XCTestCase {
                 canonicalizedTranscript: "call foo parens",
                 finalInsertedTranscript: "call foo parens",
                 userEditedTranscript: "call foo()",
-                appliedRuleIDs: [],
-                polishOutcome: "disabled",
-                engineOutcome: nil,
-                guardRejectionReason: nil
+                appliedRuleIDs: []
             ),
             CorrectionEvidence(
                 id: "evidence-3",
@@ -182,10 +161,7 @@ final class CorrectionEvidenceTests: XCTestCase {
                 canonicalizedTranscript: "call widget pro()",
                 finalInsertedTranscript: "call widget pro()",
                 userEditedTranscript: "call WidgetPro()",
-                appliedRuleIDs: [],
-                polishOutcome: "disabled",
-                engineOutcome: nil,
-                guardRejectionReason: nil
+                appliedRuleIDs: []
             )
         ])
 
@@ -202,10 +178,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "open .git ignore",
             finalInsertedTranscript: "open .git ignore",
             userEditedTranscript: "open .gitignore",
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
 
         let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
@@ -223,10 +196,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "question mark",
             finalInsertedTranscript: "question mark",
             userEditedTranscript: "?",
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
 
         let suggested = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: [evidence]).first)
@@ -245,10 +215,7 @@ final class CorrectionEvidenceTests: XCTestCase {
                 canonicalizedTranscript: "are you sure question mark",
                 finalInsertedTranscript: "are you sure question mark",
                 userEditedTranscript: "are you sure?",
-                appliedRuleIDs: [],
-                polishOutcome: "disabled",
-                engineOutcome: nil,
-                guardRejectionReason: nil
+                appliedRuleIDs: []
             ),
             CorrectionEvidence(
                 id: "evidence-2",
@@ -258,10 +225,7 @@ final class CorrectionEvidenceTests: XCTestCase {
                 canonicalizedTranscript: "are you sure exclamation point",
                 finalInsertedTranscript: "are you sure exclamation point",
                 userEditedTranscript: "are you sure!",
-                appliedRuleIDs: [],
-                polishOutcome: "disabled",
-                engineOutcome: nil,
-                guardRejectionReason: nil
+                appliedRuleIDs: []
             )
         ])
 
@@ -297,10 +261,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "open widget pro",
             finalInsertedTranscript: "open widget pro",
             userEditedTranscript: nil,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         ))
 
         XCTAssertTrue(store.recordUserEdit(
@@ -472,12 +433,7 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         coordinator.recordCorrectionEvidence(
             rawTranscript: "open siemux",
-            polishResult: PolishResult(
-                text: "open CMUX",
-                outcome: .disabled,
-                rawCharacterCount: "open CMUX".count
-            ),
-            effectiveOutcome: .disabled,
+            finalTranscript: "open CMUX",
             applied: true,
             recordingID: "rec-1"
         )
@@ -488,7 +444,6 @@ final class CorrectionEvidenceTests: XCTestCase {
         XCTAssertEqual(evidence.canonicalizedTranscript, "open CMUX")
         XCTAssertEqual(evidence.finalInsertedTranscript, "open CMUX")
         XCTAssertEqual(evidence.appliedRuleIDs, ["builtin.cmux"])
-        XCTAssertEqual(evidence.polishOutcome, "disabled")
     }
 
     @MainActor
@@ -507,12 +462,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
             enabled: false,
             rawTranscript: "open siemux",
-            polishResult: PolishResult(
-                text: "open CMUX",
-                outcome: .disabled,
-                rawCharacterCount: "open CMUX".count
-            ),
-            effectiveOutcome: .disabled,
+            finalTranscript: "open CMUX",
             applied: true,
             recordingID: "rec-1"
         )
@@ -537,12 +487,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
             enabled: true,
             rawTranscript: "open siemux",
-            polishResult: PolishResult(
-                text: "open CMUX",
-                outcome: .disabled,
-                rawCharacterCount: "open CMUX".count
-            ),
-            effectiveOutcome: .disabled,
+            finalTranscript: "open CMUX",
             applied: false,
             finalInsertedTranscript: nil,
             recordingID: "rec-1"
@@ -568,12 +513,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
             enabled: true,
             rawTranscript: "open siemux",
-            polishResult: PolishResult(
-                text: "open CMUX",
-                outcome: .disabled,
-                rawCharacterCount: "open CMUX".count
-            ),
-            effectiveOutcome: .disabled,
+            finalTranscript: "open CMUX",
             applied: true,
             finalInsertedTranscript: "open CMUX",
             recordingID: "rec-1"
@@ -598,12 +538,7 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         let evidenceID = coordinator.recordCorrectionEvidence(
             rawTranscript: "open widget pro",
-            polishResult: PolishResult(
-                text: "open widget pro",
-                outcome: .disabled,
-                rawCharacterCount: "open widget pro".count
-            ),
-            effectiveOutcome: .disabled,
+            finalTranscript: "open widget pro",
             applied: true,
             recordingID: "rec-1"
         )
@@ -638,12 +573,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         _ = session.insertFinal("open widget pro")
         coordinator.recordCorrectionEvidence(
             rawTranscript: "open widget pro",
-            polishResult: PolishResult(
-                text: "open widget pro",
-                outcome: .disabled,
-                rawCharacterCount: "open widget pro".count
-            ),
-            effectiveOutcome: .disabled,
+            finalTranscript: "open widget pro",
             applied: true,
             recordingID: "rec-1",
             session: session
@@ -674,10 +604,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "widget pro",
             finalInsertedTranscript: "widget pro",
             userEditedTranscript: nil,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         ))
         let observer = EvidenceFakeTargetObserver()
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
@@ -719,10 +646,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "widget pro",
             finalInsertedTranscript: "widget pro",
             userEditedTranscript: nil,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         ))
         let observer = EvidenceFakeTargetObserver()
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
@@ -770,10 +694,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "widget pro",
             finalInsertedTranscript: "widget pro",
             userEditedTranscript: nil,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         ))
         let observer = EvidenceFakeTargetObserver()
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
@@ -874,10 +795,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             canonicalizedTranscript: "widget pro",
             finalInsertedTranscript: "widget pro",
             userEditedTranscript: nil,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         ))
         let observer = EvidenceFakeTargetObserver()
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")

@@ -166,10 +166,7 @@ final class CorrectionPromotionGateTests: XCTestCase {
             finalInsertedTranscript: final,
             userEditedTranscript: edited,
             applicationBundleIdentifier: applicationBundleIdentifier,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
     }
 }

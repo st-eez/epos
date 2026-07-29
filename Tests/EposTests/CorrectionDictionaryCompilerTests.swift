@@ -120,10 +120,6 @@ final class CorrectionDictionaryCompilerTests: XCTestCase {
         )
 
         XCTAssertEqual(
-            compiledCanonicalizer.canonicalVocabularyStrings,
-            defaultCanonicalizer.canonicalVocabularyStrings
-        )
-        XCTAssertEqual(
             compiledCanonicalizer.speechContextualStrings,
             defaultCanonicalizer.speechContextualStrings
         )

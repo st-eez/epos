@@ -19,18 +19,6 @@ final class SettingsTests: XCTestCase {
         super.tearDown()
     }
 
-    func testPolishEnabledPersistsThroughSaveAndLoad() {
-        // Absent key → opt-in flag defaults off.
-        XCTAssertFalse(Settings.load(from: defaults).polishEnabled)
-
-        // Save it on, then a fresh load reads the persisted value back.
-        var settings = Settings.load(from: defaults)
-        settings.polishEnabled = true
-        settings.save(to: defaults)
-
-        XCTAssertTrue(Settings.load(from: defaults).polishEnabled)
-    }
-
     func testCorrectionEvidenceDefaultsOffAndPersistsOn() {
         XCTAssertFalse(Settings.load(from: defaults).saveCorrectionEvidence)
 

@@ -20,7 +20,7 @@ Transcriber                            (SpeechAnalyzer + SpeechTranscriber, en-U
     ↓  volatile partials + growing per-segment finals
 RecordingIndicator                    (memory-only volatile preview)
     ↓  fn release
-TranscriptPolisher + Canonicalizer     (safe cleanup + deterministic jargon fix)
+Canonicalizer + DeterministicCleaner   (deterministic jargon fix + safe disfluency cleanup)
     ↓
 FinalTranscriptInsertionSession       (verifies the fn-press field)
     ↓
@@ -36,10 +36,11 @@ press. Before the one final write it verifies that context is unchanged. Opaque
 Electron targets use their process and focus signature. A mismatch writes nothing
 and shows "Not inserted"; Epos never restores focus or issues corrective backspaces.
 
-On fn release the coordinator finalizes. The optional `TranscriptPolisher`
-(`polishEnabled`, default OFF) may rewrite the final transcript behind a
-content-retention guard with an always-safe fallback — words are never lost.
-`CorrectionDictionary` + `CorrectionEvidence` learn new aliases from the user's
+On fn release the coordinator finalizes: the authoritative final text is
+`TranscriptDeterministicCleaner.streamClean(canonicalize(raw))` — the same transform the
+HUD streamed, so the one write never re-types uncleaned text. An opt-in LLM polish stage
+shipped here and was removed on 2026-07-29 after benchmarking (`specs/polish-model-benchmark.md`);
+do not re-add one without new evidence. `CorrectionDictionary` + `CorrectionEvidence` learn new aliases from the user's
 post-dictation AX edits, gated by `CorrectionPromotionGate`.
 
 ---
@@ -170,7 +171,7 @@ as a background capture rig:
 | File | Role |
 |------|------|
 | `App/AppCoordinator.swift` | Recording state machine; wires audio → speech → insertion |
-| `App/Settings.swift` | Persisted settings (`polishEnabled`, …) |
+| `App/Settings.swift` | Persisted settings (`saveAudioSamples`, `saveCorrectionEvidence`, …) |
 | `Hotkey/FnHotkey.swift` | fn-key push-to-talk monitor |
 | `Audio/AudioCapture.swift` | Mic capture + resample to 16 kHz mono |
 | `Audio/DogfoodTap.swift` | Per-recording WAVs for replay evals |
@@ -178,8 +179,7 @@ as a background capture rig:
 | `Speech/AssetManager.swift` | On-device model asset install/availability |
 | `Speech/TranscriptCanonicalizer.swift` | Deterministic correction layer (jargon aliases, spoken symbols) |
 | `Speech/Correction*.swift` | User-editable alias dictionary; learns from AX edit evidence |
-| `Speech/TranscriptPolisher*.swift`, `*Polish*.swift` | Opt-in LLM polish: engines, guard, prompts, fallback |
-| `Speech/TranscriptDeterministicCleaner.swift` | Guard-proven hard-filler cleanup (polish fallback path) |
+| `Speech/TranscriptDeterministicCleaner.swift` | Always-on conservative cleanup: hard fillers, function-word stutters, numeric ordinals |
 | `Inject/FinalTranscriptInsertion.swift` | Captures the fn-press target; issues at most one final write |
 | `Inject/InsertionTargetGuard.swift`, `InsertionTargetFocusSignature.swift` | AX safety: final target/value/caret/selection validation |
 | `Inject/TextInsertionBackend.swift` | Keystroke synthesis backend |

@@ -719,10 +719,7 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
             canonicalizedTranscript: final,
             finalInsertedTranscript: final,
             userEditedTranscript: edited,
-            appliedRuleIDs: [],
-            polishOutcome: "disabled",
-            engineOutcome: nil,
-            guardRejectionReason: nil
+            appliedRuleIDs: []
         )
     }
 }

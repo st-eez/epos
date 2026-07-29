@@ -79,15 +79,10 @@ public struct TranscriptCanonicalizer: Sendable {
         CorrectionRuleMatcher.apply(specs, to: text).output
     }
 
-    /// Canonical vocabulary to pass to the polish model as known exact spellings.
-    /// Yields each rule's canonical form once (de-duplicated, capped), skipping
-    /// pure-symbol canonicals like `--` or `/` that carry no pronounceable token.
-    public var canonicalVocabularyStrings: [String] {
-        contextualStrings()
-    }
-
     /// Canonical vocabulary to feed the recognizer as best-effort `AnalysisContext`
-    /// bias. Post-hoc aliases intentionally stay out: many are observed recognizer
+    /// bias. Yields each rule's canonical form once (de-duplicated, capped), skipping
+    /// pure-symbol canonicals like `--` or `/` that carry no pronounceable token.
+    /// Post-hoc aliases intentionally stay out: many are observed recognizer
     /// errors, and feeding those errors back as desired vocabulary can create the
     /// exact phrase that a later correction rewrites.
     public var speechContextualStrings: [String] {

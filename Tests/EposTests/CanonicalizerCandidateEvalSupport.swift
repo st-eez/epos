@@ -91,11 +91,11 @@ struct CandidateEvaluation {
         self.slice = slice
         self.baseline = baseline
         self.variant = variant
-        self.before = PolishEvalScoring.wordErrorScore(
+        self.before = TranscriptEvalScoring.wordErrorScore(
             reference: row.humanIntendedTranscript,
             hypothesis: baseline
         )
-        self.after = PolishEvalScoring.wordErrorScore(
+        self.after = TranscriptEvalScoring.wordErrorScore(
             reference: row.humanIntendedTranscript,
             hypothesis: variant
         )

@@ -156,8 +156,6 @@ struct RecordingIndicatorSurface: View {
             return switch finalizationPhase {
             case .finalizingSpeech:
                 "Finishing"
-            case .polishing:
-                "Polishing"
             case .inserting:
                 "Updating"
             }

@@ -7,7 +7,6 @@ public struct MenuBarView: View {
     @State private var launchAtLogin = false
     @State private var saveAudioSamples = false
     @State private var saveCorrectionEvidence = false
-    @State private var polishEnabled = false
 
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
     private let teal = EposPalette.teal
@@ -41,7 +40,6 @@ public struct MenuBarView: View {
             launchAtLogin = coordinator.launchAtLogin
             saveAudioSamples = coordinator.saveAudioSamples
             saveCorrectionEvidence = coordinator.saveCorrectionEvidence
-            polishEnabled = coordinator.polishEnabled
         }
     }
 
@@ -117,18 +115,6 @@ public struct MenuBarView: View {
                     .frame(width: 42, height: 22)
                     .onChange(of: saveCorrectionEvidence) { _, newValue in
                         coordinator.setSaveCorrectionEvidence(newValue)
-                    }
-            }
-            Divider().overlay(.white.opacity(0.08))
-            metaRow("Polish dictation (on-device AI)") {
-                Toggle("", isOn: $polishEnabled)
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .tint(teal)
-                    .scaleEffect(0.74)
-                    .frame(width: 42, height: 22)
-                    .onChange(of: polishEnabled) { _, newValue in
-                        coordinator.setPolishEnabled(newValue)
                     }
             }
         }
@@ -265,13 +251,6 @@ public struct MenuBarView: View {
                 icon: "waveform.badge.magnifyingglass",
                 title: "Finishing speech",
                 subtitle: "Waiting for the final transcript",
-                color: amber
-            )
-        case .polishing:
-            Readiness(
-                icon: "sparkles",
-                title: "Polishing dictation",
-                subtitle: "Cleaning filler words",
                 color: amber
             )
         case .inserting:

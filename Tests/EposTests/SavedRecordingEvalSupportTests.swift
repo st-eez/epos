@@ -92,7 +92,7 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
     }
 
     func testWordErrorScoreComputesSubstitutionWERAndAccuracy() {
-        let score = PolishEvalScoring.wordErrorScore(
+        let score = TranscriptEvalScoring.wordErrorScore(
             reference: "Ask Stath to review the CMOX changes.",
             hypothesis: "Ask Stas to review the CMOX changes."
         )
@@ -108,11 +108,11 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
     }
 
     func testWordErrorScoreCountsInsertionsAndDeletions() {
-        let insertion = PolishEvalScoring.wordErrorScore(
+        let insertion = TranscriptEvalScoring.wordErrorScore(
             reference: "Make two tickets.",
             hypothesis: "Make two tickets now."
         )
-        let deletion = PolishEvalScoring.wordErrorScore(
+        let deletion = TranscriptEvalScoring.wordErrorScore(
             reference: "Make two tickets.",
             hypothesis: "Make tickets."
         )
@@ -125,7 +125,7 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
 
     func testWordErrorTokenizationKeepsDeveloperTokens() {
         XCTAssertEqual(
-            PolishEvalScoring.wordErrorTokens("Open cloud.md, then /goal, $HOME, and --."),
+            TranscriptEvalScoring.wordErrorTokens("Open cloud.md, then /goal, $HOME, and --."),
             ["open", "cloud.md", "then", "/goal", "$home", "and", "--"]
         )
     }
@@ -196,7 +196,7 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
     }
 
     func testSpeechContextEvalRowScoresRerankedAlternativeAgainstGroundTruth() {
-        let rerankingScore = PolishEvalScoring.wordErrorScore(
+        let rerankingScore = TranscriptEvalScoring.wordErrorScore(
             reference: "Open project.yml.",
             hypothesis: "Open project.yml."
         )
@@ -243,10 +243,10 @@ final class SavedRecordingEvalSupportTests: XCTestCase {
         bestAlternativeTranscript: String? = nil,
         alternativeReranking: AlternativeTranscriptRerankingEvalResult? = nil
     ) -> SpeechContextEvalRow {
-        let baselineScore = PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: baselineText)
-        let variantScore = PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: variantText)
+        let baselineScore = TranscriptEvalScoring.wordErrorScore(reference: reference, hypothesis: baselineText)
+        let variantScore = TranscriptEvalScoring.wordErrorScore(reference: reference, hypothesis: variantText)
         let bestAlternativeScore = bestAlternativeTranscript.map {
-            PolishEvalScoring.wordErrorScore(reference: reference, hypothesis: $0)
+            TranscriptEvalScoring.wordErrorScore(reference: reference, hypothesis: $0)
         }
         return SpeechContextEvalRow(
             evalSchemaVersion: 1,
