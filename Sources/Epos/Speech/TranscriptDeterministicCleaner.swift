@@ -5,7 +5,7 @@ import Foundation
 /// numeric ordinal formatting, and the measured `seems to getting` grammar miss.
 /// It deliberately does not remove ambiguous phrase fillers such as "you know"
 /// or bare `like`/`so`.
-enum TranscriptDeterministicCleaner {
+public enum TranscriptDeterministicCleaner {
     static func clean(_ text: String) -> String {
         let segments = Self.segments(from: text)
         var removed: Set<Int> = []
@@ -34,11 +34,13 @@ enum TranscriptDeterministicCleaner {
     }
 
     /// The conservative disfluency pass used for the canonicalized final baseline:
-    /// strip hard fillers, then collapse stuttered function-word repeats. It excludes
-    /// ordinals, the `so`/`like` opener, and grammar reflow so the default polish-off
-    /// path cannot make broad edits.
-    static func streamClean(_ canonicalized: String) -> String {
-        collapseAdjacentDuplicates(stripStandaloneFillers(canonicalized))
+    /// strip hard fillers, collapse stuttered function-word repeats, then spell
+    /// standalone numeric ordinals. It excludes the `so`/`like` opener and grammar
+    /// reflow so the default polish-off path cannot make broad edits.
+    public static func streamClean(_ canonicalized: String) -> String {
+        normalizeNumericOrdinals(
+            collapseAdjacentDuplicates(stripStandaloneFillers(canonicalized))
+        )
     }
 
     /// Removes ONLY standalone hard fillers (`um`/`uh`/`er`/`hmm`) and the comma
@@ -56,6 +58,20 @@ enum TranscriptDeterministicCleaner {
         }
         guard !removed.isEmpty else { return text }
         return apply(removed: removed, replacements: [:], to: segments)
+    }
+
+    private static func normalizeNumericOrdinals(_ text: String) -> String {
+        let segments = Self.segments(from: text)
+        var replacements: [Int: String] = [:]
+        for (index, segment) in segments.enumerated() where segment.isWord {
+            guard let normalized = segment.normalized,
+                  let ordinal = ordinalWord(forNumericOrdinal: normalized) else {
+                continue
+            }
+            replacements[index] = ordinal
+        }
+        guard !replacements.isEmpty else { return text }
+        return apply(removed: [], replacements: replacements, to: segments)
     }
 
     /// Collapses an immediately-repeated function word (case-insensitive, whitespace-only

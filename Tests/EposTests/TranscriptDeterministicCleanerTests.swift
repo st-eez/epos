@@ -125,6 +125,13 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
         ))
     }
 
+    func testStreamCleanConvertsStandaloneNumericOrdinals() {
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("test 1st, 2nd, 3rd, and 21st"),
+            "test first, second, third, and twenty-first"
+        )
+    }
+
     func testDoesNotConvertMalformedOrEmbeddedNumericOrdinals() {
         XCTAssertEqual(
             TranscriptDeterministicCleaner.clean("test 11st thing and ship the 22th build"),

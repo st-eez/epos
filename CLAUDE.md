@@ -72,6 +72,9 @@ open /Applications/Epos.app
 - `scripts/audit` reports privacy-safe operational outcomes and the most complete
   signed labeled-corpus artifact. It keeps current schema-1 sessions separate from
   legacy inferred logs and never prints transcript text.
+- `scripts/correct <candidate.json>` evaluates one correction record against the
+  frozen signed 114-row production arm. It requires zero baseline and holdout
+  regressions plus at least one holdout win before accepting the candidate.
 - Current `swift test` processes disable the shared dogfood diagnostic sink. Older
   logs can still contain historical test bursts; `scripts/audit` partitions all
   pre-schema sessions as legacy instead of treating them as current evidence.

@@ -167,3 +167,36 @@ Direction:
 - It does not validate LLM polish as the next lever: Ollama changed `0` holdout
   rows, and the remaining residuals are mostly ASR semantic misses or unsafe
   style/grammar rewrites.
+
+## 2026-07-29 correction candidate gate
+
+Use `scripts/correct <candidate.json>` to evaluate one `CorrectionRecord` before
+adding it to production. The command reads the frozen current-production arm from
+the latest complete signed 114-recording artifact, joins it to the ordered
+ground-truth manifest, and runs the repository default correction dictionary with
+and without the candidate. It does not retranscribe audio, call a polish model, or
+read machine-local persisted correction rules.
+
+The first 80 manifest rows remain the locked baseline and the final 34 remain the
+holdout. A candidate passes only when:
+
+- all 114 labeled filenames are present exactly once;
+- the locked baseline has zero WER regressions;
+- the holdout has zero WER regressions;
+- the holdout has at least one WER improvement.
+
+Changed rows and score deltas remain visible in the local command output. A
+rejected candidate exits nonzero and must not be promoted into
+`CorrectionDictionary.defaultRecords`.
+
+The signed Apple benchmark records both raw recognizer text and Epos's
+deterministic production baseline: the active app correction dictionary followed
+by the conservative stream cleaner. `scripts/audit` prefers that production score
+when the artifact provides it and reports which score field it selected. Older
+artifacts without production fields remain raw-recognizer evidence and must be
+labeled as such.
+
+Standalone numeric ordinals are part of the conservative stream baseline. The
+114-row corpus contains two independent `1st` -> `first` misses, the transformation
+preserves numeric meaning, and corpus evaluation must show no regressions before
+it ships.

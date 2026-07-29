@@ -70,6 +70,7 @@ enum SignedApplePresetEvalHost {
         let enabledArms = ApplePresetArm.allCases.filter {
             availability.available[$0] != nil
         }
+        let canonicalizer = TranscriptCanonicalizer.load()
         var rows: [ApplePresetEvalRow] = []
         for (recordingIndex, recording) in recordings.enumerated() {
             let duration = try durationSeconds(recording)
@@ -91,6 +92,9 @@ enum SignedApplePresetEvalHost {
                 }
                 let elapsed = seconds(from: started.duration(to: .now))
                 let intended = manifest.transcript(for: recording)!
+                let productionOutput = TranscriptDeterministicCleaner.streamClean(
+                    canonicalizer.canonicalize(transcript)
+                )
                 let row = ApplePresetEvalRow(
                     arm: arm,
                     configuration: arm.configuration,
@@ -100,6 +104,11 @@ enum SignedApplePresetEvalHost {
                     humanIntendedTranscript: intended,
                     transcript: transcript,
                     transcriptScore: WordErrorScoring.score(reference: intended, hypothesis: transcript),
+                    productionOutput: productionOutput,
+                    productionOutputTranscriptScore: WordErrorScoring.score(
+                        reference: intended,
+                        hypothesis: productionOutput
+                    ),
                     elapsedSeconds: elapsed,
                     rtfX: elapsed > 0 ? duration / elapsed : nil,
                     error: error

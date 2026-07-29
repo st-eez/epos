@@ -87,8 +87,18 @@ def natural(value: Any) -> int | None:
     return None
 
 
-def score(row: dict[str, Any]) -> dict[str, int] | None:
-    for candidate in (row.get("transcriptScore"), row.get("outputTranscriptScore"), row.get("score")):
+SCORE_FIELDS = (
+    "productionOutputTranscriptScore",
+    "outputTranscriptScore",
+    "canonicalizedRawTranscriptScore",
+    "transcriptScore",
+    "score",
+)
+
+
+def score_with_source(row: dict[str, Any]) -> tuple[dict[str, int], str] | None:
+    for field in SCORE_FIELDS:
+        candidate = row.get(field)
         if not isinstance(candidate, dict):
             continue
         substitutions = natural(candidate.get("substitutions"))
@@ -100,9 +110,14 @@ def score(row: dict[str, Any]) -> dict[str, int] | None:
         component_total = substitutions + insertions + deletions
         if errors is None or errors != component_total:
             continue
-        return {"substitutions": substitutions, "insertions": insertions,
-                "deletions": deletions, "wordErrors": errors}
+        return ({"substitutions": substitutions, "insertions": insertions,
+                 "deletions": deletions, "wordErrors": errors}, field)
     return None
+
+
+def score(row: dict[str, Any]) -> dict[str, int] | None:
+    result = score_with_source(row)
+    return result[0] if result else None
 
 
 def explicit_empty_or_error(row: dict[str, Any]) -> bool:
@@ -143,7 +158,7 @@ def accuracy_report(path: Path | None, requested: str | None) -> dict[str, Any]:
         reason = "baseline arm is ambiguous; pass --eval-arm" if arm is None else "selected baseline arm has no rows"
         return {"available": False, "evalSource": str(path), "baselineArm": arm,
                 "reason": reason, "malformedRows": file_malformed}
-    counts, errors, components = Counter(), Counter(), defaultdict(Counter)
+    counts, errors, components, score_sources = Counter(), Counter(), defaultdict(Counter), Counter()
     mixed, selected_malformed = 0, 0
     for row in selected:
         classified = classify(row)
@@ -151,6 +166,9 @@ def accuracy_report(path: Path | None, requested: str | None) -> dict[str, Any]:
             selected_malformed += 1
             continue
         bucket, row_score, is_mixed = classified
+        selected_score = score_with_source(row)
+        if selected_score:
+            score_sources[selected_score[1]] += 1
         counts[bucket] += 1
         errors[bucket] += row_score["wordErrors"]
         for name in ("substitutions", "insertions", "deletions"):
@@ -172,6 +190,10 @@ def accuracy_report(path: Path | None, requested: str | None) -> dict[str, Any]:
         "fileMalformedRows": file_malformed,
         "selectedMalformedRows": selected_malformed,
         "artifactBalanced": artifact_is_balanced(rows), "mixedErrorRows": mixed,
+        "scoreSource": (
+            next(iter(score_sources)) if len(score_sources) == 1
+            else "mixed:" + ",".join(sorted(score_sources))
+        ),
         "classificationRule": "largest error contributor; ties resolve substitution, insertion, deletion",
         "buckets": buckets, "totalContributedWordErrors": sum(errors.values()),
     }

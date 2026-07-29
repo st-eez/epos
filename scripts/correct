@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(cd "$script_dir/.." && pwd)"
+
+if (( $# < 1 || $# > 2 )); then
+  echo "usage: scripts/correct <candidate.json> [signed-eval.jsonl]" >&2
+  exit 64
+fi
+
+candidate="$(cd "$(dirname "$1")" && pwd)/$(basename "$1")"
+artifact="${2:-$repo_root/.build/evals/corrected-apple-presets-signed-114.jsonl}"
+if [[ "$artifact" != /* ]]; then
+  artifact="$repo_root/$artifact"
+fi
+
+if [[ ! -f "$candidate" ]]; then
+  echo "error: candidate not found: $candidate" >&2
+  exit 66
+fi
+if [[ ! -f "$artifact" ]]; then
+  echo "error: signed eval not found: $artifact" >&2
+  exit 66
+fi
+
+if [[ -z "${DEVELOPER_DIR:-}" ]]; then
+  export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+fi
+
+cd "$repo_root"
+EPOS_RUN_CORRECTION_EVAL=1 \
+EPOS_CORRECTION_CANDIDATE="$candidate" \
+EPOS_CORRECTION_EVAL_ARTIFACT="$artifact" \
+  swift test --filter CanonicalizerCandidateEvalTests/testCandidateAgainstFrozenCorpus

@@ -64,6 +64,8 @@ def run_self_test(root: Path) -> None:
         {"arm": "other", "transcript": "private", "transcriptScore": score(0, 0, 0, 0)},
         {"arm": "other", "transcript": "private", "transcriptScore": score(0, 0, 0, 0)},
     ]
+    for row in rows[:3]:
+        row["productionOutputTranscriptScore"] = row["transcriptScore"]
     for index, row in enumerate(rows):
         row["file"] = f"sample-{index % 5}.wav"
     complete = root / "complete-signed.jsonl"
@@ -109,6 +111,7 @@ def run_self_test(root: Path) -> None:
     assert accuracy["selectedMalformedRows"] == 2
     assert accuracy["fileMalformedRows"] == 0
     assert accuracy["artifactBalanced"]
+    assert accuracy["scoreSource"] == "productionOutputTranscriptScore"
     assert sum(value["count"] for value in accuracy["buckets"].values()) == 3
     assert accuracy["mixedErrorRows"] == 1
     rendered = json.dumps(report) + format_human(report)

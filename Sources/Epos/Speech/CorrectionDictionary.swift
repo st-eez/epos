@@ -2,7 +2,43 @@ import Foundation
 
 public struct CorrectionDictionary: Equatable, Sendable {
     public static let recordsDefaultsKey = "settings.correctionDictionary.recordsJSON"
-    private static let storedDictionaryVersion = 1
+    static let storedDictionaryVersion = 1
+    static let builtInIntroductionVersions: [String: Int] = [
+        "builtin.claude-md": 1,
+        "builtin.llm-polish": 1,
+        "builtin.epos-app": 1,
+        "builtin.readme-and-agents-file": 1,
+        "builtin.subagents-context-window": 1,
+        "builtin.foundation-models": 1,
+        "builtin.saying-deprecate": 1,
+        "builtin.yesterday-saying": 1,
+        "builtin.not-working-properly": 1,
+        "builtin.did-we-close-phase-one": 1,
+        "builtin.it-would-add-extra": 1,
+        "builtin.text-is-redundant": 1,
+        "builtin.three-letter-code": 1,
+        "builtin.two-tickets": 1,
+        "builtin.two-things": 1,
+        "builtin.part-two": 1,
+        "builtin.add-comment-ticket": 1,
+        "builtin.add-comment-tickets": 1,
+        "builtin.codebase": 1,
+        "builtin.unslopify": 1,
+        "builtin.claude-vibe-coding": 1,
+        "builtin.different-than-main": 1,
+        "builtin.different-from-main": 1,
+        "builtin.regressions-suite": 1,
+        "builtin.slash": 1,
+        "builtin.cmux": 1,
+        "builtin.agents-md": 1,
+        "builtin.readme-md": 1,
+        "builtin.project-yml": 1,
+        "builtin.updates-to-claude-md": 1,
+        "builtin.env": 1,
+        "builtin.dash-dash": 1,
+        "builtin.slash-goal": 1,
+        "builtin.dollar-home": 1
+    ]
     private static let log = EposLogger(category: "corrections")
 
     public var records: [CorrectionRecord]
@@ -252,7 +288,11 @@ public struct CorrectionDictionary: Equatable, Sendable {
                     "correction dictionary dropped \(storedDictionary.undecodableRecordCount) undecodable record(s) on load"
                 )
             }
-            let migrated = migratingStoredBuiltInRecords(storedDictionary.records)
+            let migrated = migratingStoredBuiltInRecords(
+                storedDictionary.records,
+                storedVersion: storedDictionary.version,
+                appendIntroducedDefaults: storedDictionary.undecodableRecordCount == 0
+            )
             // Never rewrite the stored blob when undecodable records were dropped:
             // a built-in migration in the same load would otherwise persist the
             // stripped set, destroying the future-schema records the tolerant
@@ -295,13 +335,17 @@ public struct CorrectionDictionary: Equatable, Sendable {
         return MigratedRules(rules: TranscriptCanonicalizer.defaultRules, shouldPersist: false)
     }
 
-    private static func migratingStoredBuiltInRecords(_ records: [CorrectionRecord]) -> (
+    private static func migratingStoredBuiltInRecords(
+        _ records: [CorrectionRecord],
+        storedVersion: Int,
+        appendIntroducedDefaults: Bool
+    ) -> (
         records: [CorrectionRecord],
         didChange: Bool
     ) {
         let defaultsByID = Dictionary(uniqueKeysWithValues: defaultRecords.map { ($0.id, $0) })
         var didChange = false
-        let migratedRecords = records.compactMap { record -> CorrectionRecord? in
+        var migratedRecords = records.compactMap { record -> CorrectionRecord? in
             guard record.source == .builtIn else { return record }
 
             guard var current = defaultsByID[record.id] else {
@@ -318,6 +362,20 @@ public struct CorrectionDictionary: Equatable, Sendable {
             current.status = record.status
             didChange = true
             return current
+        }
+        if appendIntroducedDefaults {
+            let storedIDs = Set(migratedRecords.map(\.id))
+            let missingDefaults = defaultRecords.filter { record in
+                guard !storedIDs.contains(record.id),
+                      let introductionVersion = builtInIntroductionVersions[record.id] else {
+                    return false
+                }
+                return introductionVersion > storedVersion
+            }
+            if !missingDefaults.isEmpty {
+                migratedRecords.append(contentsOf: missingDefaults)
+                didChange = true
+            }
         }
         return (migratedRecords, didChange)
     }

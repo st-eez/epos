@@ -10,6 +10,8 @@ struct ApplePresetEvalRow: Codable {
     let humanIntendedTranscript: String
     let transcript: String
     let transcriptScore: WordErrorScore
+    let productionOutput: String
+    let productionOutputTranscriptScore: WordErrorScore
     let elapsedSeconds: Double
     let rtfX: Double?
     let error: String?
@@ -40,9 +42,15 @@ enum ApplePresetEvalReport {
         ]
         for arm in enabledArms {
             let armRows = rows.filter { $0.arm == arm }
-            let totalErrors = armRows.reduce(0) { $0 + $1.transcriptScore.wordErrors }
+            let rawErrors = armRows.reduce(0) { $0 + $1.transcriptScore.wordErrors }
+            let outputErrors = armRows.reduce(0) {
+                $0 + $1.productionOutputTranscriptScore.wordErrors
+            }
             let totalWords = armRows.reduce(0) { $0 + $1.transcriptScore.referenceWordCount }
-            let exact = armRows.filter { $0.transcriptScore.wordErrors == 0 }.count
+            let rawExact = armRows.filter { $0.transcriptScore.wordErrors == 0 }.count
+            let outputExact = armRows.filter {
+                $0.productionOutputTranscriptScore.wordErrors == 0
+            }.count
             let failed = armRows.filter { $0.error != nil }.count
             let empty = armRows.filter(\.isEmpty).count
             let audio = armRows.reduce(0) { $0 + $1.audioDurationSeconds }
@@ -50,9 +58,11 @@ enum ApplePresetEvalReport {
             let comparison = compare(armRows, baseline: baseline)
             lines.append(
                 "  \(arm.rawValue): rows=\(armRows.count)/\(expectedRowsPerArm) "
-                    + "corpusWER=\(format(Double(totalErrors) / Double(max(totalWords, 1)), 6)) "
-                    + "exact=\(exact)/\(armRows.count) failed=\(failed) empty=\(empty) "
-                    + "wins/losses/ties-vs-current="
+                    + "rawWER=\(format(Double(rawErrors) / Double(max(totalWords, 1)), 6)) "
+                    + "outputWER=\(format(Double(outputErrors) / Double(max(totalWords, 1)), 6)) "
+                    + "exactRaw/output=\(rawExact)/\(outputExact) "
+                    + "failed=\(failed) empty=\(empty) "
+                    + "outputWins/losses/ties-vs-current="
                     + "\(comparison.wins)/\(comparison.losses)/\(comparison.ties) "
                     + "RTFx=\(elapsed > 0 ? format(audio / elapsed, 2) : "n/a")"
             )
@@ -77,7 +87,8 @@ enum ApplePresetEvalReport {
         var result = (wins: 0, losses: 0, ties: 0)
         for row in rows {
             guard let baselineRow = baseline[row.file] else { continue }
-            let delta = row.transcriptScore.wordErrors - baselineRow.transcriptScore.wordErrors
+            let delta = row.productionOutputTranscriptScore.wordErrors
+                - baselineRow.productionOutputTranscriptScore.wordErrors
             if delta < 0 {
                 result.wins += 1
             } else if delta > 0 {

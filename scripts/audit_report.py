@@ -72,6 +72,7 @@ def format_human(report: dict[str, Any]) -> str:
             f"  selected artifact: {Path(accuracy['evalSource']).name}",
             f"  balanced arm coverage: {str(accuracy['artifactBalanced']).lower()}",
             f"  baseline arm: {accuracy['baselineArm']}",
+            f"  score source: {accuracy['scoreSource']}",
             f"  rows: {accuracy['rows']}/{accuracy['selectedRows']} selected "
             f"({accuracy['selectedMalformedRows']} selected malformed; "
             f"{accuracy['fileMalformedRows']} file malformed)",

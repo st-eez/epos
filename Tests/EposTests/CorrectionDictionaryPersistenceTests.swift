@@ -29,12 +29,14 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         XCTAssertEqual(record.id, "builtin.yesterday-saying")
         XCTAssertEqual(record.aliases, ["history seeing"])
         XCTAssertEqual(record.status, .disabled)
+        XCTAssertEqual(loaded.records.count, 1)
 
         let persistedRaw = try XCTUnwrap(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
         let persistedData = try XCTUnwrap(persistedRaw.data(using: .utf8))
         let persisted = try JSONDecoder().decode(StoredDictionary.self, from: persistedData)
         XCTAssertEqual(persisted.records.first?.aliases, ["history seeing"])
         XCTAssertEqual(persisted.records.first?.status, .disabled)
+        XCTAssertEqual(persisted.records.count, 1)
     }
 
     func testDictionaryKeepsReadableRecordsWhenOneRecordIsUndecodable() throws {
@@ -127,13 +129,53 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
 
         var expectedRetiredRecord = retiredBuiltIn
         expectedRetiredRecord.source = .manual
-        XCTAssertEqual(loaded.records, [expectedRetiredRecord, manual])
+        XCTAssertEqual(
+            loaded.records,
+            [expectedRetiredRecord, manual]
+        )
         XCTAssertNil(defaults.string(forKey: TranscriptCanonicalizer.rulesDefaultsKey))
 
         let persistedRaw = try XCTUnwrap(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
         let persistedData = try XCTUnwrap(persistedRaw.data(using: .utf8))
         let persisted = try JSONDecoder().decode(StoredDictionary.self, from: persistedData)
-        XCTAssertEqual(persisted.records, [expectedRetiredRecord, manual])
+        XCTAssertEqual(
+            persisted.records,
+            [expectedRetiredRecord, manual]
+        )
+    }
+
+    func testDictionaryAddsBuiltInsIntroducedAfterStoredVersion() throws {
+        struct StoredDictionary: Codable {
+            var version: Int
+            var records: [CorrectionRecord]
+        }
+
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let data = try JSONEncoder().encode(StoredDictionary(version: 0, records: []))
+        defaults.set(String(decoding: data, as: UTF8.self), forKey: CorrectionDictionary.recordsDefaultsKey)
+
+        let loaded = CorrectionDictionary.load(from: defaults)
+
+        XCTAssertEqual(loaded.records, CorrectionDictionary.defaultRecords)
+        let persistedRaw = try XCTUnwrap(defaults.string(forKey: CorrectionDictionary.recordsDefaultsKey))
+        let persistedData = try XCTUnwrap(persistedRaw.data(using: .utf8))
+        let persisted = try JSONDecoder().decode(StoredDictionary.self, from: persistedData)
+        XCTAssertEqual(persisted.version, CorrectionDictionary.storedDictionaryVersion)
+        XCTAssertEqual(persisted.records, CorrectionDictionary.defaultRecords)
+    }
+
+    func testEveryBuiltInDeclaresAValidIntroductionVersion() {
+        let defaultIDs = Set(CorrectionDictionary.defaultRecords.map(\.id))
+        let introductionIDs = Set(CorrectionDictionary.builtInIntroductionVersions.keys)
+
+        XCTAssertEqual(defaultIDs.count, CorrectionDictionary.defaultRecords.count)
+        XCTAssertEqual(introductionIDs, defaultIDs)
+        XCTAssertTrue(CorrectionDictionary.builtInIntroductionVersions.values.allSatisfy {
+            (1...CorrectionDictionary.storedDictionaryVersion).contains($0)
+        })
     }
 
     func testCurrentManualSavePersistsNonDefaultRulesAsManualRecords() throws {
