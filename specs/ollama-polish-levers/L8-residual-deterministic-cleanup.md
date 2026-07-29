@@ -82,3 +82,17 @@ ground-truth WER without allowing broader model rewrites.
 
 Residual deterministic cleanup is implemented and improves production output WER
 with no observed output regressions on the 35-row dogfood set.
+
+### 2026-07-29 promotion to the always-on stream baseline
+
+The exact missing-helper repair now also runs when optional polish is off.
+Signed replay over the current 114-row manifest changed only
+`2026-06-02_14-30-54-846.wav`, which is within the 35 documented
+human-confirmed rows. It became an exact match.
+
+- Word errors: `9 -> 8`
+- Exact rows: `105 -> 106`
+- Corpus WER: `0.6792% -> 0.6038%`
+- Changed rows outside the intended win: `0`
+
+Artifact: `.build/evals/stream-missing-be-signed-114.jsonl`.

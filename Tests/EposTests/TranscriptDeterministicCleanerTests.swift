@@ -151,19 +151,23 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
         XCTAssertTrue(TranscriptPolisher.polishRetainsContent(raw: raw, polished: cleaned))
     }
 
+    func testStreamCleanInsertsMissingBeOnlyForMeasuredSeemsToGettingPattern() {
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("It seems to getting batched."),
+            "It seems to be getting batched."
+        )
+    }
+
     func testDoesNotInsertMissingBeForOtherIngOrPunctuatedShapes() {
-        XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("It seems to bring the wrong file."),
-            "It seems to bring the wrong file."
-        )
-        XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("It seems, to getting batched."),
-            "It seems, to getting batched."
-        )
-        XCTAssertEqual(
-            TranscriptDeterministicCleaner.clean("I want to getting started."),
-            "I want to getting started."
-        )
+        let unchanged = [
+            "It seems to bring the wrong file.",
+            "It seems, to getting batched.",
+            "I want to getting started.",
+        ]
+        for transcript in unchanged {
+            XCTAssertEqual(TranscriptDeterministicCleaner.clean(transcript), transcript)
+            XCTAssertEqual(TranscriptDeterministicCleaner.streamClean(transcript), transcript)
+        }
     }
 
     func testCollapseAdjacentDuplicatesRemovesStutteredFunctionWords() {
