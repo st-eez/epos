@@ -17,6 +17,8 @@ public enum TranscriptDeterministicCleaner {
                 removed.insert(index)
             } else if let ordinalWord = ordinalWord(forNumericOrdinal: normalized) {
                 replacements[index] = ordinalWord
+            } else if normalized == "getting", isMissingBeBeforeGetting(at: index, in: segments) {
+                replacements[index] = "be getting"
             }
         }
 
@@ -27,21 +29,17 @@ public enum TranscriptDeterministicCleaner {
             removed.insert(leadingIndex)
         }
 
-        let cleaned = removed.isEmpty && replacements.isEmpty
-            ? text
-            : apply(removed: removed, replacements: replacements, to: segments)
-        return insertMissingBeBeforeGetting(cleaned)
+        guard !removed.isEmpty || !replacements.isEmpty else { return text }
+        return apply(removed: removed, replacements: replacements, to: segments)
     }
 
     /// The conservative disfluency pass used for the canonicalized final baseline:
     /// strip hard fillers, collapse stuttered function-word repeats, then spell
     /// standalone numeric ordinals. It excludes the `so`/`like` opener and grammar
-    /// reflow except the measured exact `seem/seems/seemed to getting` repair.
+    /// reflow so the default polish-off path cannot make broad edits.
     public static func streamClean(_ canonicalized: String) -> String {
-        insertMissingBeBeforeGetting(
-            normalizeNumericOrdinals(
-                collapseAdjacentDuplicates(stripStandaloneFillers(canonicalized))
-            )
+        normalizeNumericOrdinals(
+            collapseAdjacentDuplicates(stripStandaloneFillers(canonicalized))
         )
     }
 
@@ -264,17 +262,6 @@ public enum TranscriptDeterministicCleaner {
             return false
         }
         return true
-    }
-
-    private static func insertMissingBeBeforeGetting(_ text: String) -> String {
-        let segments = Self.segments(from: text)
-        var replacements: [Int: String] = [:]
-        for (index, segment) in segments.enumerated()
-        where segment.normalized == "getting" && isMissingBeBeforeGetting(at: index, in: segments) {
-            replacements[index] = "be getting"
-        }
-        guard !replacements.isEmpty else { return text }
-        return apply(removed: [], replacements: replacements, to: segments)
     }
 
     private static func previousWordIndex(before index: Int, in segments: [Segment]) -> Int? {
