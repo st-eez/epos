@@ -22,6 +22,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         private let failMarksAfter: Int?
         private let commitReply: String
         private let commitError: InlinePreviewTransportError?
+        private let rectReply: String
 
         private(set) var lines: [String] = []
         private(set) var openCount = 0
@@ -35,7 +36,8 @@ final class InlinePreviewSessionTests: XCTestCase {
             markThrows: Bool = false,
             failMarksAfter: Int? = nil,
             commitReply: String = "ok committed 1",
-            commitError: InlinePreviewTransportError? = nil
+            commitError: InlinePreviewTransportError? = nil,
+            rectReply: String = "ok rect 100.0 200.0 1.0 18.0"
         ) {
             self.openThrows = openThrows
             self.beginReply = beginReply
@@ -43,6 +45,7 @@ final class InlinePreviewSessionTests: XCTestCase {
             self.failMarksAfter = failMarksAfter
             self.commitReply = commitReply
             self.commitError = commitError
+            self.rectReply = rectReply
         }
 
         func open() async throws {
@@ -63,6 +66,7 @@ final class InlinePreviewSessionTests: XCTestCase {
                 if let commitError { throw commitError }
                 return commitReply
             }
+            if line == "rect" { return rectReply }
             return "ok"
         }
 
@@ -86,6 +90,18 @@ final class InlinePreviewSessionTests: XCTestCase {
         }
 
         var snapshot: [Bool] { lock.withLock { values } }
+    }
+
+    /// Thread-safe recorder for the session's one-shot caret-rect callback.
+    private final class CaretRectRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [CGRect?] = []
+
+        func record(_ value: CGRect?) {
+            lock.withLock { values.append(value) }
+        }
+
+        var snapshot: [CGRect?] { lock.withLock { values } }
     }
 
     private final class SilentInsertionSession: TextInsertionSession {
@@ -159,14 +175,16 @@ final class InlinePreviewSessionTests: XCTestCase {
     private func makeSession(
         transport: FakeInlinePreviewTransport,
         gate: Gate,
-        onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in }
+        onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
+        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil
     ) -> InlinePreviewSession {
         InlinePreviewSession(
             transport: transport,
             bundleIdentifier: Self.target,
             throttle: .milliseconds(100),
             sleep: { _ in await gate.wait() },
-            onMarkingActivityChange: onMarkingActivityChange
+            onMarkingActivityChange: onMarkingActivityChange,
+            onCaretRect: onCaretRect
         )
     }
 
@@ -241,6 +259,58 @@ final class InlinePreviewSessionTests: XCTestCase {
         await session.discard()
 
         await Self.waitForLines([Self.begin, "mark same", "cancel", "end"], from: transport)
+    }
+
+    // MARK: - Caret rect query
+
+    func testCaretRectIsQueriedOnceAfterTheFirstMarkOnly() async {
+        let transport = FakeInlinePreviewTransport(rectReply: "ok rect 875.0 -160.0 1.0 16.0")
+        let gate = Gate()
+        let recorder = CaretRectRecorder()
+        let session = makeSession(transport: transport, gate: gate, onCaretRect: { recorder.record($0) })
+
+        await session.begin()
+        await session.mark("one")
+        await Self.waitForLines([Self.begin, "mark one", "rect"], from: transport)
+
+        await session.mark("one two")
+        await gate.open()
+        await Self.waitForLines([Self.begin, "mark one", "rect", "mark one two"], from: transport)
+
+        XCTAssertEqual(recorder.snapshot, [CGRect(x: 875, y: -160, width: 1, height: 16)])
+        await gate.open()
+    }
+
+    func testCaretRectFailureReportsNilAndDoesNotDegradeTheChannel() async {
+        let transport = FakeInlinePreviewTransport(rectReply: "err rect unavailable")
+        let gate = Gate()
+        let recorder = CaretRectRecorder()
+        let session = makeSession(transport: transport, gate: gate, onCaretRect: { recorder.record($0) })
+
+        await session.begin()
+        await session.mark("one")
+        await Self.waitForLines([Self.begin, "mark one", "rect"], from: transport)
+
+        XCTAssertEqual(recorder.snapshot, [nil])
+        // The channel stays healthy: later marks still flow.
+        await session.mark("one two")
+        await gate.open()
+        await Self.waitForLines([Self.begin, "mark one", "rect", "mark one two"], from: transport)
+        let report = await session.report()
+        XCTAssertNil(report.failure)
+        XCTAssertEqual(report.marksSent, 2)
+        await gate.open()
+    }
+
+    func testNoCaretRectConsumerMeansNoRectQuery() async {
+        let transport = FakeInlinePreviewTransport()
+        let gate = Gate()
+        let session = makeSession(transport: transport, gate: gate)
+
+        await session.begin()
+        await session.mark("one")
+        await Self.waitForLines([Self.begin, "mark one"], from: transport)
+        await gate.open()
     }
 
     // MARK: - Discard ordering
@@ -634,7 +704,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertEqual(backend.inserted, [])
         XCTAssertEqual(insertion.insertedTranscript, "Hello there.")
         await Self.waitForLines(
-            [Self.begin, "mark hello there", "cancel", "commit Hello there.", "end"],
+            [Self.begin, "mark hello there", "rect", "cancel", "commit Hello there.", "end"],
             from: transport
         )
     }

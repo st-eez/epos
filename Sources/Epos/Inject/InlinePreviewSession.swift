@@ -82,8 +82,14 @@ actor InlinePreviewSession {
     /// healthy). The coordinator uses it to drop the HUD's duplicate transcript
     /// line while the field shows the same text.
     private let onMarkingActivityChange: @Sendable (Bool) -> Void
+    /// When set, fired exactly once per recording after the first acknowledged
+    /// mark, with the caret-line rectangle the probe read from the pinned client
+    /// (nil when unavailable). One bounded `rect` round-trip total — the
+    /// per-mark path never re-queries.
+    private let onCaretRect: (@Sendable (CGRect?) -> Void)?
 
     private var phase: Phase = .pending
+    private var caretRectQueried = false
     private var pendingMark: String?
     private var lastSentMark: String?
     private var draining = false
@@ -100,13 +106,15 @@ actor InlinePreviewSession {
         bundleIdentifier: String,
         throttle: Duration = .milliseconds(100),
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
-        onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in }
+        onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
+        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil
     ) {
         self.transport = transport
         self.bundleIdentifier = bundleIdentifier
         self.throttle = throttle
         self.sleep = sleep
         self.onMarkingActivityChange = onMarkingActivityChange
+        self.onCaretRect = onCaretRect
     }
 
     /// Text the line protocol can carry verbatim. A transcript that would need
@@ -288,11 +296,34 @@ actor InlinePreviewSession {
                 guard reply.hasPrefix("ok") else { return degrade("markRefused") }
                 marksSent += 1
                 lastSentMark = text
+                if marksSent == 1 { await queryCaretRect() }
             } catch {
                 return degrade("markFailed")
             }
             await sleep(throttle)
         }
+    }
+
+    /// One bounded caret-rect query, right after the composition first appears
+    /// on screen. Any failure reports nil and never degrades the channel: the
+    /// rect only anchors the HUD, it is no part of the preview/commit contract.
+    private func queryCaretRect() async {
+        guard let onCaretRect, !caretRectQueried else { return }
+        caretRectQueried = true
+        let reply = try? await transport.send("rect")
+        onCaretRect(reply.flatMap(Self.parseCaretRect))
+    }
+
+    /// Reply format: "ok rect <x> <y> <width> <height>", Cocoa screen
+    /// coordinates (verified against TextEdit; see the anchor policy).
+    nonisolated static func parseCaretRect(_ reply: String) -> CGRect? {
+        let parts = reply.split(separator: " ")
+        guard parts.count == 6, parts[0] == "ok", parts[1] == "rect",
+              let x = Double(parts[2]), let y = Double(parts[3]),
+              let width = Double(parts[4]), let height = Double(parts[5]) else {
+            return nil
+        }
+        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     private func degrade(_ reason: String) {

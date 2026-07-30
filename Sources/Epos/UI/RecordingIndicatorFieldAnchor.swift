@@ -1,10 +1,12 @@
 import Foundation
 
 /// Pure placement math for the compact, field-anchored recording chip shown while
-/// the inline preview mirrors the transcript into the fn-press field. Converts the
-/// captured AX element frame (top-left-origin global coordinates) into a Cocoa
-/// panel frame beside the field. Returning nil means "anchor unavailable" and the
-/// caller keeps today's bottom-center pill.
+/// the inline preview mirrors the transcript into the fn-press field. The primary
+/// anchor is the caret-line rectangle the IME probe reads from the pinned client
+/// (how native dictation and candidate windows position); the captured AX element
+/// frame is the fallback, and only when it is plausibly a discrete field.
+/// Returning nil means "anchor unavailable" and the caller keeps today's
+/// bottom-center pill.
 enum RecordingIndicatorFieldAnchorPolicy {
     struct Screen: Equatable {
         let frame: CGRect
@@ -22,7 +24,7 @@ enum RecordingIndicatorFieldAnchorPolicy {
         /// The NSPanel frame that puts the trailing-aligned, vertically centered
         /// chip content exactly at `chipFrame`.
         let panelFrame: CGRect
-        let placedBelowField: Bool
+        let placedBelowAnchor: Bool
     }
 
     /// Fixed compact-chip metrics shared by the SwiftUI layout and the panel
@@ -33,6 +35,11 @@ enum RecordingIndicatorFieldAnchorPolicy {
     nonisolated static let chipTrailingInset: CGFloat = 16
     nonisolated static let panelSize = CGSize(width: 320, height: 64)
     nonisolated static let clearance: CGFloat = 8
+    /// An AX element frame covering more than this fraction of its screen's
+    /// visible area is not a discrete field (terminal panes, editor surfaces,
+    /// whole Electron windows) — anchoring to its top-right corner would pin the
+    /// chip to a screen corner, so such frames are rejected.
+    nonisolated static let maxFieldFractionOfScreen: CGFloat = 0.5
 
     /// The compact chip is shown only while the inline preview is the visible
     /// transcript surface AND the chip could be anchored beside the field.
@@ -40,11 +47,36 @@ enum RecordingIndicatorFieldAnchorPolicy {
         mirroring && anchored
     }
 
-    /// Places the chip just above the field's top edge, right-aligned to the
-    /// field's right edge, clamped to the field's screen visible frame. A field
-    /// too close to the screen top flips the chip below the field instead. The
-    /// chip never overlaps the field's interior.
-    nonisolated static func placement(
+    /// Primary anchor: the caret-line rectangle from the IME channel. IMK's
+    /// `attributesForCharacterIndex:lineHeightRectangle:` reports Cocoa screen
+    /// coordinates — bottom-left origin, global across displays, NO flip
+    /// (verified empirically: a TextEdit caret on a display arranged below the
+    /// primary reported y = -160 inside that window's Cocoa span; a top-left
+    /// reading would have placed it above the primary where no display exists).
+    /// The chip sits clearance above the caret line, trailing edge at the caret,
+    /// clamped to the caret's screen; a caret too close to the screen top flips
+    /// the chip below the line. The caret line itself is never covered.
+    nonisolated static func caretPlacement(
+        caretRect: CGRect?,
+        screens: [Screen]
+    ) -> Placement? {
+        guard let caretRect else { return nil }
+        let caret = caretRect.standardized
+        guard caret.minX.isFinite, caret.minY.isFinite,
+              caret.width.isFinite, caret.height.isFinite,
+              caret.height >= 4, caret.height <= 200 else {
+            return nil
+        }
+        guard let screen = screenContaining(caret, in: screens) else { return nil }
+        return chipPlacement(anchor: caret, visible: screen.visibleFrame.standardized)
+    }
+
+    /// Fallback anchor: the captured AX element frame (top-left-origin global
+    /// coordinates, flipped about the primary screen's top edge), accepted only
+    /// for plausibly discrete fields. The chip goes just above the field's top
+    /// edge, right-aligned to its right edge, clamped to the field's screen
+    /// visible frame, flipping below when there is no room above.
+    nonisolated static func fieldPlacement(
         axFieldFrame: CGRect?,
         screens: [Screen]
     ) -> Placement? {
@@ -56,22 +88,35 @@ enum RecordingIndicatorFieldAnchorPolicy {
         // Anchor to the on-screen part of the field so a field that runs past a
         // screen edge still gets a visible, non-overlapping chip.
         let anchor = field.intersection(visible)
-        guard !anchor.isNull, anchor.width >= 4, anchor.height >= 4,
-              visible.width >= chipSize.width, visible.height >= chipSize.height else {
+        guard !anchor.isNull, anchor.width >= 4, anchor.height >= 4 else { return nil }
+        guard anchor.width * anchor.height
+                <= maxFieldFractionOfScreen * visible.width * visible.height else {
             return nil
         }
+        return chipPlacement(anchor: anchor, visible: visible)
+    }
 
+    /// Shared core: chip trailing edge at the anchor's right edge, clearance
+    /// above the anchor, flip below when the screen top is too close, clamp
+    /// horizontally into the visible frame.
+    private nonisolated static func chipPlacement(
+        anchor: CGRect,
+        visible: CGRect
+    ) -> Placement? {
+        guard visible.width >= chipSize.width, visible.height >= chipSize.height else {
+            return nil
+        }
         let chipMaxX = min(max(anchor.maxX, visible.minX + chipSize.width), visible.maxX)
         let aboveY = anchor.maxY + clearance
         let belowY = anchor.minY - clearance - chipSize.height
         let chipY: CGFloat
-        let placedBelowField: Bool
+        let placedBelowAnchor: Bool
         if aboveY + chipSize.height <= visible.maxY {
             chipY = aboveY
-            placedBelowField = false
+            placedBelowAnchor = false
         } else if belowY >= visible.minY {
             chipY = belowY
-            placedBelowField = true
+            placedBelowAnchor = true
         } else {
             return nil
         }
@@ -91,7 +136,7 @@ enum RecordingIndicatorFieldAnchorPolicy {
         return Placement(
             chipFrame: chipFrame,
             panelFrame: panelFrame,
-            placedBelowField: placedBelowField
+            placedBelowAnchor: placedBelowAnchor
         )
     }
 
@@ -119,13 +164,13 @@ enum RecordingIndicatorFieldAnchorPolicy {
     }
 
     private nonisolated static func screenContaining(
-        _ field: CGRect,
+        _ anchor: CGRect,
         in screens: [Screen]
     ) -> Screen? {
         let best = screens.max { lhs, rhs in
-            overlapArea(field, lhs.frame) < overlapArea(field, rhs.frame)
+            overlapArea(anchor, lhs.frame) < overlapArea(anchor, rhs.frame)
         }
-        guard let best, overlapArea(field, best.frame) > 0 else { return nil }
+        guard let best, overlapArea(anchor, best.frame) > 0 else { return nil }
         return best
     }
 

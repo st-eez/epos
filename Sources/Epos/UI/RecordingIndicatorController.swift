@@ -73,18 +73,28 @@ public final class RecordingIndicatorController {
         show()
     }
 
-    /// Anchor the compact chip beside the captured field. Returns false — leaving
-    /// the current bottom-center presentation untouched — when no usable placement
-    /// exists (nil/degenerate AX frame, field off every screen, no room).
-    public func anchorToCapturedField(axFieldFrame: CGRect?) -> Bool {
+    /// Anchor the compact chip beside the live caret when the IME channel
+    /// reported one, else beside the captured AX element when it is plausibly a
+    /// discrete field. Returns false — leaving the current bottom-center
+    /// presentation untouched — when neither anchor yields a usable placement.
+    /// The AX fallback frame is an autoclosure so its bounded AX read only
+    /// happens when the caret rect did not already decide the placement.
+    public func anchorNearCaret(
+        caretRect: CGRect?,
+        fallbackAXFieldFrame: @autoclosure () -> CGRect?
+    ) -> Bool {
         let screens = NSScreen.screens.map {
             RecordingIndicatorFieldAnchorPolicy.Screen(frame: $0.frame, visibleFrame: $0.visibleFrame)
         }
-        guard let placement = RecordingIndicatorFieldAnchorPolicy.placement(
-            axFieldFrame: axFieldFrame,
+        let placement = RecordingIndicatorFieldAnchorPolicy.caretPlacement(
+            caretRect: caretRect,
             screens: screens
-        ) else {
-            log.info("field anchor unavailable; keeping bottom-center pill")
+        ) ?? RecordingIndicatorFieldAnchorPolicy.fieldPlacement(
+            axFieldFrame: fallbackAXFieldFrame(),
+            screens: screens
+        )
+        guard let placement else {
+            log.info("caret/field anchor unavailable; keeping bottom-center pill")
             return false
         }
         presentation = .fieldAnchored(placement.panelFrame)

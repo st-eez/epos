@@ -585,29 +585,44 @@ public final class AppCoordinator: ObservableObject {
                     self.inlinePreviewMirroring = active
                     self.syncIndicatorFieldAnchor()
                 }
+            },
+            onCaretRect: { [weak self] rect in
+                Task { @MainActor in
+                    guard let self, self.inlinePreviewGeneration == generation else { return }
+                    self.anchorIndicatorNearCaret(rect)
+                }
             }
         )
     }
 
-    /// Moves the recording chip beside the fn-press field while the inline
-    /// preview is the visible transcript surface, and restores the bottom-center
-    /// full pill the moment mirroring degrades mid-recording (the HUD transcript
-    /// line reappears in the same update). The AX frame read happens at most once
-    /// per recording, when mirroring first activates — never on the finalize
-    /// path, where `finishInlinePreview` clears the flag without coming here.
+    /// One anchor decision per recording, made when the first composition mark
+    /// is on screen and the preview session has read the caret rect: the caret
+    /// line from the IME channel first, the captured element's AX frame only
+    /// when it is plausibly a discrete field, bottom-center otherwise. The one
+    /// bounded AX frame read happens here (mid-recording), never on the
+    /// finalize path.
+    private func anchorIndicatorNearCaret(_ caretRect: CGRect?) {
+        guard state == .recording, inlinePreviewMirroring,
+              !didAttemptFieldAnchorThisRecording else { return }
+        didAttemptFieldAnchorThisRecording = true
+        let anchored = indicator.anchorNearCaret(
+            caretRect: caretRect,
+            fallbackAXFieldFrame: textInsertionSession?.capturedTargetScreenFrame()
+        )
+        indicatorCompact = RecordingIndicatorFieldAnchorPolicy.isCompact(
+            mirroring: true,
+            anchored: anchored
+        )
+    }
+
+    /// Restores the bottom-center full pill the moment mirroring degrades
+    /// mid-recording (the HUD transcript line reappears in the same update).
+    /// One-way per recording: `didAttemptFieldAnchorThisRecording` keeps a later
+    /// callback from re-anchoring, so the pill can never oscillate. At finalize,
+    /// `finishInlinePreview` clears the mirroring flag without coming here.
     private func syncIndicatorFieldAnchor() {
         guard state == .recording else { return }
-        if inlinePreviewMirroring {
-            guard !didAttemptFieldAnchorThisRecording else { return }
-            didAttemptFieldAnchorThisRecording = true
-            let anchored = indicator.anchorToCapturedField(
-                axFieldFrame: textInsertionSession?.capturedTargetScreenFrame()
-            )
-            indicatorCompact = RecordingIndicatorFieldAnchorPolicy.isCompact(
-                mirroring: true,
-                anchored: anchored
-            )
-        } else if indicatorCompact {
+        if !inlinePreviewMirroring, indicatorCompact {
             indicatorCompact = false
             indicator.showBottomCenter()
         }
