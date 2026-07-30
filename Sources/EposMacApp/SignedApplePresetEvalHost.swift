@@ -28,7 +28,7 @@ enum SignedApplePresetEvalHost {
         let locale = Settings.load().locale
         let recordingsDirectory = fileURL(
             environment["EPOS_EVAL_RECORDINGS_DIR"]
-                ?? "\(NSHomeDirectory())/Library/Caches/Epos/recordings",
+                ?? "\(NSHomeDirectory())/Library/Application Support/Epos/recordings",
             isDirectory: true
         )
         let corpusURL = fileURL(

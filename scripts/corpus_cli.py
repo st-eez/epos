@@ -29,7 +29,7 @@ from holdout_freeze import SELECTION_FILENAME
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parent.parent
-    recordings_default = Path.home() / "Library" / "Caches" / "Epos" / "recordings"
+    recordings_default = Path.home() / "Library" / "Application Support" / "Epos" / "recordings"
     parser = argparse.ArgumentParser(
         description="Build a provenance-aware ledger for the frozen Epos audio corpus."
     )

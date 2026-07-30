@@ -28,7 +28,7 @@ def main() -> int:
         return run_model_cli(sys.argv[2:])
 
     parser = argparse.ArgumentParser(description="Run raw STT model benchmarks over Epos saved audio.")
-    parser.add_argument("--recordings-dir", default=str(Path.home() / "Library/Caches/Epos/recordings"))
+    parser.add_argument("--recordings-dir", default=str(Path.home() / "Library/Application Support/Epos/recordings"))
     parser.add_argument("--ground-truth")
     parser.add_argument("--output-dir")
     parser.add_argument("--models", default="parakeet,whisper,granite")

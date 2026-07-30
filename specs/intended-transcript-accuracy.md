@@ -7,6 +7,11 @@ human-intended transcripts for saved `.wav` dogfood recordings. LLM polish remai
 the final cleanup layer; it is not the primary lever for ASR misses that Apple
 `SpeechTranscriber` never produced.
 
+Dated sections below cite `~/Library/Caches/Epos/recordings/` because that is
+where those runs read from. The corpus moved to
+`~/Library/Application Support/Epos/recordings/` on 2026-07-30; the historical
+paths stay as recorded.
+
 ## Reference provenance correction
 
 The legacy 114-row `ground-truth.jsonl` is not uniformly human-confirmed. Project

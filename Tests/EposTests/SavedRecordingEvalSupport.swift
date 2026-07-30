@@ -47,7 +47,7 @@ enum SavedRecordingEvalSupport {
     static func recordingsDirectory(environment: [String: String]) -> URL {
         fileURL(
             path: environment["EPOS_EVAL_RECORDINGS_DIR"]
-                ?? "\(NSHomeDirectory())/Library/Caches/Epos/recordings",
+                ?? "\(NSHomeDirectory())/Library/Application Support/Epos/recordings",
             isDirectory: true
         )
     }

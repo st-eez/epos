@@ -35,7 +35,7 @@ from holdout_selection import (
 
 def parser() -> argparse.ArgumentParser:
     repo_root = Path(__file__).resolve().parent.parent
-    recordings_default = Path.home() / "Library" / "Caches" / "Epos" / "recordings"
+    recordings_default = Path.home() / "Library" / "Application Support" / "Epos" / "recordings"
     result = argparse.ArgumentParser(
         description=(
             "Freeze a 40-recording holdout and confirm each transcript by listening."

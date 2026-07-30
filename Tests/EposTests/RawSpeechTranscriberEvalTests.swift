@@ -10,7 +10,7 @@ import XCTest
 ///   EPOS_RUN_RAW_STT_APPLE_EVAL=1 EPOS_EVAL_GROUND_TRUTH_ONLY=1 swift test --filter RawSpeechTranscriberEvalTests
 ///
 /// Useful knobs match the saved-recording eval helpers:
-/// - `EPOS_EVAL_RECORDINGS_DIR`: defaults to `~/Library/Caches/Epos/recordings`
+/// - `EPOS_EVAL_RECORDINGS_DIR`: defaults to `~/Library/Application Support/Epos/recordings`
 /// - `EPOS_EVAL_RECORDING_FILES`: comma- or newline-separated recording names
 /// - `EPOS_EVAL_LIMIT`: number of recordings to replay
 /// - `EPOS_EVAL_LATEST=1`: newest-first selection instead of manifest order

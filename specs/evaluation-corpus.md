@@ -3,6 +3,18 @@
 `scripts/corpus` creates the provenance ledger for the saved Epos recording
 corpus. It reads recordings and the legacy manifest but never changes either.
 
+## Storage
+
+The corpus lives in `~/Library/Application Support/Epos/recordings/`: the WAVs,
+`ground-truth.jsonl`, `holdout-selection.json`, and
+`holdout-confirmations.jsonl`. That is the one authoritative location — every
+script defaults to it and fails closed when it is missing, with no fallback to
+an older path. It is deliberately not `~/Library/Caches`, which macOS may purge
+under disk pressure; only the disposable diagnostic logs still live there.
+Recordings captured before 2026-07-30 were moved from the cache by
+`scripts/migrate`, a one-time command that refuses to merge into a destination
+that already holds WAVs.
+
 ## Frozen migration
 
 The migration is bound to:
@@ -175,7 +187,7 @@ confirmations and no selection file is the valid pre-session state.
 
 ### Confirmation ratchet
 
-Confirmations live in the same purgeable cache as the audio, so on their own they
+Confirmations live outside the repository next to the audio, so on their own they
 are not a floor: deleting the file would quietly turn 40 confirmed rows back into
 `unlabeled` on the next `scripts/corpus --replace`. After a confirming session:
 

@@ -42,7 +42,7 @@ def main() -> int:
     parser.add_argument(
         "--recordings",
         type=Path,
-        default=Path.home() / "Library" / "Caches" / "Epos" / "recordings",
+        default=Path.home() / "Library" / "Application Support" / "Epos" / "recordings",
     )
     parser.add_argument(
         "--corpus",

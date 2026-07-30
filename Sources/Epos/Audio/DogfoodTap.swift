@@ -2,7 +2,9 @@ import AVFoundation
 import Foundation
 
 /// Per-recording `.wav` capture in the mic's native format. Lives in the app's
-/// cache directory as opt-in eval material; disabled by default through `Settings`.
+/// Application Support directory as opt-in eval material; disabled by default
+/// through `Settings`. Not the cache directory: the recordings are the frozen
+/// evaluation corpus and macOS may purge caches under disk pressure.
 final class DogfoodTap: @unchecked Sendable {
     private static let log = EposLogger(category: "dogfood")
 
@@ -142,9 +144,10 @@ final class DogfoodTap: @unchecked Sendable {
     }
 
     private static func defaultRecordingsDirectory() -> URL? {
-        guard let cachesDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+        let supportDirs = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
+        guard let supportDir = supportDirs.first else {
             return nil
         }
-        return cachesDir.appendingPathComponent("Epos/recordings", isDirectory: true)
+        return supportDir.appendingPathComponent("Epos/recordings", isDirectory: true)
     }
 }

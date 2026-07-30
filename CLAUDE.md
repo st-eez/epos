@@ -76,6 +76,11 @@ open /Applications/Epos.app
 - `scripts/corpus` builds the provenance ledger for the frozen recording corpus
   (35 human-confirmed, 79 inferred, rest unlabeled). Only `human_confirmed` rows
   may back accuracy claims or correction promotion; see `specs/evaluation-corpus.md`.
+- The corpus (WAVs plus `ground-truth.jsonl`, `holdout-selection.json`,
+  `holdout-confirmations.jsonl`) lives in
+  `~/Library/Application Support/Epos/recordings/`, never in purgeable `Caches`.
+  Every script defaults there and fails closed if it is missing. `scripts/migrate`
+  is the one-time move off the old cache location.
 - `scripts/correct <candidate.json>` evaluates one correction record against the
   frozen signed 114-row production arm. Until a human-confirmed holdout exists it
   rejects every promotion; then it requires zero confirmed-development and holdout
@@ -174,7 +179,7 @@ as a background capture rig:
 | `App/Settings.swift` | Persisted settings (`saveAudioSamples`, `saveCorrectionEvidence`, …) |
 | `Hotkey/FnHotkey.swift` | fn-key push-to-talk monitor |
 | `Audio/AudioCapture.swift` | Mic capture + resample to 16 kHz mono |
-| `Audio/DogfoodTap.swift` | Per-recording WAVs for replay evals |
+| `Audio/DogfoodTap.swift` | Per-recording WAVs for replay evals (Application Support) |
 | `Speech/Transcriber.swift` | SpeechAnalyzer/SpeechTranscriber session lifecycle |
 | `Speech/AssetManager.swift` | On-device model asset install/availability |
 | `Speech/TranscriptCanonicalizer.swift` | Deterministic correction layer (jargon aliases, spoken symbols) |

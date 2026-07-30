@@ -13,7 +13,7 @@ import XCTest
 ///   EPOS_RUN_CONTEXT_EVAL=1 EPOS_EVAL_LATEST=1 EPOS_EVAL_LIMIT=10 swift test --filter SpeechContextEvalTests
 ///
 /// Useful knobs:
-/// - `EPOS_EVAL_RECORDINGS_DIR`: defaults to `~/Library/Caches/Epos/recordings`
+/// - `EPOS_EVAL_RECORDINGS_DIR`: defaults to `~/Library/Application Support/Epos/recordings`
 /// - `EPOS_EVAL_LIMIT`: number of recordings to replay
 /// - `EPOS_EVAL_LATEST=1`: newest-first selection instead of oldest-first
 /// - `EPOS_EVAL_DEFAULTS_DOMAIN`: UserDefaults domain to load correction records from,
