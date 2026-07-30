@@ -9,6 +9,7 @@ struct ApplePresetEvalRow: Codable {
     let audioSHA256: String
     let audioDurationSeconds: Double
     let humanIntendedTranscript: String
+    let referenceDesignation: ReferenceDesignation
     let transcript: String
     let transcriptScore: WordErrorScore
     let productionOutput: String

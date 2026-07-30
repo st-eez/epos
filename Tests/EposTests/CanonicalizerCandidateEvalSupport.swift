@@ -4,6 +4,7 @@ import Foundation
 struct CandidateCorpusRow: Decodable {
     let arm: String
     let file: String
+    let referenceDesignation: CandidateSlice
     let humanIntendedTranscript: String
     let transcript: String
     let error: String?
@@ -17,56 +18,31 @@ struct CandidateCorpusRow: Decodable {
     }
 }
 
-struct CandidateCorpusManifest {
-    private struct Row: Decodable {
-        let file: String
-        let humanIntendedTranscript: String
-    }
-
-    let orderedFiles: [String]
-    let transcripts: [String: String]
-
-    static func load(_ url: URL) throws -> Self {
-        let decoder = JSONDecoder()
-        let rows = try String(contentsOf: url, encoding: .utf8)
-            .split(separator: "\n")
-            .map { try decoder.decode(Row.self, from: Data($0.utf8)) }
-        return Self(
-            orderedFiles: rows.map(\.file),
-            transcripts: Dictionary(uniqueKeysWithValues: rows.map {
-                ($0.file, $0.humanIntendedTranscript)
-            })
-        )
-    }
-
-    func slice(for file: String) -> CandidateSlice {
-        orderedFiles.firstIndex(of: file).map {
-            $0 < 35 ? .development : .reviewOnly
-        } ?? .unknown
-    }
-}
-
 enum CandidateCorpus {
-    static func validate(rows: [CandidateCorpusRow], manifest: CandidateCorpusManifest) throws {
-        guard manifest.orderedFiles.count == 114,
-              Set(manifest.orderedFiles).count == 114,
-              rows.count == 114,
-              Set(rows.map(\.file)).count == 114,
-              Set(rows.map(\.file)) == Set(manifest.orderedFiles),
-              rows.allSatisfy({ $0.error == nil && !$0.transcript.isEmpty }),
+    static let expectedDevelopmentRows = 35
+    static let expectedHoldoutRows = 40
+
+    static func validate(rows: [CandidateCorpusRow]) throws {
+        let development = rows.filter { $0.referenceDesignation == .development }.count
+        let holdout = rows.filter { $0.referenceDesignation == .holdout }.count
+        guard development == expectedDevelopmentRows,
+              holdout == expectedHoldoutRows,
+              Set(rows.map(\.file)).count == rows.count,
               rows.allSatisfy({
-                  manifest.transcripts[$0.file] == $0.humanIntendedTranscript
+                  $0.error == nil
+                      && !$0.transcript.isEmpty
+                      && !$0.humanIntendedTranscript.isEmpty
               }) else {
             throw CandidateEvalError.invalidCorpus
         }
     }
 }
 
-enum CandidateSlice: String {
-    case development
+/// The artifact's reference designation is the slice: legacy rows developed the
+/// correction layer, holdout rows only ever judge it.
+enum CandidateSlice: String, Decodable {
+    case development = "legacy"
     case holdout
-    case reviewOnly = "review-only"
-    case unknown
 }
 
 struct CandidateEvaluation {
@@ -81,14 +57,13 @@ struct CandidateEvaluation {
 
     init(
         row: CandidateCorpusRow,
-        slice: CandidateSlice,
         baseline: String,
         variant: String
     ) {
         self.file = row.file
         self.intended = row.humanIntendedTranscript
         self.raw = row.transcript
-        self.slice = slice
+        self.slice = row.referenceDesignation
         self.baseline = baseline
         self.variant = variant
         self.before = TranscriptEvalScoring.wordErrorScore(
@@ -102,16 +77,15 @@ struct CandidateEvaluation {
     }
 
     static func synthetic(slice: CandidateSlice, before: Int, after: Int) -> Self {
-        let row = CandidateCorpusRow(
-            arm: "speech-progressive-fast",
-            file: "synthetic.wav",
-            humanIntendedTranscript: "right",
-            transcript: "wrong",
-            error: nil
-        )
-        return Self(
-            row: row,
-            slice: slice,
+        Self(
+            row: CandidateCorpusRow(
+                arm: "speech-progressive-fast",
+                file: "synthetic.wav",
+                referenceDesignation: slice,
+                humanIntendedTranscript: "right",
+                transcript: "wrong",
+                error: nil
+            ),
             baseline: before == 0 ? "right" : "wrong",
             variant: after == 0 ? "right" : "wrong"
         )
@@ -145,24 +119,20 @@ struct CandidateVerdict {
         evaluations.filter { $0.slice == .holdout }.count
     }
 
-    var confirmedReferenceEvaluations: [CandidateEvaluation] {
-        evaluations.filter { $0.slice == .development || $0.slice == .holdout }
-    }
-
     var baselineWordErrors: Int {
-        confirmedReferenceEvaluations.reduce(0) { $0 + $1.before.wordErrors }
+        evaluations.reduce(0) { $0 + $1.before.wordErrors }
     }
 
     var variantWordErrors: Int {
-        confirmedReferenceEvaluations.reduce(0) { $0 + $1.after.wordErrors }
+        evaluations.reduce(0) { $0 + $1.after.wordErrors }
     }
 
     var baselineExactRows: Int {
-        confirmedReferenceEvaluations.filter { $0.before.wordErrors == 0 }.count
+        evaluations.filter { $0.before.wordErrors == 0 }.count
     }
 
     var variantExactRows: Int {
-        confirmedReferenceEvaluations.filter { $0.after.wordErrors == 0 }.count
+        evaluations.filter { $0.after.wordErrors == 0 }.count
     }
 
     var passes: Bool {

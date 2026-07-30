@@ -186,24 +186,31 @@ Direction:
 ## 2026-07-29 correction candidate gate
 
 Use `scripts/correct <candidate.json>` to evaluate one `CorrectionRecord` before
-adding it to production. The command reads the frozen current-production arm from
-the latest complete signed 114-recording artifact, joins it to the ordered
-ground-truth manifest, and runs the repository default correction dictionary with
-and without the candidate. It does not retranscribe audio, call a polish model, or
-read machine-local persisted correction rules.
+adding it to production. The command reads the current-production arm of the
+signed confirmed-corpus artifact
+(`.build/evals/apple-presets-signed-confirmed75.jsonl`) and runs the repository
+default correction dictionary with and without the candidate. It does not
+retranscribe audio or read machine-local persisted correction rules.
 
-The old order-derived first-80/final-34 gate is disabled. All 79 rows after the
-first 35 are inferred, so none can serve as a promotion holdout. A candidate can
-pass only when:
+The gate is re-enabled against the 75 human-confirmed rows. Slices come from each
+artifact row's `referenceDesignation`, which the signed eval host copies from the
+v2 corpus ledger: `legacy` (the 35 rows that developed the correction layer) is
+the development slice, `holdout` (the 40 rows confirmed by listening in the
+`scripts/confirm` session) is the promotion holdout. Nothing is order-derived and
+no inferred row reaches the gate.
 
-- all 114 labeled filenames are present exactly once;
+**A holdout row may never drive candidate development.** It exists only to pass
+or fail a candidate. Reading holdout residuals to invent an alias, a threshold, or
+a rule turns the holdout into a second development set and destroys the only
+untouched reference evidence the project has.
+
+A candidate can pass only when:
+
+- the artifact holds exactly 35 legacy and 40 holdout rows, one row per file,
+  none failed or empty;
+- the candidate changes at least one row;
 - confirmed development rows have zero WER regressions;
-- a separate human-confirmed holdout exists;
-- that holdout has zero WER regressions and at least one WER improvement.
-
-There is currently no human-confirmed holdout, so `scripts/correct` reports the
-candidate evidence but rejects every promotion explicitly. New queue labels must
-be assigned to development or holdout before this gate can be re-enabled.
+- the holdout has zero WER regressions and at least one WER improvement.
 
 The signed Apple benchmark records both raw recognizer text and Epos's
 deterministic production baseline: the active app correction dictionary followed
@@ -249,8 +256,8 @@ recognizer output. The replay also records each WAV's SHA-256 digest. Queue
 generation re-hashes every current WAV and rejects changed audio or inconsistent
 replay metadata.
 
-The existing 114-row manifest remains the frozen baseline/holdout contract for
-the correction promotion gate. Human-confirmed transcripts from this queue must
-go into a separate provenance-aware manifest until expanding that gate becomes
-an explicit migration; never append them silently to the frozen manifest.
-Existing queue output is never overwritten unless `--replace` is explicit.
+The v2 corpus ledger is the frozen development/holdout contract for the
+correction promotion gate (`specs/evaluation-corpus.md`). Human-confirmed
+transcripts from this queue reach the gate only through that ledger; never append
+them silently to the legacy manifest. Existing queue output is never overwritten
+unless `--replace` is explicit.

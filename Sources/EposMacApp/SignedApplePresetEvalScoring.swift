@@ -1,59 +1,6 @@
 #if DEBUG
 import Foundation
 
-struct GroundTruthManifest {
-    private let transcriptsByFile: [String: String]
-
-    static func load(from url: URL) throws -> Self {
-        guard FileManager.default.fileExists(atPath: url.path) else {
-            throw GroundTruthError.notFound(url.path)
-        }
-        let body = try String(contentsOf: url, encoding: .utf8)
-        let decoder = JSONDecoder()
-        var transcripts: [String: String] = [:]
-        for (offset, rawLine) in body.components(separatedBy: .newlines).enumerated() {
-            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !line.isEmpty else { continue }
-            do {
-                let row = try decoder.decode(GroundTruthRow.self, from: Data(line.utf8))
-                let file = row.file.trimmingCharacters(in: .whitespacesAndNewlines)
-                let transcript = row.humanIntendedTranscript
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                guard !file.isEmpty, !transcript.isEmpty, transcripts[file] == nil else {
-                    throw GroundTruthError.invalidRow(url.path, offset + 1)
-                }
-                transcripts[file] = transcript
-            } catch {
-                throw GroundTruthError.invalidRow(url.path, offset + 1)
-            }
-        }
-        return Self(transcriptsByFile: transcripts)
-    }
-
-    func transcript(for recording: URL) -> String? {
-        transcriptsByFile[recording.lastPathComponent]
-    }
-}
-
-private struct GroundTruthRow: Decodable {
-    let file: String
-    let humanIntendedTranscript: String
-}
-
-private enum GroundTruthError: Error, CustomStringConvertible {
-    case invalidRow(String, Int)
-    case notFound(String)
-
-    var description: String {
-        switch self {
-        case .invalidRow(let path, let line):
-            "invalid or duplicate ground-truth row at \(path):\(line)"
-        case .notFound(let path):
-            "ground-truth manifest not found: \(path)"
-        }
-    }
-}
-
 struct WordErrorScore: Codable {
     let referenceWordCount: Int
     let comparedWordCount: Int

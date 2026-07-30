@@ -31,20 +31,18 @@ enum SignedApplePresetEvalHost {
                 ?? "\(NSHomeDirectory())/Library/Caches/Epos/recordings",
             isDirectory: true
         )
-        let manifestURL = fileURL(
-            environment["EPOS_EVAL_GROUND_TRUTH"]
-                ?? recordingsDirectory.appendingPathComponent("ground-truth.jsonl").path,
+        let corpusURL = fileURL(
+            environment["EPOS_EVAL_CORPUS"]
+                ?? FileManager.default.currentDirectoryPath
+                    + "/.build/evals/evaluation-corpus-v2.jsonl",
             isDirectory: false
         )
-        let manifest = try GroundTruthManifest.load(from: manifestURL)
-        let recordings = try selectedRecordings(
-            in: recordingsDirectory,
-            manifest: manifest,
-            environment: environment
-        )
-        guard !recordings.isEmpty else {
+        let corpus = try ConfirmedEvalCorpus.load(from: corpusURL)
+        let entries = selectedEntries(corpus, environment: environment)
+        guard !entries.isEmpty else {
             throw EvalError.noRecordings(recordingsDirectory.path)
         }
+        try verifyAudio(of: entries, in: recordingsDirectory)
 
         let outputURL = fileURL(
             environment["EPOS_EVAL_OUTPUT"]
@@ -73,9 +71,9 @@ enum SignedApplePresetEvalHost {
         }
         let canonicalizer = TranscriptCanonicalizer.load()
         var rows: [ApplePresetEvalRow] = []
-        for (recordingIndex, recording) in recordings.enumerated() {
+        for (recordingIndex, entry) in entries.enumerated() {
+            let recording = recordingsDirectory.appendingPathComponent(entry.file)
             let duration = try durationSeconds(recording)
-            let audioDigest = try audioSHA256(recording)
             for arm in rotated(enabledArms, by: recordingIndex) {
                 let armLocale = availability.available[arm]!
                 let started = ContinuousClock.now
@@ -93,7 +91,7 @@ enum SignedApplePresetEvalHost {
                     error = String(describing: caught)
                 }
                 let elapsed = seconds(from: started.duration(to: .now))
-                let intended = manifest.transcript(for: recording)!
+                let intended = entry.reference
                 let productionOutput = TranscriptDeterministicCleaner.streamClean(
                     canonicalizer.canonicalize(transcript)
                 )
@@ -101,10 +99,11 @@ enum SignedApplePresetEvalHost {
                     arm: arm,
                     configuration: arm.configuration,
                     locale: armLocale.identifier,
-                    file: recording.lastPathComponent,
-                    audioSHA256: audioDigest,
+                    file: entry.file,
+                    audioSHA256: entry.audioSHA256,
                     audioDurationSeconds: duration,
                     humanIntendedTranscript: intended,
+                    referenceDesignation: entry.designation,
                     transcript: transcript,
                     transcriptScore: WordErrorScoring.score(reference: intended, hypothesis: transcript),
                     productionOutput: productionOutput,
@@ -125,7 +124,7 @@ enum SignedApplePresetEvalHost {
             rows: rows,
             enabledArms: enabledArms,
             unavailable: availability.unavailable,
-            expectedRowsPerArm: recordings.count,
+            expectedRowsPerArm: entries.count,
             outputURL: outputURL,
             summaryURL: summaryURL
         )
@@ -136,17 +135,35 @@ enum SignedApplePresetEvalHost {
         )
     }
 
-    private static func selectedRecordings(
-        in directory: URL,
-        manifest: GroundTruthManifest,
+    private static func selectedEntries(
+        _ corpus: ConfirmedEvalCorpus,
         environment: [String: String]
-    ) throws -> [URL] {
-        let recordings = try FileManager.default
-            .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-            .filter { $0.pathExtension.lowercased() == "wav" && manifest.transcript(for: $0) != nil }
-            .sorted { $0.lastPathComponent < $1.lastPathComponent }
+    ) -> [ConfirmedEvalCorpus.Entry] {
         let limit = environment["EPOS_EVAL_LIMIT"].flatMap(Int.init).map { max(0, $0) }
-        return Array(recordings.prefix(limit ?? recordings.count))
+        return Array(corpus.entries.prefix(limit ?? corpus.entries.count))
+    }
+
+    /// Scoring against drifted audio would be silently wrong, so the whole run
+    /// aborts before the first transcription when any recording disagrees with
+    /// the ledger it was confirmed under.
+    private static func verifyAudio(
+        of entries: [ConfirmedEvalCorpus.Entry],
+        in directory: URL
+    ) throws {
+        for entry in entries {
+            let recording = directory.appendingPathComponent(entry.file)
+            guard FileManager.default.fileExists(atPath: recording.path) else {
+                throw EvalError.recordingMissing(recording.path)
+            }
+            let digest = try audioSHA256(recording)
+            guard digest == entry.audioSHA256 else {
+                throw EvalError.audioDigestMismatch(
+                    file: entry.file,
+                    expected: entry.audioSHA256,
+                    actual: digest
+                )
+            }
+        }
     }
 
     private static func prepareOutput(_ outputURL: URL) throws {
@@ -214,17 +231,23 @@ private struct EvalResult {
 
 private enum EvalError: Error, CustomStringConvertible {
     case assetPreparationFailed(String)
+    case audioDigestMismatch(file: String, expected: String, actual: String)
     case baselineUnavailable(String)
     case noRecordings(String)
+    case recordingMissing(String)
 
     var description: String {
         switch self {
         case .assetPreparationFailed(let reason):
             "asset preparation failed: \(reason)"
+        case .audioDigestMismatch(let file, let expected, let actual):
+            "audio changed since confirmation: \(file) expected \(expected), found \(actual)"
         case .baselineUnavailable(let reason):
             "current production arm unavailable: \(reason)"
         case .noRecordings(let path):
-            "no labeled WAV recordings found at \(path)"
+            "no confirmed WAV recordings selected from \(path)"
+        case .recordingMissing(let path):
+            "confirmed recording missing: \(path)"
         }
     }
 }

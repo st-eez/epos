@@ -12,13 +12,9 @@ final class CanonicalizerCandidateEvalTests: XCTestCase {
             URL(fileURLWithPath: $0)
         })
         let artifactURL = URL(fileURLWithPath: environment["EPOS_CORRECTION_EVAL_ARTIFACT"]
-            ?? ".build/evals/corrected-apple-presets-signed-114.jsonl")
-        let recordingsDirectory = SavedRecordingEvalSupport.recordingsDirectory(environment: environment)
-        let manifest = try CandidateCorpusManifest.load(
-            recordingsDirectory.appendingPathComponent("ground-truth.jsonl")
-        )
+            ?? ".build/evals/apple-presets-signed-confirmed75.jsonl")
         let rows = try CandidateCorpusRow.loadProductionArm(artifactURL)
-        try CandidateCorpus.validate(rows: rows, manifest: manifest)
+        try CandidateCorpus.validate(rows: rows)
         let candidates = try JSONDecoder().decode(
             CandidatePayload.self,
             from: Data(contentsOf: candidateURL)
@@ -34,7 +30,6 @@ final class CanonicalizerCandidateEvalTests: XCTestCase {
         let evaluations = rows.map { row in
             CandidateEvaluation(
                 row: row,
-                slice: manifest.slice(for: row.file),
                 baseline: TranscriptDeterministicCleaner.streamClean(
                     baseline.canonicalize(row.transcript)
                 ),
@@ -70,32 +65,73 @@ final class CanonicalizerCandidateEvalTests: XCTestCase {
             CandidateEvaluation.synthetic(slice: .development, before: 0, after: 1),
             CandidateEvaluation.synthetic(slice: .holdout, before: 0, after: 1),
         ]
-        let inferredOnlyWin = [
-            CandidateEvaluation.synthetic(slice: .development, before: 1, after: 1),
-            CandidateEvaluation.synthetic(slice: .reviewOnly, before: 1, after: 0),
+        let developmentOnlyWin = [
+            CandidateEvaluation.synthetic(slice: .development, before: 1, after: 0),
         ]
 
         XCTAssertTrue(CandidateVerdict(evaluations: safe).passes)
         XCTAssertFalse(CandidateVerdict(evaluations: regressing).passes)
-        XCTAssertFalse(CandidateVerdict(evaluations: inferredOnlyWin).passes)
+        XCTAssertFalse(CandidateVerdict(evaluations: developmentOnlyWin).passes)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).baselineWordErrors, 2)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).variantWordErrors, 1)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).baselineExactRows, 0)
         XCTAssertEqual(CandidateVerdict(evaluations: safe).variantExactRows, 1)
     }
 
-    func testLegacyManifestPartitionHasNoConfirmedHoldout() {
-        let files = (1...114).map { "sample-\($0).wav" }
-        let manifest = CandidateCorpusManifest(
-            orderedFiles: files,
-            transcripts: Dictionary(
-                uniqueKeysWithValues: files.map { ($0, "reference") }
-            )
-        )
+    func testCorpusValidationRequiresTheConfirmedSeventyFiveShape() throws {
+        XCTAssertNoThrow(try CandidateCorpus.validate(rows: Self.confirmedRows()))
 
-        XCTAssertEqual(manifest.slice(for: files[34]), .development)
-        XCTAssertEqual(manifest.slice(for: files[35]), .reviewOnly)
-        XCTAssertFalse(files.contains { manifest.slice(for: $0) == .holdout })
+        let short = Array(Self.confirmedRows().dropLast())
+        let missingHoldout = short
+        let duplicatedFile = short + [Self.row(slice: .holdout, index: 0)]
+        let failedRow = short + [Self.row(slice: .holdout, index: 99, error: "recognition failed")]
+        let emptyTranscript = short + [Self.row(slice: .holdout, index: 99, transcript: "")]
+
+        for invalid in [missingHoldout, duplicatedFile, failedRow, emptyTranscript] {
+            XCTAssertThrowsError(try CandidateCorpus.validate(rows: invalid)) { error in
+                XCTAssertEqual(error as? CandidateEvalError, .invalidCorpus)
+            }
+        }
+    }
+
+    func testProductionArmRowsCarryArtifactDesignations() throws {
+        let artifact = FileManager.default.temporaryDirectory
+            .appendingPathComponent("candidate-designations-\(UUID().uuidString).jsonl")
+        try """
+        {"arm":"speech-progressive-fast","file":"a.wav","referenceDesignation":"legacy",\
+        "humanIntendedTranscript":"right","transcript":"wrong","error":null}
+        {"arm":"speech-progressive-fast","file":"b.wav","referenceDesignation":"holdout",\
+        "humanIntendedTranscript":"right","transcript":"wrong","error":null}
+        {"arm":"speech-volatile","file":"c.wav","referenceDesignation":"holdout",\
+        "humanIntendedTranscript":"right","transcript":"wrong","error":null}
+        """.write(to: artifact, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: artifact) }
+
+        let rows = try CandidateCorpusRow.loadProductionArm(artifact)
+
+        XCTAssertEqual(rows.map(\.file), ["a.wav", "b.wav"])
+        XCTAssertEqual(rows.map(\.referenceDesignation), [.development, .holdout])
+    }
+
+    private static func confirmedRows() -> [CandidateCorpusRow] {
+        (0..<CandidateCorpus.expectedDevelopmentRows).map { row(slice: .development, index: $0) }
+            + (0..<CandidateCorpus.expectedHoldoutRows).map { row(slice: .holdout, index: $0) }
+    }
+
+    private static func row(
+        slice: CandidateSlice,
+        index: Int,
+        transcript: String = "wrong",
+        error: String? = nil
+    ) -> CandidateCorpusRow {
+        CandidateCorpusRow(
+            arm: "speech-progressive-fast",
+            file: "\(slice.rawValue)-\(index).wav",
+            referenceDesignation: slice,
+            humanIntendedTranscript: "right",
+            transcript: transcript,
+            error: error
+        )
     }
 
     func testCandidateValidationRejectsBuiltInIDCollision() {
