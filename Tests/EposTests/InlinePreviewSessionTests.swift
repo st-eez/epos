@@ -92,7 +92,24 @@ final class InlinePreviewSessionTests: XCTestCase {
         var snapshot: [Bool] { lock.withLock { values } }
     }
 
-    /// Thread-safe recorder for the session's one-shot caret-rect callback.
+    /// Monotonic fake clock: each read advances by `step`, so consecutive
+    /// queries always see a full refresh interval elapsed.
+    private final class TickingClock: @unchecked Sendable {
+        private let lock = NSLock()
+        private let step: TimeInterval
+        private var time: TimeInterval = 0
+
+        init(step: TimeInterval) { self.step = step }
+
+        func tick() -> TimeInterval {
+            lock.withLock {
+                time += step
+                return time
+            }
+        }
+    }
+
+    /// Thread-safe recorder for the session's caret-rect callback.
     private final class CaretRectRecorder: @unchecked Sendable {
         private let lock = NSLock()
         private var values: [CGRect?] = []
@@ -172,11 +189,14 @@ final class InlinePreviewSessionTests: XCTestCase {
         }
     }
 
+    /// `now` defaults to a frozen clock so the caret-rect refresh gate stays
+    /// closed after the first query, keeping wire sequences deterministic.
     private func makeSession(
         transport: FakeInlinePreviewTransport,
         gate: Gate,
         onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
-        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil
+        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil,
+        now: @escaping @Sendable () -> TimeInterval = { 0 }
     ) -> InlinePreviewSession {
         InlinePreviewSession(
             transport: transport,
@@ -184,7 +204,8 @@ final class InlinePreviewSessionTests: XCTestCase {
             throttle: .milliseconds(100),
             sleep: { _ in await gate.wait() },
             onMarkingActivityChange: onMarkingActivityChange,
-            onCaretRect: onCaretRect
+            onCaretRect: onCaretRect,
+            now: now
         )
     }
 
@@ -263,7 +284,7 @@ final class InlinePreviewSessionTests: XCTestCase {
 
     // MARK: - Caret rect query
 
-    func testCaretRectIsQueriedOnceAfterTheFirstMarkOnly() async {
+    func testCaretRectIsNotRequeriedWithinTheRefreshInterval() async {
         let transport = FakeInlinePreviewTransport(rectReply: "ok rect 875.0 -160.0 1.0 16.0")
         let gate = Gate()
         let recorder = CaretRectRecorder()
@@ -278,6 +299,33 @@ final class InlinePreviewSessionTests: XCTestCase {
         await Self.waitForLines([Self.begin, "mark one", "rect", "mark one two"], from: transport)
 
         XCTAssertEqual(recorder.snapshot, [CGRect(x: 875, y: -160, width: 1, height: 16)])
+        await gate.open()
+    }
+
+    func testCaretRectRefreshesAfterTheIntervalElapses() async {
+        let transport = FakeInlinePreviewTransport(rectReply: "ok rect 875.0 -160.0 1.0 16.0")
+        let gate = Gate()
+        let recorder = CaretRectRecorder()
+        // Clock jumps a full refresh interval between queries.
+        let clock = TickingClock(step: InlinePreviewSession.caretRectRefreshInterval)
+        let session = makeSession(
+            transport: transport,
+            gate: gate,
+            onCaretRect: { recorder.record($0) },
+            now: { clock.tick() }
+        )
+
+        await session.begin()
+        await session.mark("one")
+        await Self.waitForLines([Self.begin, "mark one", "rect"], from: transport)
+
+        await session.mark("one two")
+        await gate.open()
+        await Self.waitForLines(
+            [Self.begin, "mark one", "rect", "mark one two", "rect"],
+            from: transport
+        )
+        XCTAssertEqual(recorder.snapshot.count, 2)
         await gate.open()
     }
 

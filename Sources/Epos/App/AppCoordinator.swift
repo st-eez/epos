@@ -54,8 +54,11 @@ public final class AppCoordinator: ObservableObject {
     /// so a failure notice appears where the user is already looking; reset at
     /// the next recording start.
     @Published public private(set) var indicatorCompact = false
-    /// One AX frame read + at most one bottom-center→anchored move per recording.
+    /// One anchor decision + at most one bottom-center→anchored move per
+    /// recording; later caret refreshes only glide the anchored chip.
     private var didAttemptFieldAnchorThisRecording = false
+    /// Distributed-notification tokens for the debug dictation trigger.
+    private var debugTriggerObservers: [NSObjectProtocol] = []
 
     private let hotkey: FnHotkey
     private let audio: AudioCapture
@@ -151,6 +154,7 @@ public final class AppCoordinator: ObservableObject {
         self.transcriber = Transcriber(locale: settings.locale)
         if autoStart {
             bindHotkey()
+            bindDebugDictationTriggerIfEnabled()
             // Bootstrap at launch, not on first menu-icon click. This used to hang
             // off `.task` on the MenuBarExtra content view, which SwiftUI builds
             // only when the popover first opens — so `captureFormat` stayed nil and
@@ -296,6 +300,32 @@ public final class AppCoordinator: ObservableObject {
         hotkey.onPress = { [weak self] in self?.startRecording() }
         hotkey.onRelease = { [weak self] in self?.finishRecording() }
         hotkey.start()
+    }
+
+    /// Dogfood remote control: distributed notifications drive the REAL
+    /// `startRecording`/`finishRecording`, exactly as the fn key would. Armed
+    /// only under `EPOS_DEBUG_DICTATION_TRIGGER=1`; tokens are retained for the
+    /// coordinator's (= the app's) lifetime.
+    private func bindDebugDictationTriggerIfEnabled() {
+        guard DebugDictationTriggerPolicy.load() else { return }
+        let center = DistributedNotificationCenter.default()
+        debugTriggerObservers = [
+            center.addObserver(
+                forName: DebugDictationTriggerPolicy.startNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.startRecording() }
+            },
+            center.addObserver(
+                forName: DebugDictationTriggerPolicy.finishNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.finishRecording() }
+            },
+        ]
+        log.info("debug dictation trigger armed")
     }
 
     public func startRecording() {
@@ -595,24 +625,28 @@ public final class AppCoordinator: ObservableObject {
         )
     }
 
-    /// One anchor decision per recording, made when the first composition mark
-    /// is on screen and the preview session has read the caret rect: the caret
-    /// line from the IME channel first, the captured element's AX frame only
-    /// when it is plausibly a discrete field, bottom-center otherwise. The one
-    /// bounded AX frame read happens here (mid-recording), never on the
-    /// finalize path.
+    /// Anchor decision and tracking, fed by the preview session's caret-rect
+    /// refreshes. The FIRST callback decides once per recording: caret line from
+    /// the IME channel first, the captured element's AX frame only when it is
+    /// plausibly a discrete field, bottom-center otherwise (the one bounded AX
+    /// frame read happens here, mid-recording — never on the finalize path).
+    /// The full pill stays on screen until a placement exists; then the variant
+    /// flip and the panel move land in the same main-runloop transaction, so
+    /// the swap is atomic on screen. LATER callbacks only glide the
+    /// already-compact chip after the caret as text grows (damped).
     private func anchorIndicatorNearCaret(_ caretRect: CGRect?) {
-        guard state == .recording, inlinePreviewMirroring,
-              !didAttemptFieldAnchorThisRecording else { return }
-        didAttemptFieldAnchorThisRecording = true
-        let anchored = indicator.anchorNearCaret(
-            caretRect: caretRect,
-            fallbackAXFieldFrame: textInsertionSession?.capturedTargetScreenFrame()
-        )
-        indicatorCompact = RecordingIndicatorFieldAnchorPolicy.isCompact(
-            mirroring: true,
-            anchored: anchored
-        )
+        guard state == .recording, inlinePreviewMirroring else { return }
+        if !didAttemptFieldAnchorThisRecording {
+            didAttemptFieldAnchorThisRecording = true
+            guard let placement = indicator.placementNearCaret(
+                caretRect: caretRect,
+                fallbackAXFieldFrame: textInsertionSession?.capturedTargetScreenFrame()
+            ) else { return }
+            indicatorCompact = true
+            indicator.applyAnchoredPlacement(placement)
+        } else if indicatorCompact {
+            indicator.trackCaret(caretRect: caretRect)
+        }
     }
 
     /// Restores the bottom-center full pill the moment mirroring degrades

@@ -82,14 +82,20 @@ actor InlinePreviewSession {
     /// healthy). The coordinator uses it to drop the HUD's duplicate transcript
     /// line while the field shows the same text.
     private let onMarkingActivityChange: @Sendable (Bool) -> Void
-    /// When set, fired exactly once per recording after the first acknowledged
-    /// mark, with the caret-line rectangle the probe read from the pinned client
-    /// (nil when unavailable). One bounded `rect` round-trip total — the
-    /// per-mark path never re-queries.
+    /// When set, fired with the caret-line rectangle at the composition END
+    /// (nil when unavailable): once after the first acknowledged mark, then
+    /// refreshed at most every `caretRectRefreshInterval` — always riding along
+    /// after a mark ack, never on its own timer, so a silent pause also pauses
+    /// the queries. Each query is one bounded round-trip.
     private let onCaretRect: (@Sendable (CGRect?) -> Void)?
+    /// Injectable clock for the refresh gate, so tests can pin the cadence.
+    private let now: @Sendable () -> TimeInterval
+
+    /// Minimum spacing between caret-rect refreshes while text keeps growing.
+    static let caretRectRefreshInterval: TimeInterval = 0.4
 
     private var phase: Phase = .pending
-    private var caretRectQueried = false
+    private var lastCaretRectQueryTime: TimeInterval?
     private var pendingMark: String?
     private var lastSentMark: String?
     private var draining = false
@@ -107,7 +113,8 @@ actor InlinePreviewSession {
         throttle: Duration = .milliseconds(100),
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
-        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil
+        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil,
+        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }
     ) {
         self.transport = transport
         self.bundleIdentifier = bundleIdentifier
@@ -115,6 +122,7 @@ actor InlinePreviewSession {
         self.sleep = sleep
         self.onMarkingActivityChange = onMarkingActivityChange
         self.onCaretRect = onCaretRect
+        self.now = now
     }
 
     /// Text the line protocol can carry verbatim. A transcript that would need
@@ -296,7 +304,7 @@ actor InlinePreviewSession {
                 guard reply.hasPrefix("ok") else { return degrade("markRefused") }
                 marksSent += 1
                 lastSentMark = text
-                if marksSent == 1 { await queryCaretRect() }
+                await queryCaretRectIfDue()
             } catch {
                 return degrade("markFailed")
             }
@@ -304,12 +312,18 @@ actor InlinePreviewSession {
         }
     }
 
-    /// One bounded caret-rect query, right after the composition first appears
-    /// on screen. Any failure reports nil and never degrades the channel: the
-    /// rect only anchors the HUD, it is no part of the preview/commit contract.
-    private func queryCaretRect() async {
-        guard let onCaretRect, !caretRectQueried else { return }
-        caretRectQueried = true
+    /// Bounded caret-rect query after a mark ack, gated to at most one per
+    /// `caretRectRefreshInterval`. Any failure reports nil and never degrades
+    /// the channel: the rect only anchors the HUD, it is no part of the
+    /// preview/commit contract.
+    private func queryCaretRectIfDue() async {
+        guard let onCaretRect else { return }
+        let time = now()
+        if let lastCaretRectQueryTime,
+           time - lastCaretRectQueryTime < Self.caretRectRefreshInterval {
+            return
+        }
+        lastCaretRectQueryTime = time
         let reply = try? await transport.send("rect")
         onCaretRect(reply.flatMap(Self.parseCaretRect))
     }

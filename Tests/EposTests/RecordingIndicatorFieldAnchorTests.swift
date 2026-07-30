@@ -166,13 +166,26 @@ final class RecordingIndicatorFieldAnchorTests: XCTestCase {
         ))
     }
 
-    // MARK: - Variant selection
+    // MARK: - Damped tracking
 
-    func testCompactVariantRequiresMirroringAndAnchor() {
-        XCTAssertTrue(Policy.isCompact(mirroring: true, anchored: true))
-        XCTAssertFalse(Policy.isCompact(mirroring: true, anchored: false))
-        XCTAssertFalse(Policy.isCompact(mirroring: false, anchored: true))
-        XCTAssertFalse(Policy.isCompact(mirroring: false, anchored: false))
+    func testGlideThresholdIgnoresSmallMovesAndAcceptsLargeOnes() {
+        let current = CGRect(x: 100, y: 100, width: 320, height: 64)
+        // 23pt to the right: below threshold, no move.
+        XCTAssertFalse(Policy.exceedsGlideThreshold(
+            from: current,
+            to: current.offsetBy(dx: 23, dy: 0)
+        ))
+        // 25pt to the right: glide.
+        XCTAssertTrue(Policy.exceedsGlideThreshold(
+            from: current,
+            to: current.offsetBy(dx: 25, dy: 0)
+        ))
+        // A pure line-wrap (vertical) jump also glides.
+        XCTAssertTrue(Policy.exceedsGlideThreshold(
+            from: current,
+            to: current.offsetBy(dx: 0, dy: -30)
+        ))
+        XCTAssertFalse(Policy.exceedsGlideThreshold(from: current, to: current))
     }
 
     func testCompactChipAlwaysSurfacesFinalizingAndNotices() {

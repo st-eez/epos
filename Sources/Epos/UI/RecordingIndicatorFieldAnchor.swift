@@ -40,11 +40,13 @@ enum RecordingIndicatorFieldAnchorPolicy {
     /// whole Electron windows) — anchoring to its top-right corner would pin the
     /// chip to a screen corner, so such frames are rejected.
     nonisolated static let maxFieldFractionOfScreen: CGFloat = 0.5
+    /// Minimum movement (either axis) before an anchored chip repositions.
+    /// Smaller deltas are ignored so the chip glides occasionally as dictation
+    /// flows instead of jittering with every word.
+    nonisolated static let glideThreshold: CGFloat = 24
 
-    /// The compact chip is shown only while the inline preview is the visible
-    /// transcript surface AND the chip could be anchored beside the field.
-    nonisolated static func isCompact(mirroring: Bool, anchored: Bool) -> Bool {
-        mirroring && anchored
+    nonisolated static func exceedsGlideThreshold(from current: CGRect, to proposed: CGRect) -> Bool {
+        max(abs(proposed.midX - current.midX), abs(proposed.midY - current.midY)) > glideThreshold
     }
 
     /// Primary anchor: the caret-line rectangle from the IME channel. IMK's

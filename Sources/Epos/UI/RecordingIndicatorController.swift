@@ -61,7 +61,7 @@ public final class RecordingIndicatorController {
         case .bottomCenter:
             repositionToActiveScreen(panel)
         case .fieldAnchored(let frame):
-            panel.setFrame(frame, display: true)
+            panel.setFrame(frame, display: false)
         }
         panel.orderFrontRegardless()
     }
@@ -73,19 +73,19 @@ public final class RecordingIndicatorController {
         show()
     }
 
-    /// Anchor the compact chip beside the live caret when the IME channel
-    /// reported one, else beside the captured AX element when it is plausibly a
-    /// discrete field. Returns false — leaving the current bottom-center
-    /// presentation untouched — when neither anchor yields a usable placement.
-    /// The AX fallback frame is an autoclosure so its bounded AX read only
-    /// happens when the caret rect did not already decide the placement.
-    public func anchorNearCaret(
+    /// Placement beside the live caret when the IME channel reported one, else
+    /// beside the captured AX element when it is plausibly a discrete field.
+    /// Nil means no usable anchor; the caller keeps the bottom-center pill.
+    /// Pure computation — nothing on screen changes until
+    /// `applyAnchoredPlacement`, so the caller can flip the SwiftUI variant and
+    /// move the panel in the same main-runloop transaction. The AX fallback
+    /// frame is an autoclosure so its bounded AX read only happens when the
+    /// caret rect did not already decide the placement.
+    func placementNearCaret(
         caretRect: CGRect?,
         fallbackAXFieldFrame: @autoclosure () -> CGRect?
-    ) -> Bool {
-        let screens = NSScreen.screens.map {
-            RecordingIndicatorFieldAnchorPolicy.Screen(frame: $0.frame, visibleFrame: $0.visibleFrame)
-        }
+    ) -> RecordingIndicatorFieldAnchorPolicy.Placement? {
+        let screens = currentScreens()
         let placement = RecordingIndicatorFieldAnchorPolicy.caretPlacement(
             caretRect: caretRect,
             screens: screens
@@ -93,17 +93,52 @@ public final class RecordingIndicatorController {
             axFieldFrame: fallbackAXFieldFrame(),
             screens: screens
         )
-        guard let placement else {
+        if placement == nil {
             log.info("caret/field anchor unavailable; keeping bottom-center pill")
-            return false
         }
+        return placement
+    }
+
+    /// Move into the compact anchored presentation. `display: false` defers all
+    /// drawing to the end-of-runloop commit, so the caller's variant flip and
+    /// this frame change appear on screen together — never a full pill clipped
+    /// into the compact frame.
+    func applyAnchoredPlacement(_ placement: RecordingIndicatorFieldAnchorPolicy.Placement) {
+        guard let panel else { return }
         presentation = .fieldAnchored(placement.panelFrame)
-        show()
-        return true
+        panel.setFrame(placement.panelFrame, display: false)
+        panel.orderFrontRegardless()
+    }
+
+    /// Damped mid-recording tracking of an already-anchored chip: recompute the
+    /// caret placement (no AX fallback — a missing rect just keeps the last
+    /// position) and glide only when it moved more than the policy threshold.
+    public func trackCaret(caretRect: CGRect?) {
+        guard case .fieldAnchored(let currentFrame) = presentation, let panel else { return }
+        guard let placement = RecordingIndicatorFieldAnchorPolicy.caretPlacement(
+            caretRect: caretRect,
+            screens: currentScreens()
+        ) else { return }
+        guard RecordingIndicatorFieldAnchorPolicy.exceedsGlideThreshold(
+            from: currentFrame,
+            to: placement.panelFrame
+        ) else { return }
+        presentation = .fieldAnchored(placement.panelFrame)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.18
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().setFrame(placement.panelFrame, display: false)
+        }
     }
 
     public func hide() {
         panel?.orderOut(nil)
+    }
+
+    private func currentScreens() -> [RecordingIndicatorFieldAnchorPolicy.Screen] {
+        NSScreen.screens.map {
+            RecordingIndicatorFieldAnchorPolicy.Screen(frame: $0.frame, visibleFrame: $0.visibleFrame)
+        }
     }
 
     private func repositionToActiveScreen(_ panel: NSPanel) {
@@ -113,7 +148,7 @@ public final class RecordingIndicatorController {
             in: visible,
             indicatorSize: Self.panelSize
         )
-        panel.setFrame(frame, display: true)
+        panel.setFrame(frame, display: false)
     }
 }
 
