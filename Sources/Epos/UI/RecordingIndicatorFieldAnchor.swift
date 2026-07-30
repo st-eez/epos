@@ -35,6 +35,11 @@ enum RecordingIndicatorFieldAnchorPolicy {
     nonisolated static let chipTrailingInset: CGFloat = 16
     nonisolated static let panelSize = CGSize(width: 320, height: 64)
     nonisolated static let clearance: CGFloat = 8
+    /// Horizontal gap between the caret and the chip's leading edge. The chip
+    /// leads the insertion point — sitting where text is about to appear, like
+    /// the native dictation mic — instead of trailing back over what was just
+    /// typed (which parked it at the pane's left edge on a fresh prompt).
+    nonisolated static let caretGap: CGFloat = 6
     /// An AX element frame covering more than this fraction of its screen's
     /// visible area is not a discrete field (terminal panes, editor surfaces,
     /// whole Electron windows) — anchoring to its top-right corner would pin the
@@ -55,9 +60,11 @@ enum RecordingIndicatorFieldAnchorPolicy {
     /// (verified empirically: a TextEdit caret on a display arranged below the
     /// primary reported y = -160 inside that window's Cocoa span; a top-left
     /// reading would have placed it above the primary where no display exists).
-    /// The chip sits clearance above the caret line, trailing edge at the caret,
-    /// clamped to the caret's screen; a caret too close to the screen top flips
-    /// the chip below the line. The caret line itself is never covered.
+    /// The chip sits clearance above the caret line and LEADS it: its leading
+    /// edge starts `caretGap` right of the caret, where text is about to
+    /// appear, clamped to the caret's screen; a caret too close to the screen
+    /// top flips the chip below the line. The caret line itself is never
+    /// covered.
     nonisolated static func caretPlacement(
         caretRect: CGRect?,
         screens: [Screen]
@@ -70,7 +77,11 @@ enum RecordingIndicatorFieldAnchorPolicy {
             return nil
         }
         guard let screen = screenContaining(caret, in: screens) else { return nil }
-        return chipPlacement(anchor: caret, visible: screen.visibleFrame.standardized)
+        return chipPlacement(
+            anchor: caret,
+            visible: screen.visibleFrame.standardized,
+            alignment: .leadingCaret
+        )
     }
 
     /// Fallback anchor: the captured AX element frame (top-left-origin global
@@ -95,20 +106,38 @@ enum RecordingIndicatorFieldAnchorPolicy {
                 <= maxFieldFractionOfScreen * visible.width * visible.height else {
             return nil
         }
-        return chipPlacement(anchor: anchor, visible: visible)
+        return chipPlacement(anchor: anchor, visible: visible, alignment: .trailingField)
     }
 
-    /// Shared core: chip trailing edge at the anchor's right edge, clearance
-    /// above the anchor, flip below when the screen top is too close, clamp
-    /// horizontally into the visible frame.
+    private enum ChipAlignment {
+        /// Chip leads the caret: leading edge `caretGap` right of the anchor.
+        case leadingCaret
+        /// Chip trails a discrete field: trailing edge at the field's right edge.
+        case trailingField
+    }
+
+    /// Shared core: horizontal alignment per anchor kind, clearance above the
+    /// anchor, flip below when the screen top is too close, clamp horizontally
+    /// into the visible frame.
     private nonisolated static func chipPlacement(
         anchor: CGRect,
-        visible: CGRect
+        visible: CGRect,
+        alignment: ChipAlignment
     ) -> Placement? {
         guard visible.width >= chipSize.width, visible.height >= chipSize.height else {
             return nil
         }
-        let chipMaxX = min(max(anchor.maxX, visible.minX + chipSize.width), visible.maxX)
+        let chipMaxX: CGFloat
+        switch alignment {
+        case .leadingCaret:
+            let leadingX = anchor.maxX + caretGap
+            chipMaxX = min(
+                max(leadingX + chipSize.width, visible.minX + chipSize.width),
+                visible.maxX
+            )
+        case .trailingField:
+            chipMaxX = min(max(anchor.maxX, visible.minX + chipSize.width), visible.maxX)
+        }
         let aboveY = anchor.maxY + clearance
         let belowY = anchor.minY - clearance - chipSize.height
         let chipY: CGFloat

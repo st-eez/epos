@@ -147,6 +147,11 @@ actor InlinePreviewSession {
             }
             began = true
             transition(to: .marking)
+            // The caret exists before any text does (the probe falls back to the
+            // current selection when there is no composition), so the anchor
+            // answer arrives within the begin round-trip and the chip can be the
+            // FIRST indicator shown — no pill cameo.
+            await queryCaretRect()
             startDrainIfNeeded()
         } catch {
             degrade("connectFailed")
@@ -313,17 +318,23 @@ actor InlinePreviewSession {
     }
 
     /// Bounded caret-rect query after a mark ack, gated to at most one per
-    /// `caretRectRefreshInterval`. Any failure reports nil and never degrades
-    /// the channel: the rect only anchors the HUD, it is no part of the
-    /// preview/commit contract.
+    /// `caretRectRefreshInterval`.
     private func queryCaretRectIfDue() async {
-        guard let onCaretRect else { return }
+        guard onCaretRect != nil else { return }
         let time = now()
         if let lastCaretRectQueryTime,
            time - lastCaretRectQueryTime < Self.caretRectRefreshInterval {
             return
         }
-        lastCaretRectQueryTime = time
+        await queryCaretRect()
+    }
+
+    /// One bounded round-trip. Any failure reports nil and never degrades the
+    /// channel: the rect only anchors the HUD, it is no part of the
+    /// preview/commit contract.
+    private func queryCaretRect() async {
+        guard let onCaretRect else { return }
+        lastCaretRectQueryTime = now()
         let reply = try? await transport.send("rect")
         onCaretRect(reply.flatMap(Self.parseCaretRect))
     }

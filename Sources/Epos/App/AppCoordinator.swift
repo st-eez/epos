@@ -57,6 +57,15 @@ public final class AppCoordinator: ObservableObject {
     /// One anchor decision + at most one bottom-center→anchored move per
     /// recording; later caret refreshes only glide the anchored chip.
     private var didAttemptFieldAnchorThisRecording = false
+    /// True once this recording's indicator (chip or pill) is on screen. With a
+    /// preview session the presentation waits for the caret answer; this flag
+    /// keeps the deadline fallback and the anchor decision from double-showing.
+    private var indicatorPresented = false
+    /// How long a recording may go with no indicator at all before the pill
+    /// presents anyway (probe dead, connect failure, begin refused — paths that
+    /// produce no callback). The healthy path answers within the begin
+    /// round-trip, a few milliseconds.
+    static let indicatorFallbackDelay: Duration = .milliseconds(200)
     /// Distributed-notification tokens for the debug dictation trigger.
     private var debugTriggerObservers: [NSObjectProtocol] = []
 
@@ -375,7 +384,7 @@ public final class AppCoordinator: ObservableObject {
         transcriptTiming.start()
         indicatorCompact = false
         didAttemptFieldAnchorThisRecording = false
-        indicator.showBottomCenter()
+        presentIndicatorForRecordingStart()
         let cleanFinalTranscript = makeFinalTranscriptCleaner()
         let contextualStrings = speechContextualStrings()
 
@@ -625,15 +634,44 @@ public final class AppCoordinator: ObservableObject {
         )
     }
 
+    /// With no preview session the pill shows immediately and synchronously,
+    /// exactly as it always has. With one, nothing is shown yet: the caret
+    /// answer rides the begin round-trip (milliseconds), so the compact chip at
+    /// the caret can be the FIRST indicator on screen — native-parity, no pill
+    /// cameo. The bounded fallback below presents the pill anyway when no
+    /// anchor decision arrived in time (probe dead, connect failure, begin
+    /// refused), so the user is never without an indicator past the deadline.
+    private func presentIndicatorForRecordingStart() {
+        indicatorPresented = false
+        guard inlinePreview != nil else {
+            presentBottomCenterIndicator()
+            return
+        }
+        let generation = inlinePreviewGeneration
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.indicatorFallbackDelay)
+            guard let self, self.inlinePreviewGeneration == generation,
+                  self.state == .recording, !self.indicatorPresented else { return }
+            self.presentBottomCenterIndicator()
+        }
+    }
+
+    private func presentBottomCenterIndicator() {
+        indicatorPresented = true
+        indicatorCompact = false
+        indicator.showBottomCenter()
+    }
+
     /// Anchor decision and tracking, fed by the preview session's caret-rect
-    /// refreshes. The FIRST callback decides once per recording: caret line from
+    /// queries — the first of which rides the begin round-trip, before any text
+    /// exists. The FIRST callback decides once per recording: caret line from
     /// the IME channel first, the captured element's AX frame only when it is
     /// plausibly a discrete field, bottom-center otherwise (the one bounded AX
     /// frame read happens here, mid-recording — never on the finalize path).
-    /// The full pill stays on screen until a placement exists; then the variant
-    /// flip and the panel move land in the same main-runloop transaction, so
-    /// the swap is atomic on screen. LATER callbacks only glide the
-    /// already-compact chip after the caret as text grows (damped).
+    /// The chip is normally the first indicator shown; when no placement
+    /// exists, the pill presents immediately instead of waiting out the
+    /// fallback deadline. LATER callbacks only glide the already-compact chip
+    /// after the caret as text grows (damped).
     private func anchorIndicatorNearCaret(_ caretRect: CGRect?) {
         guard state == .recording, inlinePreviewMirroring else { return }
         if !didAttemptFieldAnchorThisRecording {
@@ -641,7 +679,11 @@ public final class AppCoordinator: ObservableObject {
             guard let placement = indicator.placementNearCaret(
                 caretRect: caretRect,
                 fallbackAXFieldFrame: textInsertionSession?.capturedTargetScreenFrame()
-            ) else { return }
+            ) else {
+                if !indicatorPresented { presentBottomCenterIndicator() }
+                return
+            }
+            indicatorPresented = true
             indicatorCompact = true
             indicator.applyAnchoredPlacement(placement)
         } else if indicatorCompact {
@@ -650,15 +692,19 @@ public final class AppCoordinator: ObservableObject {
     }
 
     /// Restores the bottom-center full pill the moment mirroring degrades
-    /// mid-recording (the HUD transcript line reappears in the same update).
+    /// mid-recording (the HUD transcript line reappears in the same update),
+    /// and presents it when the preview died before anything was shown at all.
     /// One-way per recording: `didAttemptFieldAnchorThisRecording` keeps a later
     /// callback from re-anchoring, so the pill can never oscillate. At finalize,
     /// `finishInlinePreview` clears the mirroring flag without coming here.
     private func syncIndicatorFieldAnchor() {
         guard state == .recording else { return }
-        if !inlinePreviewMirroring, indicatorCompact {
+        guard !inlinePreviewMirroring else { return }
+        if indicatorCompact {
             indicatorCompact = false
-            indicator.showBottomCenter()
+            presentBottomCenterIndicator()
+        } else if !indicatorPresented {
+            presentBottomCenterIndicator()
         }
     }
 

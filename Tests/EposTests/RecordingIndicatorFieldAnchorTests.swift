@@ -16,12 +16,14 @@ final class RecordingIndicatorFieldAnchorTests: XCTestCase {
 
     // MARK: - Caret anchor (primary)
 
-    func testCaretMidScreenPlacesChipAboveTrailingAtCaret() throws {
+    func testCaretMidScreenPlacesChipAboveLeadingTheCaret() throws {
         let caret = CGRect(x: 600, y: 300, width: 1, height: 18)
         let placement = try XCTUnwrap(Policy.caretPlacement(caretRect: caret, screens: [primary]))
 
         XCTAssertFalse(placement.placedBelowAnchor)
-        XCTAssertEqual(placement.chipFrame.maxX, caret.maxX, accuracy: 0.001)
+        // The chip LEADS the caret — sitting where text is about to appear —
+        // instead of trailing back over what was just typed.
+        XCTAssertEqual(placement.chipFrame.minX, caret.maxX + Policy.caretGap, accuracy: 0.001)
         XCTAssertEqual(placement.chipFrame.minY, caret.maxY + Policy.clearance, accuracy: 0.001)
         XCTAssertEqual(placement.chipFrame.size, Policy.chipSize)
         XCTAssertFalse(placement.chipFrame.intersects(caret))

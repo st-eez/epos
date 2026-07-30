@@ -292,11 +292,11 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         await session.begin()
         await session.mark("one")
-        await Self.waitForLines([Self.begin, "mark one", "rect"], from: transport)
+        await Self.waitForLines([Self.begin, "rect", "mark one"], from: transport)
 
         await session.mark("one two")
         await gate.open()
-        await Self.waitForLines([Self.begin, "mark one", "rect", "mark one two"], from: transport)
+        await Self.waitForLines([Self.begin, "rect", "mark one", "mark one two"], from: transport)
 
         XCTAssertEqual(recorder.snapshot, [CGRect(x: 875, y: -160, width: 1, height: 16)])
         await gate.open()
@@ -307,7 +307,10 @@ final class InlinePreviewSessionTests: XCTestCase {
         let gate = Gate()
         let recorder = CaretRectRecorder()
         // Clock jumps a full refresh interval between queries.
-        let clock = TickingClock(step: InlinePreviewSession.caretRectRefreshInterval)
+        // Strictly beyond the interval: an exact-step clock lands on the FP
+        // boundary (accumulated 0.4s doubles make some gaps 0.399999...),
+        // which is not the behavior under test.
+        let clock = TickingClock(step: InlinePreviewSession.caretRectRefreshInterval + 0.01)
         let session = makeSession(
             transport: transport,
             gate: gate,
@@ -317,15 +320,17 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         await session.begin()
         await session.mark("one")
-        await Self.waitForLines([Self.begin, "mark one", "rect"], from: transport)
+        await Self.waitForLines([Self.begin, "rect", "mark one", "rect"], from: transport)
 
         await session.mark("one two")
         await gate.open()
         await Self.waitForLines(
-            [Self.begin, "mark one", "rect", "mark one two", "rect"],
+            [Self.begin, "rect", "mark one", "rect", "mark one two", "rect"],
             from: transport
         )
-        XCTAssertEqual(recorder.snapshot.count, 2)
+        // The callback lands just after the reply crosses the wire.
+        await Self.waitUntil { recorder.snapshot.count == 3 }
+        XCTAssertEqual(recorder.snapshot.count, 3)
         await gate.open()
     }
 
@@ -337,13 +342,13 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         await session.begin()
         await session.mark("one")
-        await Self.waitForLines([Self.begin, "mark one", "rect"], from: transport)
+        await Self.waitForLines([Self.begin, "rect", "mark one"], from: transport)
 
         XCTAssertEqual(recorder.snapshot, [nil])
         // The channel stays healthy: later marks still flow.
         await session.mark("one two")
         await gate.open()
-        await Self.waitForLines([Self.begin, "mark one", "rect", "mark one two"], from: transport)
+        await Self.waitForLines([Self.begin, "rect", "mark one", "mark one two"], from: transport)
         let report = await session.report()
         XCTAssertNil(report.failure)
         XCTAssertEqual(report.marksSent, 2)
@@ -752,7 +757,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertEqual(backend.inserted, [])
         XCTAssertEqual(insertion.insertedTranscript, "Hello there.")
         await Self.waitForLines(
-            [Self.begin, "mark hello there", "rect", "cancel", "commit Hello there.", "end"],
+            [Self.begin, "rect", "mark hello there", "cancel", "commit Hello there.", "end"],
             from: transport
         )
     }
@@ -782,7 +787,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         coordinator.state = .recording
         coordinator.finishRecording()
 
-        await Self.waitForLines([Self.begin, "mark hello", "cancel", "end"], from: transport)
+        await Self.waitForLines([Self.begin, "rect", "mark hello", "cancel", "end"], from: transport)
     }
 
     /// Reviewer scenario (c): degradation between fn release and the router must
