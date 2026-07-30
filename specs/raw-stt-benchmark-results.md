@@ -173,3 +173,37 @@ The next corpus expansion requires human-intended transcripts for previously
 unlabeled recordings. Larger local models remain outside the baseline's
 under-100-MB transcribing target unless that product constraint is explicitly
 changed.
+
+## 2026-07-30 first verified results (confirmed corpus)
+
+All figures above this section rely on the legacy 114-row manifest, of which
+only rows 1-35 are human-confirmed; rows 36-114 are inferred. This section is
+the first fully provenance-verified accuracy record: the operator confirmed a
+frozen 40-recording holdout by listening (`scripts/confirm`; 35 candidates
+accepted, 5 corrected), and `scripts/audit` verifies every artifact row against
+the v2 ledger by file, audio SHA-256, exact reference text, and
+`human_confirmed` status (`verified accuracy: true`, 75/75 joins).
+
+Artifact: `.build/evals/apple-presets-signed-confirmed75.jsonl`
+(75 recordings x 5 Apple preset arms, arm order rotated, signed installed app,
+commit `ed25158`). Production output = active correction dictionary + stream
+cleaner. Production arm `speech-progressive-fast`:
+
+| Slice | Rows | Ref words | Raw WER | Production WER | Exact |
+|---|---:|---:|---:|---:|---:|
+| Holdout (untouched) | 40 | 485 | 3.09% (15) | **1.44% (7)** | 35/40 |
+| Development (legacy 1-35) | 35 | 478 | 6.07% (29) | 0.63% (3) | 32/35 |
+| Combined | 75 | 963 | 4.57% (44) | 1.04% (10) | 67/75 |
+
+Read of the results:
+
+- The correction stack generalizes: on recordings it was never tuned against
+  it halves raw errors (15 -> 7) with zero holdout regressions. The
+  development-set figure is partly memorized, as expected; 1.44% is the honest
+  number for unseen dictation.
+- The production preset choice is re-confirmed on verified data:
+  `speech-progressive-quality` and `speech-final` scored 2.28% output WER and
+  both dictation presets ~10.0% on the same 75 rows.
+- The correction-promotion gate (`scripts/correct`) is re-enabled against this
+  artifact with designation-driven slices; holdout rows pass or fail a
+  candidate but must never drive its development.
