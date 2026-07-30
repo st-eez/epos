@@ -561,14 +561,13 @@ final class SmokeTests: XCTestCase {
         )
     }
 
-    func testInlineIndicatorFallsBackWhenCaretRectIsUnavailable() {
+    func testIndicatorBottomCenterPlacement() {
         let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
         let pillSize = CGSize(width: 144, height: 36)
 
-        let fallback = RecordingIndicatorPlacementPolicy.frame(
+        let fallback = RecordingIndicatorPlacementPolicy.bottomCenterFrame(
             in: screen,
-            indicatorSize: pillSize,
-            protectedRect: nil
+            indicatorSize: pillSize
         )
         XCTAssertEqual(fallback.size.width, pillSize.width, accuracy: 0.001)
         XCTAssertEqual(fallback.size.height, pillSize.height, accuracy: 0.001)
@@ -579,40 +578,6 @@ final class SmokeTests: XCTestCase {
             accuracy: 0.001
         )
         XCTAssertTrue(screen.contains(fallback))
-
-        let caret = CGRect(x: 520, y: 420, width: 2, height: 24)
-        let nearCaret = RecordingIndicatorPlacementPolicy.frame(
-            in: screen,
-            indicatorSize: pillSize,
-            protectedRect: caret
-        )
-        XCTAssertTrue(screen.contains(nearCaret))
-        XCTAssertLessThanOrEqual(nearCaret.maxY, caret.minY - RecordingIndicatorPlacementPolicy.clearance)
-        XCTAssertFalse(nearCaret.intersects(caret.insetBy(
-            dx: -RecordingIndicatorPlacementPolicy.clearance,
-            dy: -RecordingIndicatorPlacementPolicy.clearance
-        )))
-
-        let lowCaret = CGRect(x: 520, y: 20, width: 2, height: 24)
-        let flippedAbove = RecordingIndicatorPlacementPolicy.frame(
-            in: screen,
-            indicatorSize: pillSize,
-            protectedRect: lowCaret
-        )
-        XCTAssertTrue(screen.contains(flippedAbove))
-        XCTAssertGreaterThanOrEqual(
-            flippedAbove.minY,
-            lowCaret.maxY + RecordingIndicatorPlacementPolicy.clearance
-        )
-
-        let rightEdgeCaret = CGRect(x: 1410, y: 420, width: 2, height: 24)
-        let nudgedInside = RecordingIndicatorPlacementPolicy.frame(
-            in: screen,
-            indicatorSize: pillSize,
-            protectedRect: rightEdgeCaret
-        )
-        XCTAssertTrue(screen.contains(nudgedInside))
-        XCTAssertEqual(nudgedInside.maxX, screen.maxX, accuracy: 0.001)
     }
 
     func testLocalInstallDoesNotRegisterInputMethod() throws {

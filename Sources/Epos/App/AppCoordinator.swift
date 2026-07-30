@@ -48,6 +48,15 @@ public final class AppCoordinator: ObservableObject {
     /// restores today's HUD line exactly.
     public var hudTranscriptPreview: String { inlinePreviewMirroring ? "" : displayText }
 
+    /// True while the indicator renders as the compact field-anchored chip:
+    /// the inline preview is mirroring AND the chip found a placement beside the
+    /// captured field. Stays true through finalize and the "Not inserted" flash
+    /// so a failure notice appears where the user is already looking; reset at
+    /// the next recording start.
+    @Published public private(set) var indicatorCompact = false
+    /// One AX frame read + at most one bottom-center→anchored move per recording.
+    private var didAttemptFieldAnchorThisRecording = false
+
     private let hotkey: FnHotkey
     private let audio: AudioCapture
     private let transcriber: Transcriber
@@ -334,7 +343,9 @@ public final class AppCoordinator: ObservableObject {
         )
         startInlinePreview()
         transcriptTiming.start()
-        indicator.show()
+        indicatorCompact = false
+        didAttemptFieldAnchorThisRecording = false
+        indicator.showBottomCenter()
         let cleanFinalTranscript = makeFinalTranscriptCleaner()
         let contextualStrings = speechContextualStrings()
 
@@ -572,9 +583,34 @@ public final class AppCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard let self, self.inlinePreviewGeneration == generation else { return }
                     self.inlinePreviewMirroring = active
+                    self.syncIndicatorFieldAnchor()
                 }
             }
         )
+    }
+
+    /// Moves the recording chip beside the fn-press field while the inline
+    /// preview is the visible transcript surface, and restores the bottom-center
+    /// full pill the moment mirroring degrades mid-recording (the HUD transcript
+    /// line reappears in the same update). The AX frame read happens at most once
+    /// per recording, when mirroring first activates — never on the finalize
+    /// path, where `finishInlinePreview` clears the flag without coming here.
+    private func syncIndicatorFieldAnchor() {
+        guard state == .recording else { return }
+        if inlinePreviewMirroring {
+            guard !didAttemptFieldAnchorThisRecording else { return }
+            didAttemptFieldAnchorThisRecording = true
+            let anchored = indicator.anchorToCapturedField(
+                axFieldFrame: textInsertionSession?.capturedTargetScreenFrame()
+            )
+            indicatorCompact = RecordingIndicatorFieldAnchorPolicy.isCompact(
+                mirroring: true,
+                anchored: anchored
+            )
+        } else if indicatorCompact {
+            indicatorCompact = false
+            indicator.showBottomCenter()
+        }
     }
 
     /// Test staging: installs the per-recording sessions `startRecording` would

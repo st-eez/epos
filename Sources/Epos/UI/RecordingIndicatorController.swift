@@ -3,11 +3,18 @@ import SwiftUI
 
 /// Floating borderless `NSPanel` that hosts a SwiftUI view supplied by the caller.
 /// A `Window` scene cannot give us non-activating + floats-above-all behavior, so we
-/// manage the panel directly. Centered horizontally, sat ~60pt above the active screen's
-/// bottom edge; position is fixed by design.
+/// manage the panel directly. Default position is centered horizontally, ~60pt above
+/// the active screen's bottom edge; while the inline preview mirrors into the
+/// fn-press field the panel instead anchors a compact chip beside that field.
 @MainActor
 public final class RecordingIndicatorController {
+    private enum Presentation {
+        case bottomCenter
+        case fieldAnchored(CGRect)
+    }
+
     private var panel: NSPanel?
+    private var presentation: Presentation = .bottomCenter
     private let log = EposLogger(category: "indicator")
 
     private static let panelSize = CGSize(width: 360, height: 110)
@@ -43,13 +50,46 @@ public final class RecordingIndicatorController {
         self.panel = panel
     }
 
+    /// Order the panel front in its current presentation (used by notice flashes,
+    /// which must not move an anchored chip away from the field the user watched).
     public func show() {
         guard let panel else {
             log.error("show() called before attach(content:); ignoring")
             return
         }
-        repositionToActiveScreen(panel)
+        switch presentation {
+        case .bottomCenter:
+            repositionToActiveScreen(panel)
+        case .fieldAnchored(let frame):
+            panel.setFrame(frame, display: true)
+        }
         panel.orderFrontRegardless()
+    }
+
+    /// Today's default presentation: the full pill, bottom-center on the active
+    /// screen. Also the live restore path when the inline preview degrades.
+    public func showBottomCenter() {
+        presentation = .bottomCenter
+        show()
+    }
+
+    /// Anchor the compact chip beside the captured field. Returns false — leaving
+    /// the current bottom-center presentation untouched — when no usable placement
+    /// exists (nil/degenerate AX frame, field off every screen, no room).
+    public func anchorToCapturedField(axFieldFrame: CGRect?) -> Bool {
+        let screens = NSScreen.screens.map {
+            RecordingIndicatorFieldAnchorPolicy.Screen(frame: $0.frame, visibleFrame: $0.visibleFrame)
+        }
+        guard let placement = RecordingIndicatorFieldAnchorPolicy.placement(
+            axFieldFrame: axFieldFrame,
+            screens: screens
+        ) else {
+            log.info("field anchor unavailable; keeping bottom-center pill")
+            return false
+        }
+        presentation = .fieldAnchored(placement.panelFrame)
+        show()
+        return true
     }
 
     public func hide() {
@@ -59,102 +99,26 @@ public final class RecordingIndicatorController {
     private func repositionToActiveScreen(_ panel: NSPanel) {
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let visible = screen?.visibleFrame else { return }
-        let frame = RecordingIndicatorPlacementPolicy.frame(
+        let frame = RecordingIndicatorPlacementPolicy.bottomCenterFrame(
             in: visible,
-            indicatorSize: Self.panelSize,
-            protectedRect: nil
+            indicatorSize: Self.panelSize
         )
         panel.setFrame(frame, display: true)
     }
 }
 
 struct RecordingIndicatorPlacementPolicy {
-    nonisolated static let clearance: CGFloat = 12
     nonisolated static let fallbackBottomInset: CGFloat = 60
 
-    nonisolated static func frame(
+    nonisolated static func bottomCenterFrame(
         in visibleFrame: CGRect,
-        indicatorSize: CGSize,
-        protectedRect: CGRect?
+        indicatorSize: CGSize
     ) -> CGRect {
         let visibleFrame = visibleFrame.standardized
         let indicatorSize = CGSize(
             width: max(0, indicatorSize.width),
             height: max(0, indicatorSize.height)
         )
-
-        guard let protectedRect = saneProtectedRect(protectedRect, in: visibleFrame) else {
-            return fallbackFrame(in: visibleFrame, indicatorSize: indicatorSize)
-        }
-
-        return caretAdjacentFrame(
-            in: visibleFrame,
-            indicatorSize: indicatorSize,
-            protectedRect: protectedRect
-        ) ?? fallbackFrame(in: visibleFrame, indicatorSize: indicatorSize)
-    }
-
-    private nonisolated static func caretAdjacentFrame(
-        in visibleFrame: CGRect,
-        indicatorSize: CGSize,
-        protectedRect: CGRect
-    ) -> CGRect? {
-        let centeredX = protectedRect.midX - indicatorSize.width / 2
-        let x = clamped(centeredX, lower: visibleFrame.minX, upper: visibleFrame.maxX - indicatorSize.width)
-        let expandedProtectedRect = protectedRect.insetBy(dx: -clearance, dy: -clearance)
-
-        let below = CGRect(
-            x: x,
-            y: protectedRect.minY - clearance - indicatorSize.height,
-            width: indicatorSize.width,
-            height: indicatorSize.height
-        )
-        if isUsable(below, in: visibleFrame, avoiding: expandedProtectedRect) {
-            return below
-        }
-
-        let above = CGRect(
-            x: x,
-            y: protectedRect.maxY + clearance,
-            width: indicatorSize.width,
-            height: indicatorSize.height
-        )
-        if isUsable(above, in: visibleFrame, avoiding: expandedProtectedRect) {
-            return above
-        }
-
-        let y = clamped(
-            protectedRect.midY - indicatorSize.height / 2,
-            lower: visibleFrame.minY,
-            upper: visibleFrame.maxY - indicatorSize.height
-        )
-        let right = CGRect(
-            x: protectedRect.maxX + clearance,
-            y: y,
-            width: indicatorSize.width,
-            height: indicatorSize.height
-        )
-        if isUsable(right, in: visibleFrame, avoiding: expandedProtectedRect) {
-            return right
-        }
-
-        let left = CGRect(
-            x: protectedRect.minX - clearance - indicatorSize.width,
-            y: y,
-            width: indicatorSize.width,
-            height: indicatorSize.height
-        )
-        if isUsable(left, in: visibleFrame, avoiding: expandedProtectedRect) {
-            return left
-        }
-
-        return nil
-    }
-
-    private nonisolated static func fallbackFrame(
-        in visibleFrame: CGRect,
-        indicatorSize: CGSize
-    ) -> CGRect {
         let x = clamped(
             visibleFrame.midX - indicatorSize.width / 2,
             lower: visibleFrame.minX,
@@ -166,37 +130,6 @@ struct RecordingIndicatorPlacementPolicy {
             upper: visibleFrame.maxY - indicatorSize.height
         )
         return CGRect(origin: CGPoint(x: x, y: y), size: indicatorSize)
-    }
-
-    private nonisolated static func saneProtectedRect(
-        _ rect: CGRect?,
-        in visibleFrame: CGRect
-    ) -> CGRect? {
-        guard let candidate = rect else { return nil }
-        let rect = candidate.standardized
-        guard rect.minX.isFinite,
-              rect.minY.isFinite,
-              rect.width.isFinite,
-              rect.height.isFinite,
-              rect.width >= 0,
-              rect.height >= 8 else {
-            return nil
-        }
-        guard rect.maxX >= visibleFrame.minX,
-              rect.minX <= visibleFrame.maxX,
-              rect.maxY >= visibleFrame.minY,
-              rect.minY <= visibleFrame.maxY else {
-            return nil
-        }
-        return rect
-    }
-
-    private nonisolated static func isUsable(
-        _ frame: CGRect,
-        in visibleFrame: CGRect,
-        avoiding protectedRect: CGRect
-    ) -> Bool {
-        visibleFrame.contains(frame) && !frame.intersects(protectedRect)
     }
 
     private nonisolated static func clamped(

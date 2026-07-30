@@ -9,20 +9,33 @@ public struct RecordingIndicator: View {
     }
 
     public var body: some View {
-        RecordingIndicatorSurface(
+        let surface = RecordingIndicatorSurface(
             state: coordinator.state,
             finalizationPhase: coordinator.finalizationPhase,
             amplitude: coordinator.amplitude,
             startUnavailable: coordinator.startUnavailable,
             insertionUnavailable: coordinator.insertionUnavailable,
-            transcriptPreview: coordinator.hudTranscriptPreview
+            transcriptPreview: coordinator.hudTranscriptPreview,
+            compact: coordinator.indicatorCompact
         )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, 20)
+        if coordinator.indicatorCompact {
+            // The chip hugs the panel's trailing edge, vertically centered, so the
+            // anchored panel frame puts the visible chip exactly where
+            // `RecordingIndicatorFieldAnchorPolicy` computed it.
+            surface
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .trailing)
+                .padding(.trailing, RecordingIndicatorFieldAnchorPolicy.chipTrailingInset)
+        } else {
+            surface
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                .padding(.bottom, 20)
+        }
     }
 }
 
 /// Compact, non-interactive recording pill with a volatile transcript preview.
+/// In `compact` (field-anchored) form it shrinks to a one-line chip — status dot
+/// plus audio meter — that still surfaces the finalizing state and the notices.
 struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
     let finalizationPhase: FinalizationPhase
@@ -32,6 +45,7 @@ struct RecordingIndicatorSurface: View {
     let startUnavailable: Bool
     let insertionUnavailable: Bool
     let transcriptPreview: String
+    let compact: Bool
 
     private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
     private let teal = EposPalette.teal
@@ -43,7 +57,8 @@ struct RecordingIndicatorSurface: View {
         amplitude: Float,
         startUnavailable: Bool = false,
         insertionUnavailable: Bool = false,
-        transcriptPreview: String = ""
+        transcriptPreview: String = "",
+        compact: Bool = false
     ) {
         self.state = state
         self.finalizationPhase = finalizationPhase
@@ -51,10 +66,26 @@ struct RecordingIndicatorSurface: View {
         self.startUnavailable = startUnavailable
         self.insertionUnavailable = insertionUnavailable
         self.transcriptPreview = transcriptPreview
+        self.compact = compact
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        content
+            .background(
+                .ultraThinMaterial,
+                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            )
+            .background(
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(panelColor.opacity(0.9))
+            )
+            .overlay(surfaceStroke)
+            .shadow(color: .black.opacity(0.17), radius: 12, x: 0, y: 6)
+            .animation(.easeOut(duration: 0.08), value: amplitude)
+    }
+
+    @ViewBuilder private var content: some View {
+        if compact {
             HStack(spacing: 8) {
                 statusDot
                 if state == .recording {
@@ -62,33 +93,58 @@ struct RecordingIndicatorSurface: View {
                 } else {
                     activitySpinner
                 }
-                Text(noticeText ?? Self.statusText(state: state, finalizationPhase: finalizationPhase))
-                    .font(.system(size: 12, weight: .semibold))
-                    .foregroundStyle(.white.opacity(0.88))
-                    .lineLimit(1)
+                if Self.compactShowsStatusText(state: state, showingNotice: noticeText != nil) {
+                    statusLabel
+                }
             }
-            if state == .recording, !transcriptPreview.isEmpty {
-                Text(transcriptPreview)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.72))
-                    .lineLimit(1)
-                    .truncationMode(.head)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    statusDot
+                    if state == .recording {
+                        amplitudeMeter
+                    } else {
+                        activitySpinner
+                    }
+                    statusLabel
+                }
+                if state == .recording, !transcriptPreview.isEmpty {
+                    Text(transcriptPreview)
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.72))
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+            .frame(width: 304, alignment: .leading)
+            .frame(minHeight: 36, alignment: .leading)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 9)
         }
-        .frame(width: 304, alignment: .leading)
-        .frame(minHeight: 36, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .background(
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .fill(panelColor.opacity(0.9))
-        )
-        .overlay(surfaceStroke)
-        .shadow(color: .black.opacity(0.17), radius: 12, x: 0, y: 6)
-        .animation(.easeOut(duration: 0.08), value: amplitude)
     }
+
+    /// The compact chip stays dot + meter while dictation is flowing (the field
+    /// itself shows the transcript), but the finalizing state and the failure
+    /// notices must never be hidden — a "Not inserted" the user can't see is a
+    /// silent data loss.
+    nonisolated static func compactShowsStatusText(
+        state: CoordinatorState,
+        showingNotice: Bool
+    ) -> Bool {
+        showingNotice || state != .recording
+    }
+
+    private var statusLabel: some View {
+        Text(noticeText ?? Self.statusText(state: state, finalizationPhase: finalizationPhase))
+            .font(.system(size: 12, weight: .semibold))
+            .foregroundStyle(.white.opacity(0.88))
+            .lineLimit(1)
+    }
+
+    private var cornerRadius: CGFloat { compact ? 16 : 18 }
 
     private var noticeText: String? {
         if insertionUnavailable { return "Not inserted" }
@@ -97,7 +153,7 @@ struct RecordingIndicatorSurface: View {
     }
 
     private var surfaceStroke: some View {
-        RoundedRectangle(cornerRadius: 18, style: .continuous)
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
             .strokeBorder(
                 LinearGradient(
                     colors: [.white.opacity(0.18), .white.opacity(0.07), teal.opacity(0.1)],
