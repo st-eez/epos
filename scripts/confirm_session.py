@@ -14,7 +14,7 @@ from holdout_selection import Selection
 REPLAY = "r"
 SKIP = "s"
 QUIT = "q"
-PROMPT = "  enter=accept  text=correct  r=replay  s=skip  q=quit > "
+PROMPT = "  enter=accept candidate | type the corrected transcript | r=replay s=skip q=quit > "
 SHORT_TRANSCRIPT_WORDS = 2
 SHORT_PROMPT = "  y=yes, that is the whole transcript  enter=no, let me retype > "
 
