@@ -48,24 +48,6 @@ public final class AppCoordinator: ObservableObject {
     /// restores today's HUD line exactly.
     public var hudTranscriptPreview: String { inlinePreviewMirroring ? "" : displayText }
 
-    /// True while the indicator renders as the compact field-anchored chip:
-    /// the inline preview is mirroring AND the chip found a placement beside the
-    /// captured field. Stays true through finalize and the "Not inserted" flash
-    /// so a failure notice appears where the user is already looking; reset at
-    /// the next recording start.
-    @Published public private(set) var indicatorCompact = false
-    /// One anchor decision + at most one bottom-center→anchored move per
-    /// recording; later caret refreshes only glide the anchored chip.
-    private var didAttemptFieldAnchorThisRecording = false
-    /// True once this recording's indicator (chip or pill) is on screen. With a
-    /// preview session the presentation waits for the caret answer; this flag
-    /// keeps the deadline fallback and the anchor decision from double-showing.
-    private var indicatorPresented = false
-    /// How long a recording may go with no indicator at all before the pill
-    /// presents anyway (probe dead, connect failure, begin refused — paths that
-    /// produce no callback). The healthy path answers within the begin
-    /// round-trip, a few milliseconds.
-    static let indicatorFallbackDelay: Duration = .milliseconds(200)
     /// Distributed-notification tokens for the debug dictation trigger.
     private var debugTriggerObservers: [NSObjectProtocol] = []
 
@@ -382,9 +364,7 @@ public final class AppCoordinator: ObservableObject {
         )
         startInlinePreview()
         transcriptTiming.start()
-        indicatorCompact = false
-        didAttemptFieldAnchorThisRecording = false
-        presentIndicatorForRecordingStart()
+        indicator.show()
         let cleanFinalTranscript = makeFinalTranscriptCleaner()
         let contextualStrings = speechContextualStrings()
 
@@ -622,90 +602,27 @@ public final class AppCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard let self, self.inlinePreviewGeneration == generation else { return }
                     self.inlinePreviewMirroring = active
-                    self.syncIndicatorFieldAnchor()
+                    // A mid-recording degrade makes the HUD the only feedback
+                    // again, so the pill comes back (with its transcript line,
+                    // in the same update). At finalize `finishInlinePreview`
+                    // clears the flag with state != .recording, skipping this.
+                    if !active, self.state == .recording {
+                        self.indicator.show()
+                    }
                 }
             },
-            onCaretRect: { [weak self] rect in
+            onFirstMarkRendered: { [weak self] in
                 Task { @MainActor in
                     guard let self, self.inlinePreviewGeneration == generation else { return }
-                    self.anchorIndicatorNearCaret(rect)
+                    // The first letter just landed in the field: from here the
+                    // in-field provisional text IS the recording indicator,
+                    // exactly like native dictation. The pill only returns for
+                    // a degrade (above) or a failure notice flash.
+                    guard self.state == .recording, self.inlinePreviewMirroring else { return }
+                    self.indicator.hide()
                 }
             }
         )
-    }
-
-    /// With no preview session the pill shows immediately and synchronously,
-    /// exactly as it always has. With one, nothing is shown yet: the caret
-    /// answer rides the begin round-trip (milliseconds), so the compact chip at
-    /// the caret can be the FIRST indicator on screen — native-parity, no pill
-    /// cameo. The bounded fallback below presents the pill anyway when no
-    /// anchor decision arrived in time (probe dead, connect failure, begin
-    /// refused), so the user is never without an indicator past the deadline.
-    private func presentIndicatorForRecordingStart() {
-        indicatorPresented = false
-        guard inlinePreview != nil else {
-            presentBottomCenterIndicator()
-            return
-        }
-        let generation = inlinePreviewGeneration
-        Task { [weak self] in
-            try? await Task.sleep(for: Self.indicatorFallbackDelay)
-            guard let self, self.inlinePreviewGeneration == generation,
-                  self.state == .recording, !self.indicatorPresented else { return }
-            self.presentBottomCenterIndicator()
-        }
-    }
-
-    private func presentBottomCenterIndicator() {
-        indicatorPresented = true
-        indicatorCompact = false
-        indicator.showBottomCenter()
-    }
-
-    /// Anchor decision and tracking, fed by the preview session's caret-rect
-    /// queries — the first of which rides the begin round-trip, before any text
-    /// exists. The FIRST callback decides once per recording: caret line from
-    /// the IME channel first, the captured element's AX frame only when it is
-    /// plausibly a discrete field, bottom-center otherwise (the one bounded AX
-    /// frame read happens here, mid-recording — never on the finalize path).
-    /// The chip is normally the first indicator shown; when no placement
-    /// exists, the pill presents immediately instead of waiting out the
-    /// fallback deadline. LATER callbacks only glide the already-compact chip
-    /// after the caret as text grows (damped).
-    private func anchorIndicatorNearCaret(_ caretRect: CGRect?) {
-        guard state == .recording, inlinePreviewMirroring else { return }
-        if !didAttemptFieldAnchorThisRecording {
-            didAttemptFieldAnchorThisRecording = true
-            guard let placement = indicator.placementNearCaret(
-                caretRect: caretRect,
-                fallbackAXFieldFrame: textInsertionSession?.capturedTargetScreenFrame()
-            ) else {
-                if !indicatorPresented { presentBottomCenterIndicator() }
-                return
-            }
-            indicatorPresented = true
-            indicatorCompact = true
-            indicator.applyAnchoredPlacement(placement)
-        } else if indicatorCompact {
-            indicator.trackCaret(caretRect: caretRect)
-        }
-    }
-
-    /// Restores the bottom-center full pill the moment mirroring degrades
-    /// mid-recording (the HUD transcript line reappears in the same update),
-    /// and presents it when the preview died before anything was shown at all.
-    /// One-way per recording: `didAttemptFieldAnchorThisRecording` keeps a later
-    /// callback from re-anchoring, so the pill can never oscillate. At finalize,
-    /// `finishInlinePreview` clears the mirroring flag without coming here.
-    private func syncIndicatorFieldAnchor() {
-        guard state == .recording else { return }
-        guard !inlinePreviewMirroring else { return }
-        if indicatorCompact {
-            indicatorCompact = false
-            presentBottomCenterIndicator()
-        } else if !indicatorPresented {
-            presentBottomCenterIndicator()
-        }
     }
 
     /// Test staging: installs the per-recording sessions `startRecording` would

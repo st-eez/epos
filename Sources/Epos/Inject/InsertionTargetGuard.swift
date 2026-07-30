@@ -82,14 +82,6 @@ public protocol InsertionTargetObserver: AnyObject {
     func targetApplicationBundleIdentifier() -> String?
     /// The title of the window that owned the insertion target at baseline, if exposed.
     func targetWindowTitle() -> String?
-    /// Screen frame of the element captured at baseline, in AX coordinates
-    /// (top-left origin spanning all displays). Read for HUD anchoring only —
-    /// never on the write path — and bounded like every other AX read here.
-    func capturedElementScreenFrame() -> CGRect?
-}
-
-public extension InsertionTargetObserver {
-    func capturedElementScreenFrame() -> CGRect? { nil }
 }
 
 /// A no-op observer used by isolated insertion tests.
@@ -229,35 +221,6 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     public func targetApplicationBundleIdentifier() -> String? { homeApplicationBundleIdentifier }
 
     public func targetWindowTitle() -> String? { homeWindowTitle }
-
-    public func capturedElementScreenFrame() -> CGRect? {
-        guard let homeElement else { return nil }
-        // Same short bound as the opaque-signature reads. The element is only
-        // ever compared by identity afterward, so the tightened timeout cannot
-        // slow any later read.
-        AXUIElementSetMessagingTimeout(homeElement, Self.focusedElementMessagingTimeout)
-        var positionRef: CFTypeRef?
-        var sizeRef: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(
-            homeElement, kAXPositionAttribute as CFString, &positionRef
-        ) == .success, let positionValue = positionRef,
-              AXUIElementCopyAttributeValue(
-                homeElement, kAXSizeAttribute as CFString, &sizeRef
-              ) == .success, let sizeValue = sizeRef else {
-            return nil
-        }
-        var position = CGPoint.zero
-        var size = CGSize.zero
-        // CFTypeRefs of AXValues; force-casts are safe after the attribute reads
-        // succeed and `AXValueGetValue` validates the wrapped types.
-        // swiftlint:disable:next force_cast
-        guard AXValueGetValue((positionValue as! AXValue), .cgPoint, &position),
-              // swiftlint:disable:next force_cast
-              AXValueGetValue((sizeValue as! AXValue), .cgSize, &size) else {
-            return nil
-        }
-        return CGRect(origin: position, size: size)
-    }
 
     private func textValue(of element: AXUIElement) -> String? {
         var value: CFTypeRef?

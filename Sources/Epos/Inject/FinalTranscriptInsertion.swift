@@ -191,12 +191,6 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         target.targetWindowTitle()
     }
 
-    /// AX screen frame of the fn-press target, read once so the recording chip
-    /// can anchor beside the field. Never part of the write path.
-    public func capturedTargetScreenFrame() -> CGRect? {
-        target.capturedElementScreenFrame()
-    }
-
     private func targetIsUnchanged() -> Bool {
         guard target.hasCapturedTarget(),
               !target.focusChangedSinceStart() else {
