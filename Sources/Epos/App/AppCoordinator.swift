@@ -55,6 +55,7 @@ public final class AppCoordinator: ObservableObject {
     // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
     private let log: EposLogger
+    private let injectLog: EposLogger
     private var transcriptTiming: TranscriptTimingDiagnostics
 
     private var transcriptionTask: Task<Void, Never>?
@@ -64,6 +65,12 @@ public final class AppCoordinator: ObservableObject {
     private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
     private var currentReliabilityRecording: ReliabilityRecording?
+    /// Dogfood spike (`EPOS_INLINE_PREVIEW=1`, default off): mirrors the volatile
+    /// transcript into the fn-press field as input-method marked text. Preview only —
+    /// it is always discarded before the one authoritative write.
+    let inlinePreviewEnabled: Bool
+    private var inlinePreview: InlinePreviewSession?
+    private var inlinePreviewDiscard: Task<Void, Never>?
     /// Single deferred-start latch, set when a press arrives while `startRecording`
     /// cannot run it yet: the finalize window (state != .idle) or the launch
     /// window before `bootstrap()` cached `captureFormat`. The key stays down, so the
@@ -95,6 +102,7 @@ public final class AppCoordinator: ObservableObject {
         isFnKeyHeld: (@MainActor () -> Bool)? = nil,
         observedEditCaptureDelays: [TimeInterval] = AppCoordinator.defaultObservedEditCaptureDelays,
         includeTranscriptTextInDiagnostics: Bool? = nil,
+        inlinePreviewEnabled: Bool? = nil,
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
@@ -104,6 +112,8 @@ public final class AppCoordinator: ObservableObject {
             AXInsertionTargetObserver()
         }
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
+        self.injectLog = EposLogger(category: "inject", diagnostics: diagnostics)
+        self.inlinePreviewEnabled = inlinePreviewEnabled ?? InlinePreviewPolicy.load()
         self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
         self.reliabilityDiagnostics = diagnostics
@@ -308,6 +318,7 @@ public final class AppCoordinator: ObservableObject {
             target: insertionTargetObserverFactory(),
             recordingID: recordingID
         )
+        startInlinePreview()
         transcriptTiming.start()
         indicator.show()
         let cleanFinalTranscript = makeFinalTranscriptCleaner()
@@ -327,6 +338,9 @@ public final class AppCoordinator: ObservableObject {
         currentReliabilityRecording?.markReleased()
         state = .finalizing
         finalizationPhase = .finalizingSpeech
+        // Start dropping the preview at fn release, not at the write: the discard
+        // then overlaps the recognizer's own finalization instead of extending it.
+        startInlinePreviewDiscard()
         log.info("recording finalize")
         audio.stop()
         let transcriber = transcriber
@@ -413,6 +427,9 @@ public final class AppCoordinator: ObservableObject {
             // conservative deterministic clean, matching what the indicator streamed.
             let finalTranscript = cleanFinalTranscript(finalText)
             finalizationPhase = .inserting
+            // Ordering is load-bearing: the marked text must be gone before the one
+            // guarded write, or the field shows the utterance twice.
+            await finishInlinePreview()
             let insertionResult = insertFinalTranscriptResult(finalTranscript)
             let applied = insertionResult == .accepted
             if !applied { flashInsertionUnavailableNotice() }
@@ -460,11 +477,74 @@ public final class AppCoordinator: ObservableObject {
 
     func handlePartialTranscript(_ text: String) {
         partial = text
+        mirrorInlinePreview()
     }
 
     func handleFinalTranscriptSegment(_ text: String) {
         finalText += text
         partial = ""
+        mirrorInlinePreview()
+    }
+
+    /// Mirror exactly what the HUD shows. Off unless the spike is enabled, where it
+    /// costs one nil check per recognizer event.
+    private func mirrorInlinePreview() {
+        guard let inlinePreview else { return }
+        let text = displayText
+        Task { await inlinePreview.mark(text) }
+    }
+
+    private func startInlinePreview() {
+        inlinePreview = nil
+        inlinePreviewDiscard = nil
+        let bundleIdentifier = textInsertionSession?.targetApplicationBundleIdentifier()
+        guard let inlinePreview = makeInlinePreviewSession(bundleIdentifier: bundleIdentifier) else {
+            if inlinePreviewEnabled {
+                // Correlates a "saw nothing in app X" report with an unidentifiable
+                // fn-press target rather than a rendering failure.
+                injectLog.info("inline preview skipped: no target bundle id")
+            }
+            return
+        }
+        self.inlinePreview = inlinePreview
+        Task { await inlinePreview.begin() }
+    }
+
+    /// Preview needs the fn-press application up front, because the probe pins its
+    /// focus lock by bundle id. An unidentifiable target means no preview this
+    /// recording — never a delayed or retried one.
+    func makeInlinePreviewSession(bundleIdentifier: String?) -> InlinePreviewSession? {
+        guard inlinePreviewEnabled, let bundleIdentifier, !bundleIdentifier.isEmpty else {
+            return nil
+        }
+        return InlinePreviewSession(
+            transport: UnixSocketInlinePreviewTransport(),
+            bundleIdentifier: bundleIdentifier
+        )
+    }
+
+    private func startInlinePreviewDiscard() {
+        guard let inlinePreview, inlinePreviewDiscard == nil else { return }
+        inlinePreviewDiscard = Task { await inlinePreview.discard() }
+    }
+
+    /// Waits out the discard and emits the one per-recording diagnostic line. The
+    /// wait is bounded by the transport's per-operation socket timeouts, and is
+    /// normally already satisfied because the discard started at fn release.
+    private func finishInlinePreview() async {
+        guard let inlinePreview else { return }
+        startInlinePreviewDiscard()
+        await inlinePreviewDiscard?.value
+        let report = await inlinePreview.report()
+        if report.marksSent > 0 {
+            // The probe acknowledges issuing the discard, not the target app having
+            // drawn it. A short fixed settle keeps the composition from still being
+            // on screen when the keystrokes land.
+            try? await Task.sleep(for: .milliseconds(30))
+        }
+        injectLog.info(report.logLine)
+        self.inlinePreview = nil
+        inlinePreviewDiscard = nil
     }
 
     func promotePartialTranscriptAsFallbackFinalIfNeeded() {
@@ -666,6 +746,9 @@ public final class AppCoordinator: ObservableObject {
     /// clears the finished recording scope first, so a queued fn press cannot start the
     /// next recording in the middle of old-session cleanup.
     private func resetSessionStateBeforeIdle() async {
+        // No-op once the pre-write path already finished it; this covers the exits
+        // that never reach a final write (setup failure, silence, recognizer error).
+        await finishInlinePreview()
         audio.onBuffer = nil
         audio.onAmplitude = nil
         audio.onRawBuffer = nil
