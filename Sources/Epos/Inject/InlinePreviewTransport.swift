@@ -4,8 +4,12 @@ enum InlinePreviewTransportError: Error {
     /// The probe input method is not running, or its socket is gone.
     case unavailable
     case closed
-    /// A bounded read or write did not complete inside the per-operation budget.
+    /// The command could not be fully written inside the send budget. Its
+    /// terminating newline never reached the probe, so it was never executed.
     case timedOut
+    /// The command was fully written but no reply line arrived in time. The
+    /// probe may have executed it — callers must treat delivery as unknown.
+    case replyTimedOut
 }
 
 /// Line-oriented command channel to the palette-IME preview probe. The seam that
@@ -13,7 +17,16 @@ enum InlinePreviewTransportError: Error {
 protocol InlinePreviewTransport: Sendable {
     func open() async throws
     func send(_ line: String) async throws -> String
+    /// Same as `send`, with a wider bounded reply window. Used for the final
+    /// commit, whose acknowledgment decides between done and ambiguous.
+    func send(_ line: String, replyTimeout: TimeInterval) async throws -> String
     func close() async
+}
+
+extension InlinePreviewTransport {
+    func send(_ line: String, replyTimeout: TimeInterval) async throws -> String {
+        try await send(line)
+    }
 }
 
 enum InlinePreviewSocket {
@@ -63,6 +76,10 @@ final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked
         try await onQueue { try self.write(line) }
     }
 
+    func send(_ line: String, replyTimeout: TimeInterval) async throws -> String {
+        try await onQueue { try self.write(line, replyTimeout: replyTimeout) }
+    }
+
     func close() async {
         try? await onQueue { self.closeSocket() }
     }
@@ -100,17 +117,26 @@ final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked
             throw InlinePreviewTransportError.unavailable
         }
 
-        var budget = timeval(
-            tv_sec: Int(timeout),
-            tv_usec: Int32((timeout - TimeInterval(Int(timeout))) * 1_000_000)
-        )
+        var budget = Self.budget(timeout)
         let budgetSize = socklen_t(MemoryLayout<timeval>.size)
         _ = setsockopt(socketDescriptor, SOL_SOCKET, SO_SNDTIMEO, &budget, budgetSize)
         _ = setsockopt(socketDescriptor, SOL_SOCKET, SO_RCVTIMEO, &budget, budgetSize)
         descriptor = socketDescriptor
     }
 
-    private func write(_ line: String) throws -> String {
+    private static func budget(_ interval: TimeInterval) -> timeval {
+        timeval(
+            tv_sec: Int(interval),
+            tv_usec: Int32((interval - TimeInterval(Int(interval))) * 1_000_000)
+        )
+    }
+
+    private func setReceiveTimeout(_ interval: TimeInterval) {
+        var budget = Self.budget(interval)
+        _ = setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &budget, socklen_t(MemoryLayout<timeval>.size))
+    }
+
+    private func write(_ line: String, replyTimeout: TimeInterval? = nil) throws -> String {
         guard descriptor >= 0 else { throw InlinePreviewTransportError.closed }
         let payload = Array((line + "\n").utf8)
         var offset = 0
@@ -122,6 +148,11 @@ final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked
             guard written > 0 else { throw InlinePreviewTransportError.timedOut }
             offset += written
         }
+        if let replyTimeout {
+            setReceiveTimeout(replyTimeout)
+            defer { setReceiveTimeout(timeout) }
+            return try readLine()
+        }
         return try readLine()
     }
 
@@ -130,14 +161,14 @@ final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked
         var reply: [UInt8] = []
         for _ in 0..<maximumReadChunks {
             let count = Darwin.read(descriptor, &buffer, buffer.count)
-            guard count > 0 else { throw InlinePreviewTransportError.timedOut }
+            guard count > 0 else { throw InlinePreviewTransportError.replyTimedOut }
             reply.append(contentsOf: buffer[0..<count])
             if reply.contains(0x0A) {
                 return String(decoding: reply, as: UTF8.self)
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
-        throw InlinePreviewTransportError.timedOut
+        throw InlinePreviewTransportError.replyTimedOut
     }
 
     private func closeSocket() {

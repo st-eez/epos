@@ -37,6 +37,17 @@ public final class AppCoordinator: ObservableObject {
     /// in-progress segment alongside committed per-segment finals.
     public var displayText: String { finalText + partial }
 
+    /// True while the inline preview is actively mirroring the volatile transcript
+    /// into the fn-press field (begin acked, channel healthy this whole recording).
+    @Published public private(set) var inlinePreviewMirroring = false
+
+    /// What the HUD's transcript line shows: empty while the inline preview is
+    /// mirroring the same text into the field, so the utterance appears once.
+    /// Disabled, skipped, begin-refused, and degraded previews (including
+    /// mid-recording degradation) all leave `inlinePreviewMirroring` false, which
+    /// restores today's HUD line exactly.
+    public var hudTranscriptPreview: String { inlinePreviewMirroring ? "" : displayText }
+
     private let hotkey: FnHotkey
     private let audio: AudioCapture
     private let transcriber: Transcriber
@@ -71,6 +82,9 @@ public final class AppCoordinator: ObservableObject {
     let inlinePreviewEnabled: Bool
     private var inlinePreview: InlinePreviewSession?
     private var inlinePreviewDiscard: Task<Void, Never>?
+    /// Monotonic token so a stale session's marking-activity callback can never
+    /// flip the HUD suppression of a later recording.
+    private var inlinePreviewGeneration = 0
     /// Single deferred-start latch, set when a press arrives while `startRecording`
     /// cannot run it yet: the finalize window (state != .idle) or the launch
     /// window before `bootstrap()` cached `captureFormat`. The key stays down, so the
@@ -338,9 +352,18 @@ public final class AppCoordinator: ObservableObject {
         currentReliabilityRecording?.markReleased()
         state = .finalizing
         finalizationPhase = .finalizingSpeech
-        // Start dropping the preview at fn release, not at the write: the discard
-        // then overlaps the recognizer's own finalization instead of extending it.
-        startInlinePreviewDiscard()
+        // A preview that is actively marking at release stays alive through
+        // recognizer finalization: the provisional text remains visible (no blank
+        // gap) and the final-commit router owns the lifecycle from here (acked
+        // cancel → settle → guard → commit). Discarding at release would leave
+        // the router a dead session and silently force keystrokes every time.
+        // Everything else — disabled, skipped, degraded, begin-refused — starts
+        // the discard at release as before, overlapping the recognizer's own
+        // finalization. If the preview degrades after this check, the router
+        // finds it ineligible and its fallback discards before any keystroke.
+        if !inlinePreviewMirroring {
+            startInlinePreviewDiscard()
+        }
         log.info("recording finalize")
         audio.stop()
         let transcriber = transcriber
@@ -427,40 +450,59 @@ public final class AppCoordinator: ObservableObject {
             // conservative deterministic clean, matching what the indicator streamed.
             let finalTranscript = cleanFinalTranscript(finalText)
             finalizationPhase = .inserting
-            // Ordering is load-bearing: the marked text must be gone before the one
-            // guarded write, or the field shows the utterance twice.
-            await finishInlinePreview()
-            let insertionResult = insertFinalTranscriptResult(finalTranscript)
-            let applied = insertionResult == .accepted
-            if !applied { flashInsertionUnavailableNotice() }
-            let insertedTranscript = textInsertionSession?.insertedTranscript
-            if let evidenceID = recordCorrectionEvidenceIfEnabled(
-                enabled: shouldSaveCorrectionEvidence,
-                rawTranscript: finalText,
-                finalTranscript: finalTranscript,
-                applied: applied,
-                finalInsertedTranscript: insertedTranscript == finalTranscript ? insertedTranscript : nil,
-                recordingID: sessionRecordingID,
-                session: textInsertionSession
-            ) {
-                if let finalInsertedTranscript = correctionEvidence.evidence.last(
-                    where: { $0.id == evidenceID }
-                )?.finalInsertedTranscript {
-                    scheduleObservedUserEditCapture(
-                        evidenceID: evidenceID,
-                        finalInsertedTranscript: finalInsertedTranscript,
-                        session: textInsertionSession
-                    )
+            switch await commitFinalTranscript(finalTranscript) {
+            case .completed(let insertionResult, let viaIME):
+                let applied = insertionResult == .accepted
+                if !applied { flashInsertionUnavailableNotice() }
+                let insertedTranscript = textInsertionSession?.insertedTranscript
+                if let evidenceID = recordCorrectionEvidenceIfEnabled(
+                    enabled: shouldSaveCorrectionEvidence,
+                    rawTranscript: finalText,
+                    finalTranscript: finalTranscript,
+                    applied: applied,
+                    finalInsertedTranscript: insertedTranscript == finalTranscript ? insertedTranscript : nil,
+                    recordingID: sessionRecordingID,
+                    session: textInsertionSession
+                ) {
+                    if let finalInsertedTranscript = correctionEvidence.evidence.last(
+                        where: { $0.id == evidenceID }
+                    )?.finalInsertedTranscript {
+                        scheduleObservedUserEditCapture(
+                            evidenceID: evidenceID,
+                            finalInsertedTranscript: finalInsertedTranscript,
+                            session: textInsertionSession
+                        )
+                    }
                 }
+                emitFinalReliabilityOutcome(
+                    reliability: reliability,
+                    recognizerFailed: recognizerFailed,
+                    insertionResult: insertionResult,
+                    transcript: finalTranscript,
+                    session: textInsertionSession,
+                    viaIMECommit: viaIME
+                )
+                finishTextInsertionSession()
+            case .imeAmbiguous:
+                // The commit was fully sent over a healthy channel and the ack
+                // never arrived: it may have landed. A keystroke fallback could
+                // insert the transcript twice, and flashing "Not inserted" would
+                // invite a manual retype with the same double-text risk — so
+                // write nothing, flash nothing, and report the recording as an
+                // unacknowledged IME commit.
+                reliability?.emit(
+                    recognizerFailed ? .recognizerFailed : .writeAcceptedUnverified,
+                    transcriptUTF16: finalTranscript.utf16.count,
+                    writeAttempted: true,
+                    writeAccepted: false,
+                    imeCommit: true,
+                    imeCommitAcknowledged: false
+                )
+                injectLog.info(
+                    "final insertion ime commit unacknowledged; keystroke fallback suppressed"
+                )
+                cancelTextInsertionSession()
             }
-            emitFinalReliabilityOutcome(
-                reliability: reliability,
-                recognizerFailed: recognizerFailed,
-                insertionResult: insertionResult,
-                transcript: finalTranscript,
-                session: textInsertionSession
-            )
-            finishTextInsertionSession()
         } else {
             cancelTextInsertionSession()
             reliability?.emit(
@@ -497,6 +539,7 @@ public final class AppCoordinator: ObservableObject {
     private func startInlinePreview() {
         inlinePreview = nil
         inlinePreviewDiscard = nil
+        inlinePreviewMirroring = false
         let bundleIdentifier = textInsertionSession?.targetApplicationBundleIdentifier()
         guard let inlinePreview = makeInlinePreviewSession(bundleIdentifier: bundleIdentifier) else {
             if inlinePreviewEnabled {
@@ -513,14 +556,56 @@ public final class AppCoordinator: ObservableObject {
     /// Preview needs the fn-press application up front, because the probe pins its
     /// focus lock by bundle id. An unidentifiable target means no preview this
     /// recording — never a delayed or retried one.
-    func makeInlinePreviewSession(bundleIdentifier: String?) -> InlinePreviewSession? {
+    func makeInlinePreviewSession(
+        bundleIdentifier: String?,
+        transport: (any InlinePreviewTransport)? = nil
+    ) -> InlinePreviewSession? {
         guard inlinePreviewEnabled, let bundleIdentifier, !bundleIdentifier.isEmpty else {
             return nil
         }
+        inlinePreviewGeneration += 1
+        let generation = inlinePreviewGeneration
         return InlinePreviewSession(
-            transport: UnixSocketInlinePreviewTransport(),
-            bundleIdentifier: bundleIdentifier
+            transport: transport ?? UnixSocketInlinePreviewTransport(),
+            bundleIdentifier: bundleIdentifier,
+            onMarkingActivityChange: { [weak self] active in
+                Task { @MainActor in
+                    guard let self, self.inlinePreviewGeneration == generation else { return }
+                    self.inlinePreviewMirroring = active
+                }
+            }
         )
+    }
+
+    /// Test staging: installs the per-recording sessions `startRecording` would
+    /// have created, so release/commit ordering can be pinned without a live
+    /// speech pipeline. Production code never calls this.
+    func stageFinalizationSessions(
+        inlinePreview: InlinePreviewSession?,
+        insertion: FinalTranscriptInsertionSession?
+    ) {
+        self.inlinePreview = inlinePreview
+        textInsertionSession = insertion
+    }
+
+    /// Routes the one authoritative final write. The IME commit is attempted only
+    /// over a channel that stayed healthy all recording; every other case is
+    /// today's path unchanged. Internal so ordering tests can drive the full
+    /// release → route chain.
+    func commitFinalTranscript(_ transcript: String) async -> FinalTranscriptCommitRouter.Route {
+        if let inlinePreview,
+           let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+               transcript: transcript,
+               preview: inlinePreview,
+               insertion: textInsertionSession
+           ) {
+            await finishInlinePreview()
+            return route
+        }
+        // Ordering is load-bearing: the marked text must be gone before the one
+        // guarded write, or the field shows the utterance twice.
+        await finishInlinePreview()
+        return .completed(insertFinalTranscriptResult(transcript), viaIME: false)
     }
 
     private func startInlinePreviewDiscard() {
@@ -536,15 +621,17 @@ public final class AppCoordinator: ObservableObject {
         startInlinePreviewDiscard()
         await inlinePreviewDiscard?.value
         let report = await inlinePreview.report()
-        if report.marksSent > 0 {
+        if report.marksSent > 0, !report.committed {
             // The probe acknowledges issuing the discard, not the target app having
             // drawn it. A short fixed settle keeps the composition from still being
-            // on screen when the keystrokes land.
+            // on screen when the keystrokes land. After an acked IME commit no
+            // keystrokes follow, so there is nothing to settle for.
             try? await Task.sleep(for: .milliseconds(30))
         }
         injectLog.info(report.logLine)
         self.inlinePreview = nil
         inlinePreviewDiscard = nil
+        inlinePreviewMirroring = false
     }
 
     func promotePartialTranscriptAsFallbackFinalIfNeeded() {
@@ -577,7 +664,8 @@ public final class AppCoordinator: ObservableObject {
         recognizerFailed: Bool,
         insertionResult: FinalInsertionResult,
         transcript: String,
-        session: FinalTranscriptInsertionSession?
+        session: FinalTranscriptInsertionSession?,
+        viaIMECommit: Bool = false
     ) {
         guard let reliability else { return }
         guard insertionResult == .accepted, let session else {
@@ -585,7 +673,8 @@ public final class AppCoordinator: ObservableObject {
                 recognizerFailed: recognizerFailed,
                 insertionResult: insertionResult,
                 delivery: .unavailable,
-                transcriptUTF16: transcript.utf16.count
+                transcriptUTF16: transcript.utf16.count,
+                imeCommit: viaIMECommit
             )
             return
         }
@@ -595,7 +684,8 @@ public final class AppCoordinator: ObservableObject {
                 recognizerFailed: recognizerFailed,
                 insertionResult: insertionResult,
                 delivery: delivery,
-                transcriptUTF16: transcript.utf16.count
+                transcriptUTF16: transcript.utf16.count,
+                imeCommit: viaIMECommit
             )
         }
     }

@@ -101,6 +101,69 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
         XCTAssertTrue(log.contains("latencyMs=-1"))
     }
 
+    func testAmbiguousImeCommitIsMarkedDistinctlyWithAdditiveFields() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EposReliability-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sink = DiagnosticLogSink(
+            configuration: .init(enabled: true),
+            directory: directory
+        )
+        let recording = ReliabilityRecording(recordingID: "ime-ambiguous", diagnostics: sink)
+
+        recording.emit(
+            .writeAcceptedUnverified,
+            transcriptUTF16: 12,
+            writeAttempted: true,
+            writeAccepted: false,
+            imeCommit: true,
+            imeCommitAcknowledged: false
+        )
+        sink.flush()
+
+        let url = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            ).first
+        )
+        let log = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(log.contains("outcome=write-accepted-unverified"))
+        XCTAssertTrue(log.contains("writeAttempted=true writeAccepted=false"))
+        XCTAssertTrue(log.contains("imeCommit=true imeCommitAck=false"))
+    }
+
+    func testAckedImeCommitOutcomeCarriesTheBackendMarker() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("EposReliability-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sink = DiagnosticLogSink(
+            configuration: .init(enabled: true),
+            directory: directory
+        )
+        let recording = ReliabilityRecording(recordingID: "ime-acked", diagnostics: sink)
+
+        recording.emitFinal(
+            recognizerFailed: false,
+            insertionResult: .accepted,
+            delivery: .unavailable,
+            transcriptUTF16: 8,
+            imeCommit: true
+        )
+        sink.flush()
+
+        let url = try XCTUnwrap(
+            FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: nil
+            ).first
+        )
+        let log = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(log.contains("outcome=write-accepted-unverified"))
+        XCTAssertTrue(log.contains("writeAttempted=true writeAccepted=true"))
+        XCTAssertTrue(log.contains("imeCommit=true imeCommitAck=true"))
+    }
+
     func testRecognizerFailureRemainsOutcomeWhileDeliveryEvidenceIsPreserved() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("EposReliability-\(UUID().uuidString)")

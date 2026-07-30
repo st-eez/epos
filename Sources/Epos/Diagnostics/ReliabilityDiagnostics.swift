@@ -61,7 +61,9 @@ public final class ReliabilityRecording: @unchecked Sendable {
         writeAttempted: Bool = false,
         writeAccepted: Bool = false,
         readbackAvailable: Bool = false,
-        readbackMatched: Bool = false
+        readbackMatched: Bool = false,
+        imeCommit: Bool = false,
+        imeCommitAcknowledged: Bool = false
     ) {
         let snapshot: (audioBuffers: Int, audioFrames: Int, latencyMs: Int)? = lock.withLock {
             guard !state.didEmit else { return nil }
@@ -90,6 +92,8 @@ public final class ReliabilityRecording: @unchecked Sendable {
                 "writeAccepted=\(writeAccepted) " +
                 "readbackAvailable=\(readbackAvailable) " +
                 "readbackMatched=\(readbackMatched) " +
+                "imeCommit=\(imeCommit) " +
+                "imeCommitAck=\(imeCommitAcknowledged) " +
                 "latencyMs=\(snapshot.latencyMs)",
             recordingID: recordingID
         )
@@ -102,7 +106,8 @@ public final class ReliabilityRecording: @unchecked Sendable {
         recognizerFailed: Bool,
         insertionResult: FinalInsertionResult,
         delivery: FinalInsertionDeliveryVerification,
-        transcriptUTF16: Int
+        transcriptUTF16: Int,
+        imeCommit: Bool = false
     ) {
         let evidence: (
             outcome: ReliabilityOutcome,
@@ -132,7 +137,9 @@ public final class ReliabilityRecording: @unchecked Sendable {
             writeAttempted: evidence.writeAttempted,
             writeAccepted: evidence.writeAccepted,
             readbackAvailable: evidence.readbackAvailable,
-            readbackMatched: evidence.readbackMatched
+            readbackMatched: evidence.readbackMatched,
+            imeCommit: imeCommit,
+            imeCommitAcknowledged: imeCommit
         )
     }
 }

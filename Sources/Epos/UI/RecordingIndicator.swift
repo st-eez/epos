@@ -15,7 +15,7 @@ public struct RecordingIndicator: View {
             amplitude: coordinator.amplitude,
             startUnavailable: coordinator.startUnavailable,
             insertionUnavailable: coordinator.insertionUnavailable,
-            transcriptPreview: coordinator.displayText
+            transcriptPreview: coordinator.hudTranscriptPreview
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .padding(.bottom, 20)

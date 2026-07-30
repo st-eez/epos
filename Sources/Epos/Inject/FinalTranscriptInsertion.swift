@@ -12,6 +12,14 @@ public enum FinalInsertionDeliveryVerification: Equatable, Sendable {
     case mismatched
 }
 
+/// Decision of the shared pre-write guard, split from the write itself so an
+/// alternate backend (the palette-IME commit) can run the identical verification
+/// before its own write.
+public enum FinalWriteAuthorization: Equatable, Sendable {
+    case refused(FinalInsertionResult)
+    case authorized
+}
+
 /// Captures the insertion target at fn press and performs at most one write.
 ///
 /// This type is unchecked-Sendable only for its post-write readback. The
@@ -44,18 +52,8 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     }
 
     public func insertFinalResult(_ text: String) -> FinalInsertionResult {
-        guard !didClose,
-              insertedTranscript == nil,
-              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            return .backendRefused
-        }
-        guard targetIsUnchanged() else {
-            log.info(
-                "final insertion refused: fn-press target changed",
-                recordingID: recordingID
-            )
-            cancel()
-            return .targetRefused
+        if case .refused(let result) = authorizeFinalWrite(text) {
+            return result
         }
 
         guard insertionSession.insert(text) else {
@@ -72,6 +70,39 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             recordingID: recordingID
         )
         return .accepted
+    }
+
+    /// The shared pre-write verification. Refusal semantics are the keystroke
+    /// path's: a changed target cancels the session, after which no write of any
+    /// kind can ever be issued.
+    public func authorizeFinalWrite(_ text: String) -> FinalWriteAuthorization {
+        guard !didClose,
+              insertedTranscript == nil,
+              !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return .refused(.backendRefused)
+        }
+        guard targetIsUnchanged() else {
+            log.info(
+                "final insertion refused: fn-press target changed",
+                recordingID: recordingID
+            )
+            cancel()
+            return .refused(.targetRefused)
+        }
+        return .authorized
+    }
+
+    /// Records a write performed by the acknowledged IME-commit backend. The
+    /// exactly-once contract is unchanged: `insertedTranscript` is set at most
+    /// once, and only after `authorizeFinalWrite` returned `.authorized` for
+    /// this recording.
+    public func recordExternalCommit(_ text: String) {
+        guard !didClose, insertedTranscript == nil else { return }
+        insertedTranscript = text
+        log.info(
+            "final insertion committed via ime chars=\(text.utf16.count)",
+            recordingID: recordingID
+        )
     }
 
     /// Gives posted keystrokes a bounded opportunity to reach an AX-readable

@@ -20,20 +20,41 @@ struct InlinePreviewReport: Equatable, Sendable {
     var began: Bool
     var marksSent: Int
     var cancelAcknowledged: Bool
+    var committed: Bool
     var failure: String?
 
     var logLine: String {
         "inline preview target=\(bundleIdentifier) began=\(began) marks=\(marksSent) " +
-            "cancelAck=\(cancelAcknowledged) failure=\(failure ?? "none")"
+            "cancelAck=\(cancelAcknowledged) committed=\(committed) failure=\(failure ?? "none")"
     }
+}
+
+/// Outcome of the one final `commit` attempt, classified by whether the probe
+/// can possibly have executed it.
+enum InlinePreviewCommitOutcome: Equatable, Sendable {
+    case committed
+    /// The probe provably did not execute the commit (refusal replies precede
+    /// `insertText`; a send-side failure means the command line never arrived
+    /// complete). Keystroke fallback is safe.
+    case refused
+    /// Not attempted at all (channel degraded first). Keystroke fallback is safe.
+    case unavailable
+    /// The commit was fully sent over a healthy channel and no acknowledgment
+    /// arrived. It may have executed — nothing else may write this recording.
+    case ambiguous
 }
 
 /// Mirrors the volatile transcript into the fn-press application as input-method
 /// marked text, for one recording.
 ///
-/// Marked text is preview only. This type never sends `commit`: `discard()` drops
-/// the composition and releases the probe's focus lock, and the coordinator awaits
-/// it before the authoritative guarded write, so the two can never both land.
+/// Marked text is preview only; the composition is always dropped before any
+/// write. The one exception to "never commit" is the explicit final handshake
+/// (`cancelCompositionForFinalCommit` + `commitFinalTranscript`), which
+/// `FinalTranscriptCommitRouter` drives only after the shared insertion guard
+/// authorized the write — and which itself starts by dropping the composition.
+/// On the ordinary path `discard()` drops the composition and releases the
+/// probe's focus lock, and the coordinator awaits it before the authoritative
+/// guarded keystroke write, so preview and write can never both land.
 ///
 /// Every failure — probe absent, focus lock refused, timeout — degrades to
 /// HUD-only for the rest of the recording instead of propagating.
@@ -42,14 +63,25 @@ actor InlinePreviewSession {
         /// `begin` has not resolved yet; marks accumulate but are not sent.
         case pending
         case marking
+        /// The final-commit handshake has started; no further marks are sent.
+        case committing
         case degraded
         case discarded
     }
+
+    /// Bounded ack window for the one `commit`. Wider than the transport's
+    /// default budget because a missing ack here is the worst outcome (an
+    /// ambiguous write), while a slow ack only delays finalization.
+    static let commitAckTimeout: TimeInterval = 0.5
 
     private let transport: InlinePreviewTransport
     private let bundleIdentifier: String
     private let throttle: Duration
     private let sleep: @Sendable (Duration) async -> Void
+    /// Fired on transitions in and out of active marking (begin acked, channel
+    /// healthy). The coordinator uses it to drop the HUD's duplicate transcript
+    /// line while the field shows the same text.
+    private let onMarkingActivityChange: @Sendable (Bool) -> Void
 
     private var phase: Phase = .pending
     private var pendingMark: String?
@@ -59,18 +91,29 @@ actor InlinePreviewSession {
     private var didAttemptMark = false
     private var marksSent = 0
     private var cancelAcknowledged = false
+    private var compositionCancelled = false
+    private var committed = false
     private var failure: String?
 
     init(
         transport: InlinePreviewTransport,
         bundleIdentifier: String,
         throttle: Duration = .milliseconds(100),
-        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in }
     ) {
         self.transport = transport
         self.bundleIdentifier = bundleIdentifier
         self.throttle = throttle
         self.sleep = sleep
+        self.onMarkingActivityChange = onMarkingActivityChange
+    }
+
+    /// Text the line protocol can carry verbatim. A transcript that would need
+    /// sanitizing must never be IME-committed: the probe would insert something
+    /// other than the authoritative transcript.
+    static func isCommittableText(_ text: String) -> Bool {
+        !text.isEmpty && !text.contains("\n") && !text.contains("\r")
     }
 
     /// Connects and pins the probe to the fn-press application. The probe resolves
@@ -87,7 +130,7 @@ actor InlinePreviewSession {
                 return degrade("beginRefused")
             }
             began = true
-            phase = .marking
+            transition(to: .marking)
             startDrainIfNeeded()
         } catch {
             degrade("connectFailed")
@@ -114,9 +157,13 @@ actor InlinePreviewSession {
     /// never came back.
     func discard() async {
         guard phase != .discarded else { return }
-        let shouldCancel = didAttemptMark
+        // After an acked composition cancel there is nothing left to un-mark,
+        // so the final-commit paths (committed, refused, ambiguous) never send
+        // a second `cancel`. `end` only releases the probe's focus lock and can
+        // never touch text, so it is safe even after an ambiguous commit.
+        let shouldCancel = didAttemptMark && !compositionCancelled
         let shouldEnd = began
-        phase = .discarded
+        transition(to: .discarded)
         pendingMark = nil
 
         if shouldCancel, let reply = try? await transport.send("cancel") {
@@ -128,12 +175,95 @@ actor InlinePreviewSession {
         await transport.close()
     }
 
+    // MARK: - Final IME commit
+
+    /// True only when the channel has been healthy for the whole recording:
+    /// begin acked, every send round-tripped (any failure is a sticky degrade),
+    /// and the probe acknowledged rendering at least one mark.
+    func isEligibleForFinalCommit() -> Bool {
+        phase == .marking && marksSent > 0
+    }
+
+    /// Step 1 of the final IME commit: drop the composition while keeping the
+    /// channel and the probe's focus lock open. The insertion guard must verify
+    /// a field that reads exactly as it did at fn press, and live marked text is
+    /// part of the AX-readable value, so it has to be gone before the guard runs.
+    /// Returns true only on a positive ack; anything else degrades, and the
+    /// caller falls back to the ordinary discard + keystroke path.
+    func cancelCompositionForFinalCommit() async -> Bool {
+        guard isEligibleForFinalCommit() else { return false }
+        transition(to: .committing)
+        pendingMark = nil
+        // Reply alignment is load-bearing: the transport pairs each request
+        // with the next reply line, so an in-flight mark must consume its reply
+        // before this cancel — and the commit after it — can trust theirs.
+        // `committing` stops new drains; waiting out the current one leaves the
+        // stream aligned. A mark that fails in flight degrades and aborts here.
+        // (Real sleep, not the injected throttle sleep: this wait is part of the
+        // commit handshake, not the mark cadence.)
+        while draining { try? await Task.sleep(for: .milliseconds(2)) }
+        guard phase == .committing else { return false }
+        do {
+            let reply = try await transport.send("cancel")
+            guard reply.hasPrefix("ok") else {
+                degrade("commitCancelRefused")
+                return false
+            }
+            cancelAcknowledged = true
+            compositionCancelled = true
+            return true
+        } catch {
+            degrade("commitCancelFailed")
+            return false
+        }
+    }
+
+    /// Step 2: sends the authoritative transcript as one `commit`, which the
+    /// probe executes as a single atomic `insertText` at the caret.
+    func commitFinalTranscript(_ text: String) async -> InlinePreviewCommitOutcome {
+        guard phase == .committing, compositionCancelled,
+              Self.isCommittableText(text) else {
+            return .unavailable
+        }
+        do {
+            let reply = try await transport.send(
+                "commit \(text)",
+                replyTimeout: Self.commitAckTimeout
+            )
+            if reply.hasPrefix("ok committed") {
+                committed = true
+                return .committed
+            }
+            if reply.hasPrefix("err") {
+                // The probe replies `err` only from paths that precede
+                // `insertText`, so a refusal proves the commit did not land.
+                degrade("commitRefused")
+                return .refused
+            }
+            // Any other reply means the request/reply pairing can no longer be
+            // trusted; the commit may still execute.
+            degrade("commitReplyUnexpected")
+            return .ambiguous
+        } catch InlinePreviewTransportError.replyTimedOut {
+            // Fully sent, no ack: the probe may have executed it. The caller
+            // must not fall back to keystrokes — the transcript could land twice.
+            degrade("commitAckTimeout")
+            return .ambiguous
+        } catch {
+            // Send-side failure: the newline terminator never reached the
+            // probe, so the commit line was never parsed, let alone executed.
+            degrade("commitSendFailed")
+            return .refused
+        }
+    }
+
     func report() -> InlinePreviewReport {
         InlinePreviewReport(
             bundleIdentifier: bundleIdentifier,
             began: began,
             marksSent: marksSent,
             cancelAcknowledged: cancelAcknowledged,
+            committed: committed,
             failure: failure
         )
     }
@@ -167,8 +297,18 @@ actor InlinePreviewSession {
 
     private func degrade(_ reason: String) {
         guard phase != .discarded else { return }
-        phase = .degraded
+        transition(to: .degraded)
         pendingMark = nil
         failure = reason
+    }
+
+    private func transition(to newPhase: Phase) {
+        let wasMarking = phase == .marking
+        phase = newPhase
+        if wasMarking, newPhase != .marking {
+            onMarkingActivityChange(false)
+        } else if !wasMarking, newPhase == .marking {
+            onMarkingActivityChange(true)
+        }
     }
 }
