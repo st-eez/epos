@@ -35,10 +35,13 @@ struct RecordingCaretBadgeSurface: View {
     let amplitude: Float
 
     var body: some View {
+        // Inverted from the pill's palette on purpose: a solid-teal glass orb
+        // with grey-white bars is findable in peripheral vision, where a clear
+        // orb with teal bars vanished unless you knew where to look.
         HStack(spacing: 2.5) {
             ForEach(0..<3, id: \.self) { index in
                 Capsule()
-                    .fill(EposPalette.teal.opacity(
+                    .fill(Color(white: 0.94).opacity(
                         RecordingIndicatorSurface.barOpacity(index, amplitude: amplitude)
                     ))
                     .frame(
@@ -48,7 +51,7 @@ struct RecordingCaretBadgeSurface: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .glassEffect(.clear, in: Circle())
+        .glassEffect(.regular.tint(EposPalette.teal.opacity(0.85)), in: Circle())
         .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
         .padding(RecordingCaretBadgePolicy.badgeInset)
         .animation(.easeOut(duration: 0.08), value: amplitude)
