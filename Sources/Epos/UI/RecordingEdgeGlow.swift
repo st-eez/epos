@@ -194,31 +194,33 @@ struct RecordingEdgeGlowView: View {
     @ObservedObject var model: RecordingEdgeGlowModel
     @State private var breathingDim = false
     @State private var driftedIn = false
+    /// Ember-only electric flicker phases: two fast non-harmonic opacity
+    /// cycles (0.21s and 0.93s) multiply into an irregular crackle. Still
+    /// pure layer alpha on cached rasters — no per-frame rendering.
+    @State private var flickerHot = false
+    @State private var flickerArc = false
 
     /// Rasters render at 1/4 linear resolution and scale up — the blur hides
     /// the upscale completely and the cached layers cost 1/16 the memory.
     private static let rasterScale: CGFloat = 4
 
+    private static let emberRed = Color(red: 0.82, green: 0.12, blue: 0.08)
+    private static let emberFire = Color(red: 1.0, green: 0.36, blue: 0.10)
+    private static let emberDark = Color(red: 0.30, green: 0.02, blue: 0.04)
+    private static let emberSmokeA = Color(red: 0.10, green: 0.01, blue: 0.02)
+    private static let emberSmokeB = Color(red: 0.24, green: 0.03, blue: 0.05)
+    private static let emberArc = Color(red: 1.0, green: 0.5, blue: 0.25)
+
     var body: some View {
         // Same perceptual mapping as the pill's meter bars.
         let level = pow(min(1, max(0, Double(model.amplitude) / 0.075)), 0.55)
         let style = model.style
-        let base = Color(red: style.red, green: style.green, blue: style.blue)
-        // The primary palette walks the base hue around the perimeter; the
-        // drift palette is the same hues rotated one stop, so cross-fading
-        // between them reads as color slowly wandering along the edges.
-        let hues = [base, Self.hueShifted(base, degrees: 42), Self.hueShifted(base, degrees: -38)]
-        let primary = AngularGradient(colors: [hues[0], hues[1], hues[2], hues[0]], center: .center)
-        let drift = AngularGradient(colors: [hues[1], hues[2], hues[0], hues[1]], center: .center)
         ZStack {
-            // The calm breath and the color drift: non-harmonic cycles
-            // (2.7s vs 6.8s), so the combined motion takes a long time to
-            // visibly repeat.
-            glow(primary, style).opacity(min(1, (breathingDim ? 0.34 : 0.66) * style.intensity))
-            glow(drift, style).opacity(min(1, (driftedIn ? 0.45 : 0) * style.intensity))
-            // The voice: brightens the same shape as you speak.
-            glow(primary, style).opacity(min(1, 0.55 * style.intensity * level))
-                .animation(.easeOut(duration: 0.08), value: model.amplitude)
+            if style.theme == .ember {
+                emberLayers(style, level: level)
+            } else {
+                standardLayers(style, level: level)
+            }
         }
         .allowsHitTesting(false)
         .ignoresSafeArea()
@@ -230,23 +232,88 @@ struct RecordingEdgeGlowView: View {
                 withAnimation(.easeInOut(duration: 6.8).repeatForever(autoreverses: true)) {
                     driftedIn = true
                 }
+                withAnimation(.easeInOut(duration: 0.21).repeatForever(autoreverses: true)) {
+                    flickerHot = true
+                }
+                withAnimation(.easeInOut(duration: 0.93).repeatForever(autoreverses: true)) {
+                    flickerArc = true
+                }
             } else {
                 // Replacing the repeat-forever with a short one-shot ends it;
-                // the panel is faded out by now, so the jump is invisible.
+                // the panel is fully faded by the hide completion that flips
+                // `isShown`, so the jump is invisible.
                 withAnimation(.linear(duration: 0.05)) {
                     breathingDim = false
                     driftedIn = false
+                    flickerHot = false
+                    flickerArc = false
                 }
             }
         }
     }
 
+    /// The user-colored look: calm breath + slow palette drift + voice.
+    @ViewBuilder
+    private func standardLayers(_ style: EdgeGlowSettings, level: Double) -> some View {
+        let base = Color(red: style.red, green: style.green, blue: style.blue)
+        // The primary palette walks the base hue around the perimeter; the
+        // drift palette is the same hues rotated one stop, so cross-fading
+        // between them reads as color slowly wandering along the edges.
+        // Non-harmonic cycles (2.7s vs 6.8s) take a long time to visibly
+        // repeat.
+        let hues = [base, Self.hueShifted(base, degrees: 42), Self.hueShifted(base, degrees: -38)]
+        let primary = AngularGradient(colors: [hues[0], hues[1], hues[2], hues[0]], center: .center)
+        let drift = AngularGradient(colors: [hues[1], hues[2], hues[0], hues[1]], center: .center)
+        glow(primary, style).opacity(min(1, (breathingDim ? 0.34 : 0.66) * style.intensity))
+        glow(drift, style).opacity(min(1, (driftedIn ? 0.45 : 0) * style.intensity))
+        // The voice: brightens the same shape as you speak.
+        glow(primary, style).opacity(min(1, 0.55 * style.intensity * level))
+            .animation(.easeOut(duration: 0.08), value: model.amplitude)
+    }
+
+    /// The red/black aura: heavy dark smoke rolling under a breathing crimson
+    /// band, fire hues drifting through it, and a thin electric crackle whose
+    /// two fast cycles multiply into irregular flicker. Voice stokes the fire.
+    @ViewBuilder
+    private func emberLayers(_ style: EdgeGlowSettings, level: Double) -> some View {
+        let smoke = AngularGradient(
+            colors: [Self.emberSmokeA, Self.emberSmokeB, Self.emberSmokeA, Self.emberSmokeB],
+            center: .center
+        )
+        let fire = AngularGradient(
+            colors: [Self.emberRed, Self.emberFire, Self.emberDark, Self.emberRed],
+            center: .center
+        )
+        let fireDrift = AngularGradient(
+            colors: [Self.emberDark, Self.emberRed, Self.emberFire, Self.emberDark],
+            center: .center
+        )
+        let arc = AngularGradient(
+            colors: [Self.emberArc, Self.emberRed, Self.emberArc, Self.emberFire],
+            center: .center
+        )
+        glow(smoke, style, widthScale: 1.6)
+            .opacity(min(1, (breathingDim ? 0.72 : 0.5) * style.intensity))
+        glow(fire, style).opacity(min(1, (breathingDim ? 0.3 : 0.62) * style.intensity))
+        glow(fireDrift, style).opacity(min(1, (driftedIn ? 0.4 : 0) * style.intensity))
+        glow(arc, style, widthScale: 0.45)
+            .opacity(flickerHot ? 0.42 : 0.12)
+            .opacity(flickerArc ? 1 : 0.45)
+            .opacity(min(1, style.intensity))
+        glow(fire, style).opacity(min(1, 0.6 * style.intensity * level))
+            .animation(.easeOut(duration: 0.08), value: model.amplitude)
+    }
+
     /// Static full-screen glow, flattened to one cached quarter-resolution
     /// layer per palette and scaled back up.
-    private func glow(_ gradient: AngularGradient, _ style: EdgeGlowSettings) -> some View {
+    private func glow(
+        _ gradient: AngularGradient,
+        _ style: EdgeGlowSettings,
+        widthScale: CGFloat = 1
+    ) -> some View {
         GeometryReader { geo in
             let scale = Self.rasterScale
-            let thickness = style.thickness
+            let thickness = style.thickness * widthScale
             ZStack {
                 glowStroke(gradient, lineWidth: 36 * thickness / scale, blur: 26 / scale)
                 glowStroke(gradient, lineWidth: 14 * thickness / scale, blur: 9 / scale)

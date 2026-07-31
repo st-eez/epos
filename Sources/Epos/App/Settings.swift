@@ -1,8 +1,18 @@
 import Foundation
 
+/// Named looks for the screen-edge recording glow.
+public enum EdgeGlowTheme: String, Equatable, Sendable {
+    /// The user's single color driving the derived gradient.
+    case standard
+    /// Red/black anime aura: fixed ember palette with smoke and electric
+    /// flicker layers; the user color is ignored while active.
+    case ember
+}
+
 /// User-tunable style for the screen-edge recording glow.
 public struct EdgeGlowSettings: Equatable, Sendable {
     public var enabled: Bool
+    public var theme: EdgeGlowTheme
     /// Brightness multiplier applied to every glow layer.
     public var intensity: Double
     /// Stroke-width multiplier (visual band thickness).
@@ -18,6 +28,7 @@ public struct EdgeGlowSettings: Equatable, Sendable {
 
     public init(
         enabled: Bool = true,
+        theme: EdgeGlowTheme = .standard,
         intensity: Double = 1,
         thickness: Double = 1,
         red: Double = 0.22,
@@ -25,6 +36,7 @@ public struct EdgeGlowSettings: Equatable, Sendable {
         blue: Double = 0.72
     ) {
         self.enabled = enabled
+        self.theme = theme
         self.intensity = Self.intensityRange.clamping(intensity)
         self.thickness = Self.thicknessRange.clamping(thickness)
         self.red = (0.0...1.0).clamping(red)
@@ -68,6 +80,7 @@ public struct Settings: Equatable, Sendable {
         static let saveAudioSamples = "settings.saveAudioSamples"
         static let saveCorrectionEvidence = "settings.saveCorrectionEvidence"
         static let edgeGlowEnabled = "settings.edgeGlow.enabled"
+        static let edgeGlowTheme = "settings.edgeGlow.theme"
         static let edgeGlowIntensity = "settings.edgeGlow.intensity"
         static let edgeGlowThickness = "settings.edgeGlow.thickness"
         static let edgeGlowRed = "settings.edgeGlow.red"
@@ -87,6 +100,8 @@ public struct Settings: Equatable, Sendable {
                 // from a stored false/0.
                 enabled: defaults.object(forKey: Key.edgeGlowEnabled) as? Bool
                     ?? glowDefaults.enabled,
+                theme: (defaults.string(forKey: Key.edgeGlowTheme)
+                    .flatMap(EdgeGlowTheme.init(rawValue:))) ?? glowDefaults.theme,
                 intensity: defaults.object(forKey: Key.edgeGlowIntensity) as? Double
                     ?? glowDefaults.intensity,
                 thickness: defaults.object(forKey: Key.edgeGlowThickness) as? Double
@@ -104,6 +119,7 @@ public struct Settings: Equatable, Sendable {
         defaults.set(saveAudioSamples, forKey: Key.saveAudioSamples)
         defaults.set(saveCorrectionEvidence, forKey: Key.saveCorrectionEvidence)
         defaults.set(edgeGlow.enabled, forKey: Key.edgeGlowEnabled)
+        defaults.set(edgeGlow.theme.rawValue, forKey: Key.edgeGlowTheme)
         defaults.set(edgeGlow.intensity, forKey: Key.edgeGlowIntensity)
         defaults.set(edgeGlow.thickness, forKey: Key.edgeGlowThickness)
         defaults.set(edgeGlow.red, forKey: Key.edgeGlowRed)

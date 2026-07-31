@@ -68,16 +68,18 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(fresh.intensity, 1)
         XCTAssertEqual(fresh.red, 0.22)
 
-        // Round-trip, including a stored false (distinct from "never set").
+        // Round-trip, including a stored false (distinct from "never set")
+        // and a non-default theme.
         var settings = Settings()
         settings.edgeGlow = EdgeGlowSettings(
-            enabled: false, intensity: 1.3, thickness: 0.8,
+            enabled: false, theme: .ember, intensity: 1.3, thickness: 0.8,
             red: 0.9, green: 0.2, blue: 0.4
         )
         settings.save(to: defaults)
         let loaded = Settings.load(from: defaults).edgeGlow
         XCTAssertEqual(loaded, settings.edgeGlow)
         XCTAssertFalse(loaded.enabled)
+        XCTAssertEqual(loaded.theme, .ember)
 
         // Out-of-range and non-finite values clamp at construction.
         let clamped = EdgeGlowSettings(intensity: 9, thickness: -2, red: .nan, green: 2, blue: -1)

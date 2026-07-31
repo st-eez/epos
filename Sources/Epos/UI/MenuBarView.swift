@@ -8,20 +8,22 @@ public struct MenuBarView: View {
     @State private var saveAudioSamples = false
     @State private var saveCorrectionEvidence = false
     @State private var glowEnabled = true
+    @State private var glowTheme = EdgeGlowTheme.standard
     @State private var glowIntensity = 1.0
     @State private var glowThickness = 1.0
     @State private var glowRed = 0.22
     @State private var glowGreen = 0.78
     @State private var glowBlue = 0.72
 
-    /// Curated glow palette. Swatches, not a ColorPicker: NSColorPanel cannot
-    /// present from a non-activating menu-bar popover in a background app —
-    /// clicking the well did nothing.
+    /// Curated glow palette. Swatches, not a SwiftUI ColorPicker: its well
+    /// cannot present NSColorPanel from a non-activating menu-bar popover in
+    /// a background app. Arbitrary colors go through the bridged panel button.
     private static let glowSwatches: [(red: Double, green: Double, blue: Double)] = [
         (0.22, 0.78, 0.72),  // teal (default)
         (0.30, 0.62, 0.95),  // sky
         (0.58, 0.45, 0.95),  // violet
         (0.92, 0.40, 0.70),  // pink
+        (0.90, 0.20, 0.16),  // red
         (0.95, 0.70, 0.30),  // amber
         (0.45, 0.85, 0.50)   // green
     ]
@@ -60,6 +62,7 @@ public struct MenuBarView: View {
             saveCorrectionEvidence = coordinator.saveCorrectionEvidence
             let glow = coordinator.edgeGlowStyle
             glowEnabled = glow.enabled
+            glowTheme = glow.theme
             glowIntensity = glow.intensity
             glowThickness = glow.thickness
             glowRed = glow.red
@@ -167,29 +170,53 @@ public struct MenuBarView: View {
                         .frame(width: 110)
                         .onChange(of: glowThickness) { _, _ in pushGlowStyle() }
                 }
-                metaRow("Glow color") {
-                    HStack(spacing: 7) {
-                        ForEach(Array(Self.glowSwatches.enumerated()), id: \.offset) { _, swatch in
-                            let selected = abs(swatch.red - glowRed) < 0.01
-                                && abs(swatch.green - glowGreen) < 0.01
-                                && abs(swatch.blue - glowBlue) < 0.01
-                            Button {
-                                glowRed = swatch.red
-                                glowGreen = swatch.green
-                                glowBlue = swatch.blue
-                                pushGlowStyle()
-                            } label: {
-                                Circle()
-                                    .fill(Color(red: swatch.red, green: swatch.green, blue: swatch.blue))
-                                    .frame(width: 16, height: 16)
-                                    .overlay(
-                                        Circle().strokeBorder(
-                                            .white.opacity(selected ? 0.95 : 0.25),
-                                            lineWidth: selected ? 2 : 1
+                metaRow("Ember aura") {
+                    Toggle("", isOn: Binding(
+                        get: { glowTheme == .ember },
+                        set: { on in
+                            glowTheme = on ? .ember : .standard
+                            pushGlowStyle()
+                        }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(EposPalette.red)
+                    .scaleEffect(0.74)
+                    .frame(width: 42, height: 22)
+                }
+                if glowTheme == .standard {
+                    metaRow("Glow color") {
+                        HStack(spacing: 6) {
+                            ForEach(Array(Self.glowSwatches.enumerated()), id: \.offset) { _, swatch in
+                                let selected = abs(swatch.red - glowRed) < 0.01
+                                    && abs(swatch.green - glowGreen) < 0.01
+                                    && abs(swatch.blue - glowBlue) < 0.01
+                                Button {
+                                    glowRed = swatch.red
+                                    glowGreen = swatch.green
+                                    glowBlue = swatch.blue
+                                    pushGlowStyle()
+                                } label: {
+                                    Circle()
+                                        .fill(Color(red: swatch.red, green: swatch.green, blue: swatch.blue))
+                                        .frame(width: 14, height: 14)
+                                        .overlay(
+                                            Circle().strokeBorder(
+                                                .white.opacity(selected ? 0.95 : 0.25),
+                                                lineWidth: selected ? 2 : 1
+                                            )
                                         )
-                                    )
+                                }
+                                .buttonStyle(.plain)
+                            }
+                            Button { openGlowColorPanel() } label: {
+                                Image(systemName: "paintpalette")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.white.opacity(0.75))
+                                    .frame(width: 16, height: 16)
                             }
                             .buttonStyle(.plain)
+                            .help("Custom color")
                         }
                     }
                 }
@@ -203,12 +230,31 @@ public struct MenuBarView: View {
     private func pushGlowStyle() {
         coordinator.setEdgeGlowStyle(EdgeGlowSettings(
             enabled: glowEnabled,
+            theme: glowTheme,
             intensity: glowIntensity,
             thickness: glowThickness,
             red: glowRed,
             green: glowGreen,
             blue: glowBlue
         ))
+    }
+
+    /// Arbitrary colors via NSColorPanel, bridged manually: the app must be
+    /// activated for the panel to come frontmost (the popover may close —
+    /// the panel stays and applies continuously). Picking a custom color
+    /// implies the standard theme.
+    private func openGlowColorPanel() {
+        let coordinator = self.coordinator
+        GlowColorPanelBridge.shared.present(
+            red: glowRed, green: glowGreen, blue: glowBlue
+        ) { red, green, blue in
+            var style = coordinator.edgeGlowStyle
+            style.theme = .standard
+            style.red = red
+            style.green = green
+            style.blue = blue
+            coordinator.setEdgeGlowStyle(style)
+        }
     }
 
     private var actionRow: some View {
@@ -349,5 +395,36 @@ public struct MenuBarView: View {
                 color: teal
             )
         }
+    }
+}
+
+/// Target-action receiver for NSColorPanel, which a SwiftUI popover cannot
+/// host directly (the ColorPicker well silently fails to present it from a
+/// non-activating panel in a background app). Continuous: every change in
+/// the panel lands in the callback immediately.
+@MainActor
+final class GlowColorPanelBridge: NSObject {
+    static let shared = GlowColorPanelBridge()
+    private var onPick: ((Double, Double, Double) -> Void)?
+
+    func present(
+        red: Double, green: Double, blue: Double,
+        onPick: @escaping (Double, Double, Double) -> Void
+    ) {
+        self.onPick = onPick
+        let panel = NSColorPanel.shared
+        panel.showsAlpha = false
+        panel.isContinuous = true
+        panel.color = NSColor(srgbRed: red, green: green, blue: blue, alpha: 1)
+        panel.setTarget(self)
+        panel.setAction(#selector(colorChanged(_:)))
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        panel.makeKeyAndOrderFront(nil)
+    }
+
+    @objc private func colorChanged(_ sender: Any?) {
+        guard let panel = sender as? NSColorPanel,
+              let rgb = panel.color.usingColorSpace(.sRGB) else { return }
+        onPick?(Double(rgb.redComponent), Double(rgb.greenComponent), Double(rgb.blueComponent))
     }
 }
