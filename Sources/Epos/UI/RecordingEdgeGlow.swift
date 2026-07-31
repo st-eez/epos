@@ -13,14 +13,28 @@ final class RecordingEdgeGlowController {
     /// Bumped on every show/hide so a hide fade that finishes after a newer
     /// show can never order out the re-shown panel.
     private var visibilityGeneration = 0
+    private let log = EposLogger(category: "indicator")
 
     private static let showFadeDuration: TimeInterval = 0.15
     private static let hideFadeDuration: TimeInterval = 0.4
 
-    /// Builds the panel ahead of the first recording so the first show pays
-    /// no construction cost.
+    /// Builds the panel ahead of the first recording AND forces its first
+    /// render pass (order front at alpha 0, out on the next runloop turn), so
+    /// the flattened glow layer is already rasterized when fn goes down —
+    /// the first show pays only the fade.
     func prewarm() {
-        _ = ensurePanel()
+        let panel = ensurePanel()
+        guard !panel.isVisible else { return }
+        if let frame = (NSScreen.main ?? NSScreen.screens.first)?.frame {
+            panel.setFrame(frame, display: false)
+        }
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        let generation = visibilityGeneration
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.visibilityGeneration == generation else { return }
+            panel.orderOut(nil)
+        }
     }
 
     func updateAmplitude(_ amplitude: Float) {
@@ -33,7 +47,7 @@ final class RecordingEdgeGlowController {
         guard let frame = screen?.frame else { return }
         let panel = ensurePanel()
         visibilityGeneration += 1
-        model.shownAt = Date()
+        log.info("edge glow show")
         panel.setFrame(frame, display: false)
         if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
@@ -87,27 +101,22 @@ final class RecordingEdgeGlowController {
     }
 }
 
-/// Live mic level feeding the glow's brightness, plus the show timestamp
-/// driving the ignition pulse.
+/// Live mic level feeding the glow's brightness.
 @MainActor
 final class RecordingEdgeGlowModel: ObservableObject {
     @Published var amplitude: Float = 0
-    @Published var shownAt: Date = .distantPast
 }
 
-/// The glow itself: two blurred strokes centered on the screen boundary (only
-/// their inner halves are visible). A slow calm breath carries the idle
-/// brightness; the live mic level rides on top, so the edges answer your
-/// voice. Timeline-driven, so rendering pauses whenever the panel is hidden.
+/// The glow itself: blurred strokes centered on the screen boundary (only
+/// their inner halves are visible), rendered ONCE into a flattened Metal
+/// layer via `drawingGroup`. Everything that moves afterwards is pure layer
+/// alpha — the calm breath is a Core Animation repeat-forever, and the live
+/// mic level drives a second static copy — so no frame ever recomputes a
+/// full-screen blur. (The previous TimelineView version re-evaluated two
+/// 4K-wide Gaussian blurs 30×/s; its first frame alone read as start lag.)
 struct RecordingEdgeGlowView: View {
     @ObservedObject var model: RecordingEdgeGlowModel
-
-    /// One full breath — dimmest to brightest and back.
-    private static let breathPeriod: TimeInterval = 3.4
-    /// The entrance pulse: full-bright at show, easing into the calm breath.
-    /// Without it the glow can enter at the trough of the breath cycle and be
-    /// nearly invisible for its first moments — read as start lag.
-    private static let ignitionDuration: TimeInterval = 0.9
+    @State private var breathingDim = false
 
     private static let gradient = AngularGradient(
         colors: [
@@ -120,36 +129,40 @@ struct RecordingEdgeGlowView: View {
     )
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
-            let phase = context.date.timeIntervalSinceReferenceDate
-                * 2 * .pi / Self.breathPeriod
-            let breath = 0.5 + 0.16 * sin(phase)
-            // Same perceptual mapping as the pill's meter bars.
-            let level = pow(min(1, max(0, Double(model.amplitude) / 0.075)), 0.55)
-            let sinceShow = context.date.timeIntervalSince(model.shownAt)
-            let ignition = max(0, 1 - sinceShow / Self.ignitionDuration)
-            let intensity = min(1, breath + 0.5 * level + 0.6 * ignition)
-            ZStack {
-                glowStroke(lineWidth: 44, blur: 34, opacity: 0.45 * intensity)
-                glowStroke(lineWidth: 16, blur: 10, opacity: 0.6 * intensity)
-            }
-            .animation(.easeOut(duration: 0.08), value: model.amplitude)
+        // Same perceptual mapping as the pill's meter bars.
+        let level = pow(min(1, max(0, Double(model.amplitude) / 0.075)), 0.55)
+        ZStack {
+            // The calm breath: starts BRIGHT (the ignition) and eases into
+            // the dim-bright cycle.
+            glow.opacity(breathingDim ? 0.35 : 0.72)
+            // The voice: brightens the same shape as you speak.
+            glow.opacity(0.55 * level)
+                .animation(.easeOut(duration: 0.08), value: model.amplitude)
         }
         .allowsHitTesting(false)
         .ignoresSafeArea()
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) {
+                breathingDim = true
+            }
+        }
+    }
+
+    /// Static full-screen glow, flattened to one cached layer.
+    private var glow: some View {
+        ZStack {
+            glowStroke(lineWidth: 36, blur: 26)
+            glowStroke(lineWidth: 14, blur: 9)
+        }
+        .drawingGroup()
     }
 
     /// A stroke straddling the screen edge: inset by half the width so the
     /// blur bleeds inward from the boundary instead of drawing a frame.
-    private func glowStroke(
-        lineWidth: CGFloat,
-        blur: CGFloat,
-        opacity: Double
-    ) -> some View {
+    private func glowStroke(lineWidth: CGFloat, blur: CGFloat) -> some View {
         Rectangle()
             .inset(by: -lineWidth / 2)
             .stroke(Self.gradient, lineWidth: lineWidth)
             .blur(radius: blur)
-            .opacity(opacity)
     }
 }
