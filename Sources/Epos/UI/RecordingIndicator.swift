@@ -34,6 +34,10 @@ public struct RecordingIndicator: View {
 struct RecordingCaretBadgeSurface: View {
     let amplitude: Float
 
+    /// Deeper and fully saturated compared to `EposPalette.teal`, whose red
+    /// component reads pastel/washed out at orb size over arbitrary backdrops.
+    private let orbTeal = Color(red: 0, green: 0.68, blue: 0.62)
+
     var body: some View {
         // Inverted from the pill's palette on purpose: a solid-teal glass orb
         // with grey-white bars is findable in peripheral vision, where a clear
@@ -54,7 +58,7 @@ struct RecordingCaretBadgeSurface: View {
         // Fully opaque fill, not glass tint: Glass composites its tint against
         // the sampled backdrop (grey over dark windows), and partial opacity
         // read as washed out. The rim highlight alone carries the depth.
-        .background(Circle().fill(EposPalette.teal))
+        .background(Circle().fill(orbTeal))
         .overlay(Circle().strokeBorder(.white.opacity(0.28), lineWidth: 1))
         .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
         .padding(RecordingCaretBadgePolicy.badgeInset)
