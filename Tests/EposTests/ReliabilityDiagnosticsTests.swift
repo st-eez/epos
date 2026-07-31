@@ -14,6 +14,7 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
                 ReliabilityOutcome.deliveryVerified.rawValue,
                 ReliabilityOutcome.deliveryMismatch.rawValue,
                 ReliabilityOutcome.writeAcceptedUnverified.rawValue,
+                ReliabilityOutcome.imeCommitUnacknowledged.rawValue,
                 ReliabilityOutcome.cancelledBeforeAudio.rawValue
             ],
             [
@@ -26,6 +27,7 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
                 "delivery-verified",
                 "delivery-mismatch",
                 "write-accepted-unverified",
+                "ime-commit-unacknowledged",
                 "cancelled-before-audio"
             ]
         )
@@ -112,7 +114,7 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
         let recording = ReliabilityRecording(recordingID: "ime-ambiguous", diagnostics: sink)
 
         recording.emit(
-            .writeAcceptedUnverified,
+            .imeCommitUnacknowledged,
             transcriptUTF16: 12,
             writeAttempted: true,
             writeAccepted: false,
@@ -128,7 +130,11 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
             ).first
         )
         let log = try String(contentsOf: url, encoding: .utf8)
-        XCTAssertTrue(log.contains("outcome=write-accepted-unverified"))
+        // Its own outcome, not the accepted-write one: `scripts/audit` buckets
+        // this as incomplete/ambiguous, so a run of silently lost transcripts
+        // cannot hide inside the accepted-success count.
+        XCTAssertTrue(log.contains("outcome=ime-commit-unacknowledged"))
+        XCTAssertFalse(log.contains("outcome=write-accepted-unverified"))
         XCTAssertTrue(log.contains("writeAttempted=true writeAccepted=false"))
         XCTAssertTrue(log.contains("imeCommit=true imeCommitAck=false"))
     }

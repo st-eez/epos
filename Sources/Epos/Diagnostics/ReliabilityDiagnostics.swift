@@ -10,6 +10,12 @@ public enum ReliabilityOutcome: String, Sendable {
     case deliveryVerified = "delivery-verified"
     case deliveryMismatch = "delivery-mismatch"
     case writeAcceptedUnverified = "write-accepted-unverified"
+    /// The IME commit was fully sent and never acknowledged: nothing else wrote
+    /// this recording and the transcript may have landed or been lost. Distinct
+    /// from `writeAcceptedUnverified`, which is a write the backend accepted and
+    /// only the readback could not confirm; the audit buckets this one as
+    /// incomplete/ambiguous, never as a success.
+    case imeCommitUnacknowledged = "ime-commit-unacknowledged"
     case cancelledBeforeAudio = "cancelled-before-audio"
 
 }

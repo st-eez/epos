@@ -225,6 +225,31 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         XCTAssertEqual(backend.inserted, [])
     }
 
+    /// The transport tells a dead peer apart from a slow one so the log can name
+    /// what happened, but the routing must not follow that distinction: after a
+    /// complete send both mean the commit may have executed.
+    func testMissingAckAndDeadPeerRouteIdenticallyAfterAFullSend() async {
+        for commitError in [InlinePreviewTransportError.replyTimedOut, .replyPeerClosed] {
+            let transport = ScriptedTransport(commitError: commitError)
+            let preview = await makeHealthyPreview(transport: transport)
+            let backend = RecordingBackend()
+            let insertion = makeInsertion(backend: backend)
+
+            let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+                transcript: Self.transcript,
+                preview: preview,
+                insertion: insertion,
+                settle: {}
+            )
+
+            XCTAssertEqual(route, .imeAmbiguous, "\(commitError)")
+            XCTAssertEqual(backend.inserted, [], "\(commitError)")
+            XCTAssertNil(insertion.insertedTranscript, "\(commitError)")
+            XCTAssertEqual(insertion.insertFinalResult(Self.transcript), .backendRefused, "\(commitError)")
+            XCTAssertEqual(backend.inserted, [], "\(commitError)")
+        }
+    }
+
     func testProtocolBreakingTranscriptNeverEntersTheIMEPath() async {
         let transport = ScriptedTransport()
         let preview = await makeHealthyPreview(transport: transport)

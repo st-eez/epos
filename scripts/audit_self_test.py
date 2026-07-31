@@ -50,6 +50,18 @@ def run_self_test(root: Path) -> None:
          "reliability start schema=2"),
         ("2026-07-29T00:06:00.100Z\tinfo\treliability\trecordingID=g "
          "reliability outcome schema=2 outcome=delivery-verified latencyMs=99"),
+        # An unacknowledged IME commit is ambiguous, not an accepted write.
+        "2026-07-29T00:07:00.000Z\tinfo\tcoordinator\trecordingID=h recording start",
+        ("2026-07-29T00:07:00.100Z\tinfo\treliability\trecordingID=h "
+         "reliability outcome schema=1 outcome=ime-commit-unacknowledged "
+         "writeAttempted=true writeAccepted=false imeCommit=true imeCommitAck=false "
+         "latencyMs=120"),
+        # A genuinely accepted keystroke write whose readback was unavailable
+        # must keep bucketing as accepted, unchanged by the outcome above.
+        "2026-07-29T00:08:00.000Z\tinfo\tcoordinator\trecordingID=i recording start",
+        ("2026-07-29T00:08:00.100Z\tinfo\treliability\trecordingID=i "
+         "reliability outcome schema=1 outcome=write-accepted-unverified "
+         "writeAttempted=true writeAccepted=true latencyMs=130"),
     ]
     (logs / "audit.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
     score = lambda errors, subs, ins, dels: {
@@ -88,6 +100,7 @@ def run_self_test(root: Path) -> None:
         "backend-refused": "backend_refusal", "delivery-verified": "verified_delivery",
         "delivery-mismatch": "delivery_mismatch",
         "write-accepted-unverified": "accepted_unverified",
+        "ime-commit-unacknowledged": "incomplete_ambiguous",
     }
     assert {name: OUTCOME_ALIASES[name] for name in exact} == exact
     ledger_rows = corpus_rows(confirmed=[
@@ -97,11 +110,13 @@ def run_self_test(root: Path) -> None:
     write_corpus(corpus, ledger_rows)
     report = build_report(logs, complete, None, corpus)
     operational = report["operational"]
-    assert operational["recordingStarts"] == operational["classifiedRecordings"] == 7
+    assert operational["recordingStarts"] == operational["classifiedRecordings"] == 9
     structured, legacy = operational["currentStructured"], operational["legacyInferred"]
-    assert structured["recordingStarts"] == 3
+    assert structured["recordingStarts"] == 5
     assert structured["buckets"]["verified_delivery"]["count"] == 1
-    assert structured["buckets"]["incomplete_ambiguous"]["count"] == 2
+    assert structured["buckets"]["accepted_unverified"]["count"] == 1
+    assert structured["buckets"]["incomplete_ambiguous"]["count"] == 3
+    assert structured["incompleteCount"] == 3
     assert structured["timing"]["firstResult"]["p50Ms"] == 40
     unsupported = operational["unsupportedStructured"]
     assert unsupported["recordingStarts"] == 1

@@ -337,6 +337,10 @@ final class InlinePreviewSessionTests: XCTestCase {
         let report = await session.report()
         XCTAssertEqual(report.marksSent, 0)
         XCTAssertEqual(report.failure, "markFailed")
+        // The mark reached the wire, so the composition may be drawn even though
+        // nothing was acked. The report has to say so: the coordinator keys the
+        // pre-keystroke settle on this, not on the acked count.
+        XCTAssertTrue(report.didAttemptMark)
     }
 
     // MARK: - Silent degradation
@@ -502,6 +506,22 @@ final class InlinePreviewSessionTests: XCTestCase {
         let report = await session.report()
         XCTAssertFalse(report.committed)
         XCTAssertEqual(report.failure, "commitAckTimeout")
+    }
+
+    func testProbeHangingUpAfterAFullCommitSendIsAmbiguousNotRefused() async {
+        let transport = FakeInlinePreviewTransport(commitError: .replyPeerClosed)
+        let gate = Gate()
+        let session = await makeMarkedSession(transport: transport, gate: gate)
+
+        let cancelled = await session.cancelCompositionForFinalCommit()
+        XCTAssertTrue(cancelled)
+        let outcome = await session.commitFinalTranscript("Hello there.")
+
+        // The commit was fully written before the probe died, so it may have
+        // executed: same routing as a missing ack, different recorded reason.
+        XCTAssertEqual(outcome, .ambiguous)
+        let report = await session.report()
+        XCTAssertEqual(report.failure, "commitPeerClosed")
     }
 
     func testSendSideCommitFailureIsRefusedBecauseTheLineNeverArrived() async {

@@ -639,7 +639,7 @@ public final class AppCoordinator: ObservableObject {
                 // write nothing, flash nothing, and report the recording as an
                 // unacknowledged IME commit.
                 reliability?.emit(
-                    recognizerFailed ? .recognizerFailed : .writeAcceptedUnverified,
+                    recognizerFailed ? .recognizerFailed : .imeCommitUnacknowledged,
                     transcriptUTF16: finalTranscript.utf16.count,
                     writeAttempted: true,
                     writeAccepted: false,
@@ -869,7 +869,10 @@ public final class AppCoordinator: ObservableObject {
         startInlinePreviewDiscard()
         await inlinePreviewDiscard?.value
         let report = await inlinePreview.report()
-        if report.marksSent > 0, !report.committed {
+        if report.didAttemptMark, !report.committed {
+            // Keyed to the attempt, not the ack: a mark whose reply timed out
+            // leaves marksSent at zero and may still be drawn in the field, and
+            // that is exactly the case keystrokes must not land on top of.
             // After an acked IME commit no keystrokes follow, so there is nothing
             // to settle for.
             try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay)

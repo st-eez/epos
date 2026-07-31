@@ -5,13 +5,18 @@ import Foundation
 struct InlinePreviewReport: Equatable, Sendable {
     var bundleIdentifier: String
     var began: Bool
+    /// Whether any mark was ever put on the wire. A mark whose reply never came
+    /// back leaves `marksSent` at zero yet may be rendered in the field, so this
+    /// — not `marksSent` — is what "a composition may be on screen" means.
+    var didAttemptMark: Bool
     var marksSent: Int
     var cancelAcknowledged: Bool
     var committed: Bool
     var failure: String?
 
     var logLine: String {
-        "inline preview target=\(bundleIdentifier) began=\(began) marks=\(marksSent) " +
+        "inline preview target=\(bundleIdentifier) began=\(began) " +
+            "attemptedMark=\(didAttemptMark) marks=\(marksSent) " +
             "cancelAck=\(cancelAcknowledged) committed=\(committed) failure=\(failure ?? "none")"
     }
 }
@@ -249,6 +254,12 @@ actor InlinePreviewSession {
             // must not fall back to keystrokes — the transcript could land twice.
             degrade("commitAckTimeout")
             return .ambiguous
+        } catch InlinePreviewTransportError.replyPeerClosed {
+            // Fully sent, then the probe hung up. It may have inserted the text
+            // before dying, so this is ambiguous on exactly the same terms as a
+            // missing ack; only the recorded reason differs.
+            degrade("commitPeerClosed")
+            return .ambiguous
         } catch {
             // Send-side failure: the newline terminator never reached the
             // probe, so the commit line was never parsed, let alone executed.
@@ -261,6 +272,7 @@ actor InlinePreviewSession {
         InlinePreviewReport(
             bundleIdentifier: bundleIdentifier,
             began: began,
+            didAttemptMark: didAttemptMark,
             marksSent: marksSent,
             cancelAcknowledged: cancelAcknowledged,
             committed: committed,

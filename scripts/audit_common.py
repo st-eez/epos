@@ -32,6 +32,9 @@ OUTCOME_ALIASES = {
     "accepted-unverified": "accepted_unverified",
     "accepted-but-unverified-delivery": "accepted_unverified",
     "incomplete-ambiguous": "incomplete_ambiguous",
+    # A fully sent IME commit that was never acknowledged: the transcript may
+    # have landed or been lost, so it is ambiguous, never an accepted write.
+    "ime-commit-unacknowledged": "incomplete_ambiguous",
 }
 
 
