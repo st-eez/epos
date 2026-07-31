@@ -10,7 +10,21 @@ public struct MenuBarView: View {
     @State private var glowEnabled = true
     @State private var glowIntensity = 1.0
     @State private var glowThickness = 1.0
-    @State private var glowColor = Color(red: 0.22, green: 0.78, blue: 0.72)
+    @State private var glowRed = 0.22
+    @State private var glowGreen = 0.78
+    @State private var glowBlue = 0.72
+
+    /// Curated glow palette. Swatches, not a ColorPicker: NSColorPanel cannot
+    /// present from a non-activating menu-bar popover in a background app —
+    /// clicking the well did nothing.
+    private static let glowSwatches: [(red: Double, green: Double, blue: Double)] = [
+        (0.22, 0.78, 0.72),  // teal (default)
+        (0.30, 0.62, 0.95),  // sky
+        (0.58, 0.45, 0.95),  // violet
+        (0.92, 0.40, 0.70),  // pink
+        (0.95, 0.70, 0.30),  // amber
+        (0.45, 0.85, 0.50)   // green
+    ]
 
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
     private let teal = EposPalette.teal
@@ -48,7 +62,9 @@ public struct MenuBarView: View {
             glowEnabled = glow.enabled
             glowIntensity = glow.intensity
             glowThickness = glow.thickness
-            glowColor = Color(red: glow.red, green: glow.green, blue: glow.blue)
+            glowRed = glow.red
+            glowGreen = glow.green
+            glowBlue = glow.blue
         }
     }
 
@@ -152,10 +168,30 @@ public struct MenuBarView: View {
                         .onChange(of: glowThickness) { _, _ in pushGlowStyle() }
                 }
                 metaRow("Glow color") {
-                    ColorPicker("", selection: $glowColor, supportsOpacity: false)
-                        .labelsHidden()
-                        .frame(width: 42, height: 22)
-                        .onChange(of: glowColor) { _, _ in pushGlowStyle() }
+                    HStack(spacing: 7) {
+                        ForEach(Array(Self.glowSwatches.enumerated()), id: \.offset) { _, swatch in
+                            let selected = abs(swatch.red - glowRed) < 0.01
+                                && abs(swatch.green - glowGreen) < 0.01
+                                && abs(swatch.blue - glowBlue) < 0.01
+                            Button {
+                                glowRed = swatch.red
+                                glowGreen = swatch.green
+                                glowBlue = swatch.blue
+                                pushGlowStyle()
+                            } label: {
+                                Circle()
+                                    .fill(Color(red: swatch.red, green: swatch.green, blue: swatch.blue))
+                                    .frame(width: 16, height: 16)
+                                    .overlay(
+                                        Circle().strokeBorder(
+                                            .white.opacity(selected ? 0.95 : 0.25),
+                                            lineWidth: selected ? 2 : 1
+                                        )
+                                    )
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
                 }
             }
         }
@@ -165,14 +201,13 @@ public struct MenuBarView: View {
     }
 
     private func pushGlowStyle() {
-        let rgb = NSColor(glowColor).usingColorSpace(.sRGB)
         coordinator.setEdgeGlowStyle(EdgeGlowSettings(
             enabled: glowEnabled,
             intensity: glowIntensity,
             thickness: glowThickness,
-            red: Double(rgb?.redComponent ?? 0.22),
-            green: Double(rgb?.greenComponent ?? 0.78),
-            blue: Double(rgb?.blueComponent ?? 0.72)
+            red: glowRed,
+            green: glowGreen,
+            blue: glowBlue
         ))
     }
 
