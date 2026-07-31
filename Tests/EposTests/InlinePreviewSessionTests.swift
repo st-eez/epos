@@ -678,6 +678,40 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertFalse(coordinator.edgeGlowVisible)
     }
 
+    /// The fallback deadline vs a slow begin ack: past the deadline the glow
+    /// retires to the pill, and when the late ack finally activates mirroring
+    /// the glow must reclaim the recording — otherwise the first mark hides
+    /// the pill and the user is left with no mic-hot cue at all (review
+    /// finding on the persistent-glow change).
+    @MainActor
+    func testSlowBeginAckRetiresGlowThenGlowReclaimsOnActivation() async {
+        let coordinator = AppCoordinator(
+            textInsertion: SilentInsertionBackend(),
+            settings: Settings(),
+            inlinePreviewEnabled: true,
+            autoStart: false
+        )
+        let transport = FakeInlinePreviewTransport()
+        guard let session = coordinator.makeInlinePreviewSession(
+            bundleIdentifier: Self.target,
+            transport: transport
+        ) else { return XCTFail("expected a preview session") }
+        coordinator.stageFinalizationSessions(inlinePreview: session, insertion: nil)
+        coordinator.state = .recording
+
+        // fn press: the glow lights before the channel has confirmed.
+        coordinator.presentIndicatorForRecordingStart()
+        XCTAssertTrue(coordinator.edgeGlowVisible)
+
+        // No begin ack within the deadline: the glow retires (pill takes over).
+        await Self.waitUntil { await MainActor.run { !coordinator.edgeGlowVisible } }
+
+        // The late ack activates mirroring: the glow reclaims the recording.
+        await session.begin()
+        await waitForMirroring(true, on: coordinator)
+        await Self.waitUntil { await MainActor.run { coordinator.edgeGlowVisible } }
+    }
+
     /// Release ends the glow even when the channel stayed healthy throughout.
     @MainActor
     func testEdgeGlowEndsAtRelease() async {

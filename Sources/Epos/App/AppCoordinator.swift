@@ -628,11 +628,22 @@ public final class AppCoordinator: ObservableObject {
                     // A mid-recording degrade makes the HUD the only feedback
                     // again, so the pill comes back (with its transcript line,
                     // in the same update) and the glow retires with the
-                    // channel it advertises. At finalize `finishInlinePreview`
+                    // channel it advertises. Activation is the mirror image:
+                    // a begin ack slower than the fallback deadline arrives
+                    // AFTER the pill took over — the glow reclaims the
+                    // recording and the pill yields, otherwise the first mark
+                    // would hide the pill and leave NO mic-hot cue at all
+                    // (review finding, e90dcae..). On the fast path both
+                    // calls are no-ops. At finalize `finishInlinePreview`
                     // clears the flag with state != .recording, skipping this.
-                    if self.state == .recording, !active {
-                        self.hideEdgeGlow()
-                        self.presentBottomCenterPill()
+                    if self.state == .recording {
+                        if active {
+                            self.showEdgeGlow()
+                            self.indicator.hide()
+                        } else {
+                            self.hideEdgeGlow()
+                            self.presentBottomCenterPill()
+                        }
                     }
                 }
             },
