@@ -76,15 +76,19 @@ struct RecordingIndicatorSurface: View {
             .frame(width: 304, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .glassEffect(.regular, in: .rect(cornerRadius: 20))
+            .glassEffect(.regular.tint(statusColor.opacity(0.12)), in: .rect(cornerRadius: 20))
+            .shadow(color: statusColor.opacity(0.25), radius: 12, y: 4)
         } else {
             // Clear glass, not regular: the cue capsule floats over arbitrary
             // app content, and regular glass over dark windows collapses into
-            // a flat smoked pill with no visible refraction.
+            // a flat smoked pill with no visible refraction. The tint and glow
+            // follow the status color, so the capsule reads teal while
+            // listening, amber while finishing, red on a failure notice.
             statusRow
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .glassEffect(.clear, in: Capsule())
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .glassEffect(.clear.tint(statusColor.opacity(0.22)), in: Capsule())
+                .shadow(color: statusColor.opacity(0.4), radius: 16, y: 5)
         }
     }
 
@@ -102,7 +106,7 @@ struct RecordingIndicatorSurface: View {
 
     private var statusLabel: some View {
         Text(noticeText ?? Self.statusText(state: state, finalizationPhase: finalizationPhase))
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(.primary)
             .lineLimit(1)
     }
