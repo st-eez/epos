@@ -7,6 +7,10 @@ public struct MenuBarView: View {
     @State private var launchAtLogin = false
     @State private var saveAudioSamples = false
     @State private var saveCorrectionEvidence = false
+    @State private var glowEnabled = true
+    @State private var glowIntensity = 1.0
+    @State private var glowThickness = 1.0
+    @State private var glowColor = Color(red: 0.22, green: 0.78, blue: 0.72)
 
     private let panelColor = Color(red: 0.11, green: 0.13, blue: 0.15)
     private let teal = EposPalette.teal
@@ -40,6 +44,11 @@ public struct MenuBarView: View {
             launchAtLogin = coordinator.launchAtLogin
             saveAudioSamples = coordinator.saveAudioSamples
             saveCorrectionEvidence = coordinator.saveCorrectionEvidence
+            let glow = coordinator.edgeGlowStyle
+            glowEnabled = glow.enabled
+            glowIntensity = glow.intensity
+            glowThickness = glow.thickness
+            glowColor = Color(red: glow.red, green: glow.green, blue: glow.blue)
         }
     }
 
@@ -117,10 +126,54 @@ public struct MenuBarView: View {
                         coordinator.setSaveCorrectionEvidence(newValue)
                     }
             }
+            Divider().overlay(.white.opacity(0.08))
+            metaRow("Edge glow") {
+                Toggle("", isOn: $glowEnabled)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .tint(teal)
+                    .scaleEffect(0.74)
+                    .frame(width: 42, height: 22)
+                    .onChange(of: glowEnabled) { _, _ in pushGlowStyle() }
+            }
+            if glowEnabled {
+                metaRow("Glow intensity") {
+                    Slider(value: $glowIntensity, in: EdgeGlowSettings.intensityRange)
+                        .controlSize(.mini)
+                        .tint(teal)
+                        .frame(width: 110)
+                        .onChange(of: glowIntensity) { _, _ in pushGlowStyle() }
+                }
+                metaRow("Glow thickness") {
+                    Slider(value: $glowThickness, in: EdgeGlowSettings.thicknessRange)
+                        .controlSize(.mini)
+                        .tint(teal)
+                        .frame(width: 110)
+                        .onChange(of: glowThickness) { _, _ in pushGlowStyle() }
+                }
+                metaRow("Glow color") {
+                    ColorPicker("", selection: $glowColor, supportsOpacity: false)
+                        .labelsHidden()
+                        .frame(width: 42, height: 22)
+                        .onChange(of: glowColor) { _, _ in pushGlowStyle() }
+                }
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 2)
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private func pushGlowStyle() {
+        let rgb = NSColor(glowColor).usingColorSpace(.sRGB)
+        coordinator.setEdgeGlowStyle(EdgeGlowSettings(
+            enabled: glowEnabled,
+            intensity: glowIntensity,
+            thickness: glowThickness,
+            red: Double(rgb?.redComponent ?? 0.22),
+            green: Double(rgb?.greenComponent ?? 0.78),
+            blue: Double(rgb?.blueComponent ?? 0.72)
+        ))
     }
 
     private var actionRow: some View {

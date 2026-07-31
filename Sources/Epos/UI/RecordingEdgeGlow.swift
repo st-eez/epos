@@ -19,6 +19,11 @@ final class RecordingEdgeGlowController {
     private static let showFadeDuration: TimeInterval = 0.55
     private static let hideFadeDuration: TimeInterval = 0.5
 
+    /// Pushes the user's style into the view; rasters rebuild once per change.
+    func apply(_ style: EdgeGlowSettings) {
+        model.style = style
+    }
+
     /// Builds the panel ahead of the first recording AND forces its first
     /// render pass (order front at alpha 0, out on the next runloop turn), so
     /// the flattened glow layer is already rasterized when fn goes down —
@@ -159,12 +164,13 @@ final class RecordingEdgeGlowController {
     }
 }
 
-/// Live mic level feeding the glow's brightness, and whether the glow is on
-/// screen (the view runs its motion only while shown).
+/// Live mic level feeding the glow's brightness, whether the glow is on
+/// screen (the view runs its motion only while shown), and the user's style.
 @MainActor
 final class RecordingEdgeGlowModel: ObservableObject {
     @Published var amplitude: Float = 0
     @Published var isShown = false
+    @Published var style = EdgeGlowSettings()
 }
 
 /// The glow itself: blurred strokes centered on the screen boundary (only
@@ -180,39 +186,29 @@ struct RecordingEdgeGlowView: View {
     @State private var breathingDim = false
     @State private var driftedIn = false
 
-    private static let tealGradient = AngularGradient(
-        colors: [
-            EposPalette.teal,
-            Color(red: 0.25, green: 0.65, blue: 0.9),
-            Color(red: 0.45, green: 0.85, blue: 0.7),
-            EposPalette.teal
-        ],
-        center: .center
-    )
-
-    /// The drift palette: the same hues shifted around the perimeter, so the
-    /// cross-fade reads as color slowly wandering along the edges.
-    private static let driftGradient = AngularGradient(
-        colors: [
-            Color(red: 0.25, green: 0.65, blue: 0.9),
-            Color(red: 0.45, green: 0.85, blue: 0.7),
-            EposPalette.teal,
-            Color(red: 0.25, green: 0.65, blue: 0.9)
-        ],
-        center: .center
-    )
+    /// Rasters render at 1/4 linear resolution and scale up — the blur hides
+    /// the upscale completely and the cached layers cost 1/16 the memory.
+    private static let rasterScale: CGFloat = 4
 
     var body: some View {
         // Same perceptual mapping as the pill's meter bars.
         let level = pow(min(1, max(0, Double(model.amplitude) / 0.075)), 0.55)
+        let style = model.style
+        let base = Color(red: style.red, green: style.green, blue: style.blue)
+        // The primary palette walks the base hue around the perimeter; the
+        // drift palette is the same hues rotated one stop, so cross-fading
+        // between them reads as color slowly wandering along the edges.
+        let hues = [base, Self.hueShifted(base, degrees: 42), Self.hueShifted(base, degrees: -38)]
+        let primary = AngularGradient(colors: [hues[0], hues[1], hues[2], hues[0]], center: .center)
+        let drift = AngularGradient(colors: [hues[1], hues[2], hues[0], hues[1]], center: .center)
         ZStack {
             // The calm breath and the color drift: non-harmonic cycles
             // (2.7s vs 6.8s), so the combined motion takes a long time to
             // visibly repeat.
-            glow(Self.tealGradient).opacity(breathingDim ? 0.34 : 0.66)
-            glow(Self.driftGradient).opacity(driftedIn ? 0.45 : 0)
+            glow(primary, style).opacity(min(1, (breathingDim ? 0.34 : 0.66) * style.intensity))
+            glow(drift, style).opacity(min(1, (driftedIn ? 0.45 : 0) * style.intensity))
             // The voice: brightens the same shape as you speak.
-            glow(Self.tealGradient).opacity(0.55 * level)
+            glow(primary, style).opacity(min(1, 0.55 * style.intensity * level))
                 .animation(.easeOut(duration: 0.08), value: model.amplitude)
         }
         .allowsHitTesting(false)
@@ -236,13 +232,20 @@ struct RecordingEdgeGlowView: View {
         }
     }
 
-    /// Static full-screen glow, flattened to one cached layer per palette.
-    private func glow(_ gradient: AngularGradient) -> some View {
-        ZStack {
-            glowStroke(gradient, lineWidth: 36, blur: 26)
-            glowStroke(gradient, lineWidth: 14, blur: 9)
+    /// Static full-screen glow, flattened to one cached quarter-resolution
+    /// layer per palette and scaled back up.
+    private func glow(_ gradient: AngularGradient, _ style: EdgeGlowSettings) -> some View {
+        GeometryReader { geo in
+            let scale = Self.rasterScale
+            let thickness = style.thickness
+            ZStack {
+                glowStroke(gradient, lineWidth: 36 * thickness / scale, blur: 26 / scale)
+                glowStroke(gradient, lineWidth: 14 * thickness / scale, blur: 9 / scale)
+            }
+            .frame(width: geo.size.width / scale, height: geo.size.height / scale)
+            .drawingGroup()
+            .scaleEffect(scale, anchor: .topLeading)
         }
-        .drawingGroup()
     }
 
     /// A stroke straddling the screen edge: inset by half the width so the
@@ -256,5 +259,19 @@ struct RecordingEdgeGlowView: View {
             .inset(by: -lineWidth / 2)
             .stroke(gradient, lineWidth: lineWidth)
             .blur(radius: blur)
+    }
+
+    /// The companion hues, derived from the user's base color so one color
+    /// choice styles the whole gradient.
+    private static func hueShifted(_ color: Color, degrees: Double) -> Color {
+        guard let rgb = NSColor(color).usingColorSpace(.sRGB) else { return color }
+        var hue: CGFloat = 0
+        var saturation: CGFloat = 0
+        var brightness: CGFloat = 0
+        var alpha: CGFloat = 0
+        rgb.getHue(&hue, saturation: &saturation, brightness: &brightness, alpha: &alpha)
+        var shifted = (hue + degrees / 360).truncatingRemainder(dividingBy: 1)
+        if shifted < 0 { shifted += 1 }
+        return Color(hue: shifted, saturation: saturation, brightness: brightness)
     }
 }

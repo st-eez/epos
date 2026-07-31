@@ -187,6 +187,20 @@ public final class AppCoordinator: ObservableObject {
         log.info("correction evidence capture \(enabled ? "enabled" : "disabled")")
     }
 
+    public var edgeGlowStyle: EdgeGlowSettings { settings.edgeGlow }
+
+    public func setEdgeGlowStyle(_ style: EdgeGlowSettings) {
+        guard settings.edgeGlow != style else { return }
+        settings.edgeGlow = style
+        settings.save()
+        edgeGlow.apply(style)
+        if style.enabled {
+            edgeGlow.prewarm()
+        } else {
+            hideEdgeGlow()
+        }
+    }
+
     /// The authoritative final-transcript transform, built once per recording so a
     /// mid-session correction-rule edit cannot alter the finalization behavior of an
     /// already-running dictation. It is the same `streamClean(canonicalize(...))` the
@@ -238,7 +252,8 @@ public final class AppCoordinator: ObservableObject {
             log.error("bootstrap asset prepare failed: \(message)")
         }
         captureFormat = await transcriber.bestAudioFormat()
-        if inlinePreviewEnabled {
+        if inlinePreviewEnabled, settings.edgeGlow.enabled {
+            edgeGlow.apply(settings.edgeGlow)
             edgeGlow.prewarm()
         }
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
@@ -637,10 +652,12 @@ public final class AppCoordinator: ObservableObject {
                     // calls are no-ops. At finalize `finishInlinePreview`
                     // clears the flag with state != .recording, skipping this.
                     if self.state == .recording {
-                        if active {
+                        if active, self.settings.edgeGlow.enabled {
+                            // With the glow disabled the pill stays the
+                            // pre-text indicator; the first mark hides it.
                             self.showEdgeGlow()
                             self.indicator.hide()
-                        } else {
+                        } else if !active {
                             self.hideEdgeGlow()
                             self.presentBottomCenterPill()
                         }
@@ -670,7 +687,7 @@ public final class AppCoordinator: ObservableObject {
     /// advertising a channel that is not streaming. Internal so glow-lifetime
     /// tests can drive the presentation without a live audio pipeline.
     func presentIndicatorForRecordingStart() {
-        guard inlinePreviewEnabled else {
+        guard inlinePreviewEnabled, settings.edgeGlow.enabled else {
             presentBottomCenterPill()
             return
         }

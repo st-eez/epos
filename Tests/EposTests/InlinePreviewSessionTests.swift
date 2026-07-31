@@ -712,6 +712,37 @@ final class InlinePreviewSessionTests: XCTestCase {
         await Self.waitUntil { await MainActor.run { coordinator.edgeGlowVisible } }
     }
 
+    /// With the glow disabled in settings, the pill is the indicator and the
+    /// glow never lights — including at mirroring activation, which must NOT
+    /// hide the pill in that mode.
+    @MainActor
+    func testDisabledGlowKeepsThePillAndNeverLights() async {
+        var settings = Settings()
+        settings.edgeGlow.enabled = false
+        let coordinator = AppCoordinator(
+            textInsertion: SilentInsertionBackend(),
+            settings: settings,
+            inlinePreviewEnabled: true,
+            autoStart: false
+        )
+        let transport = FakeInlinePreviewTransport()
+        guard let session = coordinator.makeInlinePreviewSession(
+            bundleIdentifier: Self.target,
+            transport: transport
+        ) else { return XCTFail("expected a preview session") }
+        coordinator.stageFinalizationSessions(inlinePreview: session, insertion: nil)
+        coordinator.state = .recording
+
+        coordinator.presentIndicatorForRecordingStart()
+        XCTAssertFalse(coordinator.edgeGlowVisible)
+
+        await session.begin()
+        await waitForMirroring(true, on: coordinator)
+        // Give the activation callback's task a beat to land.
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        XCTAssertFalse(coordinator.edgeGlowVisible)
+    }
+
     /// Release ends the glow even when the channel stayed healthy throughout.
     @MainActor
     func testEdgeGlowEndsAtRelease() async {

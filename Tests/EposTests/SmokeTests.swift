@@ -57,6 +57,37 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(Settings.load(from: defaults).saveCorrectionEvidence)
     }
 
+    func testEdgeGlowSettingsPersistClampAndDefaultOn() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        // Never-saved defaults: the glow ships enabled with the teal base.
+        let fresh = Settings.load(from: defaults).edgeGlow
+        XCTAssertTrue(fresh.enabled)
+        XCTAssertEqual(fresh.intensity, 1)
+        XCTAssertEqual(fresh.red, 0.22)
+
+        // Round-trip, including a stored false (distinct from "never set").
+        var settings = Settings()
+        settings.edgeGlow = EdgeGlowSettings(
+            enabled: false, intensity: 1.3, thickness: 0.8,
+            red: 0.9, green: 0.2, blue: 0.4
+        )
+        settings.save(to: defaults)
+        let loaded = Settings.load(from: defaults).edgeGlow
+        XCTAssertEqual(loaded, settings.edgeGlow)
+        XCTAssertFalse(loaded.enabled)
+
+        // Out-of-range and non-finite values clamp at construction.
+        let clamped = EdgeGlowSettings(intensity: 9, thickness: -2, red: .nan, green: 2, blue: -1)
+        XCTAssertEqual(clamped.intensity, EdgeGlowSettings.intensityRange.upperBound)
+        XCTAssertEqual(clamped.thickness, EdgeGlowSettings.thicknessRange.lowerBound)
+        XCTAssertEqual(clamped.red, 0)
+        XCTAssertEqual(clamped.green, 1)
+        XCTAssertEqual(clamped.blue, 0)
+    }
+
     func testCanonicalizerFixesSeededDeveloperTerms() {
         let canonicalizer = TranscriptCanonicalizer()
 
