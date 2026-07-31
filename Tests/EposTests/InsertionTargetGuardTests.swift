@@ -15,8 +15,8 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
 
         XCTAssertEqual(backend.operations, [])
-        XCTAssertTrue(session.insertFinal("replacement"))
-        XCTAssertFalse(session.insertFinal("duplicate"))
+        XCTAssertEqual(session.insertFinalResult("replacement"), .accepted)
+        XCTAssertEqual(session.insertFinalResult("duplicate"), .backendRefused)
         session.finish()
         session.finish()
 
@@ -35,7 +35,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
         observer.focusChanged = true
 
-        XCTAssertFalse(session.insertFinal("must not land"))
+        XCTAssertEqual(session.insertFinalResult("must not land"), .targetRefused)
         XCTAssertEqual(backend.operations, [])
         XCTAssertEqual(backend.cancelCount, 1)
     }
@@ -54,7 +54,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         observer.value = "user edit"
         observer.range = .init(location: 9, length: 0)
 
-        XCTAssertFalse(session.insertFinal("must not land"))
+        XCTAssertEqual(session.insertFinalResult("must not land"), .targetRefused)
         XCTAssertEqual(backend.operations, [])
     }
 
@@ -71,7 +71,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
         observer.range = .init(location: 0, length: 5)
 
-        XCTAssertFalse(session.insertFinal("must not land"))
+        XCTAssertEqual(session.insertFinalResult("must not land"), .targetRefused)
         XCTAssertEqual(backend.operations, [])
     }
 
@@ -83,7 +83,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertTrue(session.insertFinal("terminal text"))
+        XCTAssertEqual(session.insertFinalResult("terminal text"), .accepted)
         XCTAssertEqual(backend.operations, [.insert("terminal text")])
     }
 
@@ -95,7 +95,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertFalse(session.insertFinal("must not land"))
+        XCTAssertEqual(session.insertFinalResult("must not land"), .targetRefused)
         XCTAssertEqual(backend.operations, [])
     }
 
@@ -105,7 +105,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             insertionSession: backend.startInsertionSession()
         )
 
-        XCTAssertFalse(session.insertFinal("must not be claimed"))
+        XCTAssertEqual(session.insertFinalResult("must not be claimed"), .backendRefused)
         XCTAssertNil(session.insertedTranscript)
         XCTAssertEqual(backend.operations, [.insert("must not be claimed")])
         XCTAssertEqual(backend.cancelCount, 1)
@@ -162,25 +162,99 @@ final class InsertionTargetGuardTests: XCTestCase {
             insertionSession: FinalRecordingBackend().startInsertionSession(),
             target: readableObserver
         )
-        XCTAssertTrue(readableSession.insertFinal("expected"))
+        XCTAssertEqual(readableSession.insertFinalResult("expected"), .accepted)
         readableObserver.value = "before wrong after"
 
         let opaqueSession = FinalTranscriptInsertionSession(
             insertionSession: FinalRecordingBackend().startInsertionSession(),
             target: FinalTargetObserver()
         )
-        XCTAssertTrue(opaqueSession.insertFinal("expected"))
+        XCTAssertEqual(opaqueSession.insertFinalResult("expected"), .accepted)
 
         let mismatch = await readableSession.verifyDelivery(
             expected: "expected",
-            retryDelaysNanoseconds: [0]
+            retryDelaysNanoseconds: [0, 0]
         )
         let unavailable = await opaqueSession.verifyDelivery(
             expected: "expected",
-            retryDelaysNanoseconds: [0]
+            retryDelaysNanoseconds: [0, 0]
         )
         XCTAssertEqual(mismatch, .mismatched)
         XCTAssertEqual(unavailable, .unavailable)
+    }
+
+    func testSingleDivergentReadbackIsUnverifiedRatherThanMismatched() async {
+        let observer = FinalTargetObserver(
+            value: "before  after",
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertEqual(session.insertFinalResult("expected"), .accepted)
+        observer.value = "before wrong after"
+
+        let result = await session.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0]
+        )
+
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    /// A long transcript posts many chunked keyboard events, so a slow field can
+    /// hand back a still-growing span for the whole retry ladder. That is
+    /// in-flight delivery, not the wrong text landing.
+    func testStillArrivingPartialSpanIsUnverifiedRatherThanMismatched() async {
+        let observer = SequencedFinalTargetObserver(
+            values: [
+                "before  after",
+                "before expect after",
+                "before expected te after",
+                "before expected text so far after",
+            ],
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertEqual(session.insertFinalResult("expected text so far and more"), .accepted)
+        let result = await session.verifyDelivery(
+            expected: "expected text so far and more",
+            retryDelaysNanoseconds: [0, 0, 0]
+        )
+
+        XCTAssertEqual(result, .unavailable)
+    }
+
+    func testGenuinelyWrongValueRepeatedAcrossReadsIsMismatched() async {
+        let observer = SequencedFinalTargetObserver(
+            values: [
+                "before  after",
+                "before wrong after",
+                "before wrong after",
+            ],
+            range: .init(location: 7, length: 0),
+            context: .init(prefix: "before ", suffix: " after")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: FinalRecordingBackend().startInsertionSession(),
+            target: observer
+        )
+
+        XCTAssertEqual(session.insertFinalResult("expected"), .accepted)
+        let result = await session.verifyDelivery(
+            expected: "expected",
+            retryDelaysNanoseconds: [0, 0, 0]
+        )
+
+        XCTAssertEqual(result, .mismatched)
     }
 
     func testRepeatedStaleReadableSamplesFollowedByUnavailableReadbackAreUnverified() async {
@@ -194,7 +268,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertTrue(session.insertFinal("expected"))
+        XCTAssertEqual(session.insertFinalResult("expected"), .accepted)
         let result = await session.verifyDelivery(
             expected: "expected",
             retryDelaysNanoseconds: [0, 0, 0]
@@ -219,7 +293,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertTrue(session.insertFinal("new"))
+        XCTAssertEqual(session.insertFinalResult("new"), .accepted)
         let result = await session.verifyDelivery(
             expected: "new",
             retryDelaysNanoseconds: [0, 0, 0]
@@ -243,7 +317,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertTrue(session.insertFinal("expected"))
+        XCTAssertEqual(session.insertFinalResult("expected"), .accepted)
         let result = await session.verifyDelivery(
             expected: "expected",
             retryDelaysNanoseconds: [0, 0]
@@ -268,10 +342,10 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertTrue(session.insertFinal("expected"))
+        XCTAssertEqual(session.insertFinalResult("expected"), .accepted)
         let result = await session.verifyDelivery(
             expected: "expected",
-            retryDelaysNanoseconds: [0, 0, 0]
+            retryDelaysNanoseconds: [0, 0, 0, 0]
         )
 
         XCTAssertEqual(result, .mismatched)
@@ -288,7 +362,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertTrue(session.insertFinal("expected"))
+        XCTAssertEqual(session.insertFinalResult("expected"), .accepted)
         let result = await session.verifyDelivery(
             expected: "expected",
             retryDelaysNanoseconds: [0]
@@ -303,10 +377,10 @@ final class InsertionTargetGuardTests: XCTestCase {
             insertionSession: backend.startInsertionSession()
         )
 
-        XCTAssertFalse(session.insertFinal(" \n "))
+        XCTAssertEqual(session.insertFinalResult(" \n "), .backendRefused)
         session.cancel()
         session.cancel()
-        XCTAssertFalse(session.insertFinal("late"))
+        XCTAssertEqual(session.insertFinalResult("late"), .backendRefused)
 
         XCTAssertEqual(backend.operations, [])
         XCTAssertEqual(backend.cancelCount, 1)
@@ -325,7 +399,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             target: observer
         )
 
-        XCTAssertTrue(session.insertFinal("widget pro"))
+        XCTAssertEqual(session.insertFinalResult("widget pro"), .accepted)
         session.finish()
         observer.value = "open WidgetPro please"
         observer.range = .init(location: 14, length: 0)

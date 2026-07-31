@@ -46,11 +46,6 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         target.captureBaseline()
     }
 
-    @discardableResult
-    public func insertFinal(_ text: String) -> Bool {
-        insertFinalResult(text) == .accepted
-    }
-
     public func insertFinalResult(_ text: String) -> FinalInsertionResult {
         if case .refused(let result) = authorizeFinalWrite(text) {
             return result
@@ -141,17 +136,10 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
                 }
             }
         }
-        let mismatches = observations.compactMap { observed -> String? in
-            guard let observed, observed != context.selectedText else { return nil }
-            return observed
-        }
-        let stableRepeatedMismatch = mismatches.count >= 2 &&
-            Set(mismatches).count == 1
-        let finalAttemptMismatch = observations.last
-            .flatMap { $0 }
-            .map { $0 != context.selectedText } ?? false
-        let outcome: FinalInsertionDeliveryVerification =
-            (finalAttemptMismatch || stableRepeatedMismatch) ? .mismatched : .unavailable
+        let outcome = Self.classify(
+            observations: observations,
+            baselineSelectedText: context.selectedText
+        )
         logDeliveryReadback(
             expected: text,
             observations: observations,
@@ -206,6 +194,31 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         return context.matchesBaseline(value: value, selectedRange: selectedRange)
     }
 
+    /// Classifies a run of readbacks in which no attempt ever equalled the
+    /// expected text.
+    ///
+    /// A divergent read only proves the wrong text landed when the same value
+    /// comes back twice in a row. A long transcript is posted as many chunked
+    /// keyboard events (`KeystrokeTextInjector.maxUTF16UnitsPerEvent`), and the
+    /// retry ladder is shorter than a slow field takes to consume them, so a
+    /// single read can catch a still-growing span that matches neither the
+    /// expected text nor the baseline selection. Calling that a mismatch turns
+    /// successful dictations into `delivery-mismatch` in the reliability log, so
+    /// anything unsettled is reported as the honest "cannot verify" class.
+    /// Either way this is diagnostics only; no corrective write ever follows.
+    private static func classify(
+        observations: [String?],
+        baselineSelectedText: String
+    ) -> FinalInsertionDeliveryVerification {
+        for (previous, current) in zip(observations, observations.dropFirst()) {
+            guard let previous, let current,
+                  previous == current,
+                  current != baselineSelectedText else { continue }
+            return .mismatched
+        }
+        return .unavailable
+    }
+
     private func logDeliveryReadback(
         expected: String,
         observations: [String?],
@@ -224,7 +237,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
                 "readable=\(readable.count) " +
                 "finalReadable=\(observations.last.flatMap { $0 } != nil) " +
                 "staleBaseline=\(readable.count - mismatches.count) " +
-                "stableMismatch=\(mismatches.count >= 2 && Set(mismatches).count == 1) " +
+                "divergent=\(mismatches.count) " +
                 "expectedUTF16=\(expected.utf16.count) " +
                 "observedUTF16=\(observedLengths)",
             recordingID: recordingID
