@@ -135,11 +135,7 @@ private extension TranscriptCanonicalizer {
                         canonical: spec.canonical,
                         regex: $0,
                         contexts: spec.contexts,
-                        matchStrategy: spec.matchStrategy,
-                        attachesFlagArgument: CorrectionRuleMatcher.isFlagPrefixRule(
-                            canonical: spec.canonical,
-                            aliasRegex: $0
-                        )
+                        matchStrategy: spec.matchStrategy
                     )
                 }
             }

@@ -49,7 +49,10 @@ struct CorrectionSuggestionReviewItem: Identifiable, Equatable {
         store: CorrectionStore
     ) -> [CorrectionSuggestionReviewItem] {
         items(
-            assessments: evidenceStore.promotionAssessments,
+            assessments: evidenceStore.promotionAssessments(
+                activeRecords: store.dictionary.records,
+                lockedBaseline: store.lockedBaseline
+            ),
             evidence: evidenceStore.evidence,
             resolvedRecordIDs: store.resolvedSuggestionRecordIDs
         )

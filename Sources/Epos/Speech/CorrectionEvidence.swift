@@ -59,9 +59,19 @@ public final class CorrectionEvidenceStore {
         CorrectionCandidateSuggester.suggestedRecords(from: evidence)
     }
 
-    public var promotionAssessments: [CorrectionPromotionAssessment] {
+    /// Scores every mined suggestion against the dictionary the user is actually running
+    /// and the frozen corpus, not against the built-in defaults.
+    public func promotionAssessments(
+        activeRecords: [CorrectionRecord],
+        lockedBaseline: CorrectionLockedBaseline
+    ) -> [CorrectionPromotionAssessment] {
         suggestedRecords.map { record in
-            CorrectionPromotionGate.assess(record: record, evidence: evidence)
+            CorrectionPromotionGate.assess(
+                record: record,
+                evidence: evidence,
+                activeRecords: activeRecords,
+                lockedBaseline: lockedBaseline
+            )
         }
     }
 

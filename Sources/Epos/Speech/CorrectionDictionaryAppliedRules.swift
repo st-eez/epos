@@ -36,11 +36,7 @@ private extension CorrectionDictionary {
                         canonical: spec.canonical,
                         regex: regex,
                         contexts: spec.contexts,
-                        matchStrategy: spec.matchStrategy,
-                        attachesFlagArgument: CorrectionRuleMatcher.isFlagPrefixRule(
-                            canonical: spec.canonical,
-                            aliasRegex: regex
-                        )
+                        matchStrategy: spec.matchStrategy
                     )
                 }
             }

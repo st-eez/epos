@@ -9,10 +9,16 @@ import Foundation
 public final class CorrectionStore: ObservableObject {
     @Published public private(set) var canonicalizer: TranscriptCanonicalizer
     public private(set) var dictionary: CorrectionDictionary
+    /// The frozen-corpus rows every promotion is replayed against, read once per store.
+    public let lockedBaseline: CorrectionLockedBaseline
     private let defaults: UserDefaults
 
-    public init(defaults: UserDefaults = .standard) {
+    public init(
+        defaults: UserDefaults = .standard,
+        lockedBaseline: CorrectionLockedBaseline = .load()
+    ) {
         self.defaults = defaults
+        self.lockedBaseline = lockedBaseline
         self.dictionary = CorrectionDictionary.load(from: defaults)
         self.canonicalizer = TranscriptCanonicalizer(
             rules: CorrectionRuleCompiler.compile(records: dictionary.records)
@@ -61,6 +67,17 @@ public final class CorrectionStore: ObservableObject {
     public func acceptPromotion(_ assessment: CorrectionPromotionAssessment) -> Bool {
         guard !isReadOnly else { return false }
         guard let promotedRecord = assessment.promotedRecord else { return false }
+        // The assessment was scored when the suggestion list was built, against whatever
+        // the dictionary held then. Replay the candidate over the frozen corpus against
+        // the live records before committing, so Accept can never promote a rule that
+        // scripts/correct would reject.
+        guard CorrectionPromotionGate.lockedBaselineCheck(
+            record: assessment.record,
+            activeRecords: dictionary.records,
+            lockedBaseline: lockedBaseline
+        ).passes else {
+            return false
+        }
         if let existing = dictionary.records.first(where: { $0.id == assessment.record.id }),
            existing.source == .suggested,
            existing.status != .suggested {

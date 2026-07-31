@@ -387,7 +387,10 @@ final class CorrectionEvidenceTests: XCTestCase {
         XCTAssertEqual(dictionary.appliedRecordIDs(in: "foo"), ["first"])
     }
 
-    func testDashDashFlagAttributionRequiresActiveRule() {
+    /// `dash dash <flag>` is a pre-pass, not a rule: it is credited to no record, and it
+    /// keeps working when the `dash dash` -> `--` row is disabled. Bare "dash dash" is
+    /// that row's own job, so it is attributed to the row and stops when the row does.
+    func testDashDashFlagExpansionIsUnattributedAndRuleIndependent() {
         let active = CorrectionRecord(
             id: "flag",
             kind: .spokenCommand,
@@ -396,26 +399,23 @@ final class CorrectionEvidenceTests: XCTestCase {
             source: .manual,
             status: .active
         )
-        let activeDictionary = CorrectionDictionary(records: [active])
-
-        XCTAssertEqual(
-            TranscriptCanonicalizer(
-                rules: CorrectionRuleCompiler.compile(records: activeDictionary.records)
-            ).canonicalize("dash dash verbose"),
-            "--verbose"
-        )
-        XCTAssertEqual(activeDictionary.appliedRecordIDs(in: "dash dash verbose"), ["flag"])
-
         var disabled = active
         disabled.status = .disabled
-        let disabledDictionary = CorrectionDictionary(records: [disabled])
-        XCTAssertEqual(
-            TranscriptCanonicalizer(
-                rules: CorrectionRuleCompiler.compile(records: disabledDictionary.records)
-            ).canonicalize("dash dash verbose"),
-            "dash dash verbose"
-        )
-        XCTAssertEqual(disabledDictionary.appliedRecordIDs(in: "dash dash verbose"), [])
+
+        for record in [active, disabled] {
+            let dictionary = CorrectionDictionary(records: [record])
+            XCTAssertEqual(
+                TranscriptCanonicalizer(
+                    rules: CorrectionRuleCompiler.compile(records: dictionary.records)
+                ).canonicalize("dash dash verbose"),
+                "--verbose",
+                record.status.rawValue
+            )
+            XCTAssertEqual(dictionary.appliedRecordIDs(in: "dash dash verbose"), [], record.status.rawValue)
+        }
+
+        XCTAssertEqual(CorrectionDictionary(records: [active]).appliedRecordIDs(in: "append dash dash"), ["flag"])
+        XCTAssertEqual(CorrectionDictionary(records: [disabled]).appliedRecordIDs(in: "append dash dash"), [])
     }
 
     @MainActor
@@ -570,7 +570,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             target: observer
         )
 
-        _ = session.insertFinal("open widget pro")
+        _ = session.insertFinalResult("open widget pro")
         coordinator.recordCorrectionEvidence(
             rawTranscript: "open widget pro",
             finalTranscript: "open widget pro",
@@ -613,7 +613,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             target: observer
         )
 
-        _ = session.insertFinal("widget pro")
+        _ = session.insertFinalResult("widget pro")
         session.finish()
         observer.value = "open WidgetPro please"
         coordinator.scheduleObservedUserEditCapture(
@@ -655,7 +655,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             target: observer
         )
 
-        _ = session.insertFinal("widget pro")
+        _ = session.insertFinalResult("widget pro")
         session.finish()
         observer.value = "open widget pro please"
         coordinator.scheduleObservedUserEditCapture(
@@ -704,7 +704,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             target: observer
         )
 
-        _ = session.insertFinal("widget pro")
+        _ = session.insertFinalResult("widget pro")
         session.finish()
         coordinator.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
@@ -804,7 +804,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             target: observer
         )
 
-        _ = session.insertFinal("widget pro")
+        _ = session.insertFinalResult("widget pro")
         session.finish()
         // The inserted segment was wiped: only the baseline prefix/suffix remain.
         observer.value = "open  please"

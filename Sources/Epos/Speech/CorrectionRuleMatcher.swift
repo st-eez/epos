@@ -6,7 +6,6 @@ struct CorrectionRuleMatchSpec: Sendable {
     let regex: NSRegularExpression
     let contexts: [String]
     let matchStrategy: TranscriptCanonicalizer.Rule.MatchStrategy
-    let attachesFlagArgument: Bool
 }
 
 struct CorrectionRuleMatchResult {
@@ -15,14 +14,8 @@ struct CorrectionRuleMatchResult {
 }
 
 enum CorrectionRuleMatcher {
-    static func isFlagPrefixRule(canonical: String, aliasRegex: NSRegularExpression) -> Bool {
-        guard canonical == "--" else { return false }
-        let sample = "dash dash"
-        let range = NSRange(location: 0, length: (sample as NSString).length)
-        return aliasRegex.firstMatch(in: sample, range: range)?.range == range
-    }
-
     static func apply(_ specs: [CorrectionRuleMatchSpec], to text: String) -> CorrectionRuleMatchResult {
+        let text = attachingFlagPrefix(in: text)
         guard !text.isEmpty else {
             return CorrectionRuleMatchResult(output: text, appliedRecordIDs: [])
         }
@@ -34,34 +27,29 @@ enum CorrectionRuleMatcher {
         var seenRecordIDs: Set<String> = []
 
         for spec in specs {
-            let candidates = flagCandidates(for: spec, in: text, range: fullRange)
-                + spec.regex.matches(in: text, range: fullRange).map {
-                    Candidate(range: $0.range, flagArgument: nil)
-                }
             var specApplied = false
 
-            for candidate in candidates {
-                guard !replacements.contains(where: { rangesOverlap($0.range, candidate.range) }) else {
+            for match in spec.regex.matches(in: text, range: fullRange) {
+                guard !replacements.contains(where: { rangesOverlap($0.range, match.range) }) else {
                     continue
                 }
                 guard CorrectionMatchContext.allows(
                     matchStrategy: spec.matchStrategy,
                     contexts: spec.contexts,
-                    before: candidate.range,
+                    before: match.range,
                     in: nsText
                 ) else {
                     continue
                 }
 
-                let canonical = CorrectionMatchContext.sentenceCasedCanonical(
-                    spec.canonical,
-                    forMatch: candidate.range,
-                    in: nsText
-                )
                 replacements.append(
                     Replacement(
-                        range: candidate.range,
-                        text: canonical + (candidate.flagArgument ?? "")
+                        range: match.range,
+                        text: CorrectionMatchContext.sentenceCasedCanonical(
+                            spec.canonical,
+                            forMatch: match.range,
+                            in: nsText
+                        )
                     )
                 )
                 specApplied = true
@@ -91,39 +79,33 @@ enum CorrectionRuleMatcher {
 
         return CorrectionRuleMatchResult(output: output, appliedRecordIDs: appliedRecordIDs)
     }
+
+    /// `dash dash <flag>` -> `--<flag>`: the one spoken shorthand the alias->canonical
+    /// engine cannot express, because it prepends `--` to a *captured* following word
+    /// instead of replacing a fixed phrase. It runs ahead of the alias rules and belongs
+    /// to no correction record, so editing or deleting the `dash dash` -> `--` row cannot
+    /// silently take the flag form away with it. That row still owns bare `dash dash`.
+    static func attachingFlagPrefix(in text: String) -> String {
+        guard let regex = flagPrefixRegex else { return text }
+        let range = NSRange(location: 0, length: (text as NSString).length)
+        return regex.stringByReplacingMatches(in: text, range: range, withTemplate: #"--$1"#)
+    }
 }
 
 private extension CorrectionRuleMatcher {
-    struct Candidate {
-        let range: NSRange
-        let flagArgument: String?
-    }
-
     struct Replacement {
         let range: NSRange
         let text: String
-    }
-
-    static func flagCandidates(
-        for spec: CorrectionRuleMatchSpec,
-        in text: String,
-        range: NSRange
-    ) -> [Candidate] {
-        guard spec.attachesFlagArgument, let regex = flagPrefixRegex else { return [] }
-        let nsText = text as NSString
-        return regex.matches(in: text, range: range).compactMap { match in
-            guard match.numberOfRanges == 2 else { return nil }
-            return Candidate(
-                range: match.range,
-                flagArgument: nsText.substring(with: match.range(at: 1))
-            )
-        }
     }
 
     static func rangesOverlap(_ lhs: NSRange, _ rhs: NSRange) -> Bool {
         NSIntersectionRange(lhs, rhs).length > 0
     }
 
+    /// The recognizer punctuates the spoken command "dash dash fix" as "Dash, dash, fix."
+    /// — a comma after each token. Tolerating commas (and whitespace) between the tokens
+    /// keeps this consuming the whole run and yielding "--fix"; without it the bare
+    /// `dash dash` alias matched only "Dash, dash" and stranded the comma as "--, fix".
     static let flagPrefixRegex = try? NSRegularExpression(
         pattern: #"(?<![\p{L}\p{N}])dash[\s,]+dash[\s,]+([A-Za-z][A-Za-z0-9_-]*)"#,
         options: [.caseInsensitive]

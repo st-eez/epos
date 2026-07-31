@@ -9,11 +9,11 @@ struct CorrectionPhraseReplacement: Equatable, Sendable {
     }
 
     var normalizedAlias: String {
-        CorrectionPhraseDiff.normalizedPhrase(alias)
+        CorrectionMatchContext.normalizedPhrase(alias)
     }
 
     var normalizedCanonical: String {
-        CorrectionPhraseDiff.normalizedPhrase(canonical)
+        CorrectionMatchContext.normalizedPhrase(canonical)
     }
 
     var aliasSlug: String {
@@ -55,26 +55,21 @@ enum CorrectionPhraseDiff {
         let alias = phrase.alias
         let canonical = phrase.canonical
         guard !alias.isEmpty, !canonical.isEmpty else { return nil }
-        guard normalizedPhrase(alias) != normalizedPhrase(canonical) else { return nil }
+        guard CorrectionMatchContext.normalizedPhrase(alias)
+            != CorrectionMatchContext.normalizedPhrase(canonical) else { return nil }
         return CorrectionPhraseReplacement(alias: alias, canonical: canonical)
     }
 
     static func containsPhrase(_ phrase: String, in text: String) -> Bool {
-        let normalizedText = " \(normalizedPhrase(text)) "
-        let normalizedNeedle = " \(normalizedPhrase(phrase)) "
+        let normalizedText = " \(CorrectionMatchContext.normalizedPhrase(text)) "
+        let normalizedNeedle = " \(CorrectionMatchContext.normalizedPhrase(phrase)) "
         return !normalizedNeedle.trimmingCharacters(in: .whitespaces).isEmpty
             && normalizedText.contains(normalizedNeedle)
     }
 
-    static func normalizedPhrase(_ phrase: String) -> String {
-        phrase
-            .lowercased()
-            .split { !$0.isLetter && !$0.isNumber }
-            .joined(separator: " ")
-    }
-
     static func slug(_ phrase: String) -> String {
-        let slug = normalizedPhrase(phrase).replacingOccurrences(of: " ", with: "-")
+        let slug = CorrectionMatchContext.normalizedPhrase(phrase)
+            .replacingOccurrences(of: " ", with: "-")
         return slug.isEmpty ? "replacement" : slug
     }
 
@@ -107,7 +102,7 @@ enum CorrectionPhraseDiff {
 
     private static func aliasSpellsTrailingPunctuation(_ alias: String, punctuation: Character) -> Bool {
         guard let suffixes = spokenPunctuationSuffixes[punctuation] else { return false }
-        let normalizedAlias = normalizedPhrase(alias)
+        let normalizedAlias = CorrectionMatchContext.normalizedPhrase(alias)
         return suffixes.contains { suffix in
             normalizedAlias == suffix || normalizedAlias.hasSuffix(" \(suffix)")
         }

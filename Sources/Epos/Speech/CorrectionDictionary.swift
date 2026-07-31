@@ -253,17 +253,16 @@ public struct CorrectionDictionary: Equatable, Sendable {
         )
     }
 
-    private static func builtInRuleMigrationPairs() -> [
-        (rule: TranscriptCanonicalizer.Rule, record: CorrectionRecord)
-    ] {
-        let currentPairs = zip(
-            CorrectionRuleCompiler.compile(records: defaultRecords),
-            defaultRecords
-        ).map { (rule: $0.0, record: $0.1) }
-        let legacyPairs = zip(
-            CorrectionRuleCompiler.compile(records: legacyBuiltInRecordsForMigration),
-            legacyBuiltInRecordsForMigration.compactMap { currentDefaultRecord(for: $0.id) }
-        ).map { (rule: $0.0, record: $0.1) }
+    private static func builtInRuleMigrationPairs() -> [CompiledCorrectionRule] {
+        let currentPairs = CorrectionRuleCompiler.compileWithSources(records: defaultRecords)
+        // A legacy rule maps back to the record that carries its id *today*, so a
+        // stored pre-migration rule adopts the current alias set.
+        let legacyPairs = CorrectionRuleCompiler
+            .compileWithSources(records: legacyBuiltInRecordsForMigration)
+            .compactMap { compiled -> CompiledCorrectionRule? in
+                guard let current = currentDefaultRecord(for: compiled.record.id) else { return nil }
+                return CompiledCorrectionRule(rule: compiled.rule, record: current)
+            }
         return currentPairs + legacyPairs
     }
 

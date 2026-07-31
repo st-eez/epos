@@ -505,13 +505,13 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
         ]
         let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
 
         XCTAssertTrue(store.acceptPromotion(assessment))
 
@@ -536,17 +536,13 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
             status: .active
         )
         XCTAssertTrue(CorrectionDictionary.saveRecords([existing], to: defaults))
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
         ]
         let suggestion = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(
-            record: suggestion,
-            evidence: evidence,
-            activeRecords: [existing]
-        )
+        let assessment = assess(record: suggestion, evidence: evidence, activeRecords: [existing])
 
         XCTAssertTrue(store.acceptPromotion(assessment))
         let resolved = try XCTUnwrap(store.dictionary.records.last)
@@ -577,12 +573,12 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro")
         ]
         let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
 
         XCTAssertFalse(store.acceptPromotion(assessment))
         XCTAssertEqual(CorrectionDictionary.load(from: defaults).records, CorrectionDictionary.defaultRecords)
@@ -595,13 +591,13 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open db", edited: "open Database"),
             editedEvidence(id: "two", final: "launch db", edited: "launch Database")
         ]
         let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
 
         XCTAssertTrue(store.rejectSuggestion(assessment))
 
@@ -619,13 +615,17 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let acceptedEvidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
         ]
         let acceptedRecord = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: acceptedEvidence).first)
-        let acceptedAssessment = CorrectionPromotionGate.assess(record: acceptedRecord, evidence: acceptedEvidence)
+        let acceptedAssessment = assess(
+            record: acceptedRecord,
+            evidence: acceptedEvidence,
+            activeRecords: store.dictionary.records
+        )
         XCTAssertTrue(store.acceptPromotion(acceptedAssessment))
 
         let rejectedEvidence = [
@@ -633,7 +633,11 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
             editedEvidence(id: "four", final: "launch db", edited: "launch Database")
         ]
         let rejectedRecord = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: rejectedEvidence).first)
-        let rejectedAssessment = CorrectionPromotionGate.assess(record: rejectedRecord, evidence: rejectedEvidence)
+        let rejectedAssessment = assess(
+            record: rejectedRecord,
+            evidence: rejectedEvidence,
+            activeRecords: store.dictionary.records
+        )
         XCTAssertTrue(store.rejectSuggestion(rejectedAssessment))
 
         store.saveEditorRecords(CorrectionDraft.fromRecords(store.dictionary.records).map(\.record))
@@ -653,13 +657,13 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
         ]
         let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
         XCTAssertTrue(store.acceptPromotion(assessment))
 
         store.saveEditorRecords([])
@@ -674,13 +678,13 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open db", edited: "open Database"),
             editedEvidence(id: "two", final: "launch db", edited: "launch Database")
         ]
         let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
         XCTAssertTrue(store.rejectSuggestion(assessment))
 
         store.saveEditorRecords([])
@@ -696,18 +700,91 @@ final class CorrectionDictionaryPersistenceTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
         ]
         let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
 
         XCTAssertTrue(store.rejectSuggestion(assessment))
         XCTAssertFalse(store.acceptPromotion(assessment))
         XCTAssertEqual(CorrectionDictionary.load(from: defaults).records.first { $0.id == record.id }?.status, .rejected)
         XCTAssertEqual(store.canonicalize("open widget pro"), "open widget pro")
+    }
+
+    @MainActor
+    func testAcceptRefusesASuggestionThatRegressesTheLockedBaseline() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        // A confirmed corpus row the candidate alias does appear in: promoting
+        // "widget pro" -> "WidgetPro" would rewrite text a human confirmed as correct.
+        let regressingRow = "the widget pro is a separate product"
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed([regressingRow]))
+        let evidence = [
+            editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
+            editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
+        ]
+        let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
+        // Scored against a baseline the candidate does not touch, so it carries a clean
+        // verdict into Accept — which must still refuse it on the store's own baseline.
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
+        XCTAssertTrue(assessment.canPromote)
+
+        XCTAssertFalse(store.acceptPromotion(assessment))
+        XCTAssertNil(CorrectionDictionary.load(from: defaults).records.first { $0.id == record.id })
+        XCTAssertEqual(store.canonicalize(regressingRow), regressingRow)
+    }
+
+    /// An assessment scored while a suggestion list was on screen can go stale: the user
+    /// saves a dictionary edit, and the candidate that was clean against the old records
+    /// now regresses the corpus. Accept must re-check, not trust the carried verdict.
+    @MainActor
+    func testAcceptRecheckesAStaleAssessmentAgainstTheLiveDictionary() throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        // The shipped `builtin.codebase` already rewrites "code base" -> "codebase", so a
+        // candidate that does the same is a no-op against this row while it is present.
+        let lockedRow = "the code base is fine"
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed([lockedRow]))
+        let evidence = [
+            editedEvidence(id: "one", final: "read code base", edited: "read codebase"),
+            editedEvidence(id: "two", final: "open code base", edited: "open codebase")
+        ]
+        let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
+        let assessment = assess(record: record, evidence: evidence, activeRecords: store.dictionary.records)
+        XCTAssertTrue(assessment.canPromote)
+
+        // The user then deletes the built-in that was masking the candidate's effect.
+        store.saveEditorRecords(
+            store.dictionary.records.filter { $0.id != "builtin.codebase" }
+        )
+
+        XCTAssertFalse(store.acceptPromotion(assessment))
+        XCTAssertNil(CorrectionDictionary.load(from: defaults).records.first { $0.id == record.id })
+        XCTAssertEqual(store.canonicalize(lockedRow), lockedRow)
+    }
+
+    /// Confirmed-corpus stand-in: real rows none of these candidates rewrite, so the
+    /// locked-baseline check passes on its merits instead of on an empty row set.
+    private let lockedBaselineTexts = ["dictation lands in the focused field", "open the Epos app"]
+
+    private func assess(
+        record: CorrectionRecord,
+        evidence: [CorrectionEvidence],
+        activeRecords: [CorrectionRecord]
+    ) -> CorrectionPromotionAssessment {
+        CorrectionPromotionGate.assess(
+            record: record,
+            evidence: evidence,
+            activeRecords: activeRecords,
+            lockedBaseline: .confirmed(lockedBaselineTexts)
+        )
     }
 
     private func editedEvidence(id: String, final: String, edited: String) -> CorrectionEvidence {

@@ -8,7 +8,7 @@ final class CorrectionSuggestionReviewTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro"),
@@ -16,7 +16,12 @@ final class CorrectionSuggestionReviewTests: XCTestCase {
             editedEvidence(id: "four", final: "launch db", edited: "launch Database")
         ]
         let assessments = CorrectionCandidateSuggester.suggestedRecords(from: evidence).map { record in
-            CorrectionPromotionGate.assess(record: record, evidence: evidence)
+            CorrectionPromotionGate.assess(
+                record: record,
+                evidence: evidence,
+                activeRecords: store.dictionary.records,
+                lockedBaseline: .confirmed(lockedBaselineTexts)
+            )
         }
 
         let items = CorrectionSuggestionReviewItem.items(
@@ -40,7 +45,7 @@ final class CorrectionSuggestionReviewTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
 
-        let store = CorrectionStore(defaults: defaults)
+        let store = CorrectionStore(defaults: defaults, lockedBaseline: .confirmed(lockedBaselineTexts))
         let evidence = [
             editedEvidence(id: "one", final: "open widget pro", edited: "open WidgetPro"),
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro"),
@@ -48,7 +53,12 @@ final class CorrectionSuggestionReviewTests: XCTestCase {
             editedEvidence(id: "four", final: "launch db", edited: "launch Database")
         ]
         let assessments = CorrectionCandidateSuggester.suggestedRecords(from: evidence).map { record in
-            CorrectionPromotionGate.assess(record: record, evidence: evidence)
+            CorrectionPromotionGate.assess(
+                record: record,
+                evidence: evidence,
+                activeRecords: store.dictionary.records,
+                lockedBaseline: .confirmed(lockedBaselineTexts)
+            )
         }
         let acceptable = try XCTUnwrap(assessments.first { $0.record.id == "suggested.widget-pro.to-widgetpro" })
         let blocked = try XCTUnwrap(assessments.first { $0.record.id == "suggested.db.to-database" })
@@ -79,7 +89,12 @@ final class CorrectionSuggestionReviewTests: XCTestCase {
             editedEvidence(id: "two", final: "launch widget pro", edited: "launch WidgetPro")
         ]
         let record = try XCTUnwrap(CorrectionCandidateSuggester.suggestedRecords(from: evidence).first)
-        let assessment = CorrectionPromotionGate.assess(record: record, evidence: evidence)
+        let assessment = CorrectionPromotionGate.assess(
+            record: record,
+            evidence: evidence,
+            activeRecords: [],
+            lockedBaseline: .confirmed(lockedBaselineTexts)
+        )
 
         let item = try XCTUnwrap(CorrectionSuggestionReviewItem.items(
             assessments: [assessment],
@@ -95,6 +110,10 @@ final class CorrectionSuggestionReviewTests: XCTestCase {
         XCTAssertTrue(try XCTUnwrap(item.evidenceExampleText).hasSuffix("..."))
         XCTAssertEqual(item.evidenceContextText, "com.example.editor - Draft.md")
     }
+
+    /// Confirmed-corpus stand-in: real rows none of these candidates rewrite, so the
+    /// locked-baseline check passes on its merits instead of on an empty row set.
+    private let lockedBaselineTexts = ["the codebase is fine", "open the Epos app"]
 
     private func editedEvidence(id: String, final: String, edited: String) -> CorrectionEvidence {
         editedEvidence(id: id, final: final, edited: edited, bundleID: nil, windowTitle: nil)
