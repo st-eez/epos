@@ -109,7 +109,10 @@ def infer(messages: list[str]) -> tuple[str, bool]:
         ("recording setup failed:", "setup_failure"),
         ("cancelledBeforeAudioStart=true", "cancelled_before_audio"),
         ("transcription failed:", "recognizer_failure"),
-        ("final insertion refused: Accessibility permission is not granted", "permission_failure"),
+        # No accessibility-untrusted rule here: inference only runs for sessions
+        # without structured reliability lines, and every recording that can log
+        # that refusal also logs the structured outcome (accessibility-untrusted
+        # alias) — a legacy pre-schema log predates the message entirely.
         ("final insertion refused: fn-press target changed", "target_refusal"),
         ("guarded final insertion refused", "target_refusal"),
         ("final insertion refused: keystroke backend unavailable", "backend_refusal"),

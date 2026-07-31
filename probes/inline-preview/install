@@ -88,15 +88,28 @@ if [[ "$verify_only" == false ]]; then
   echo "== live registration =="
   "$lsregister" -f -R -trusted "$installed_bundle" || true
   tisctl register "$installed_bundle" || echo "  TISRegisterInputSource reported failure (continuing)"
-  /usr/bin/killall TextInputMenuAgent TextInputSwitcher lsd cfprefsd >/dev/null 2>&1 || true
+  # Only the text-input agents are load-bearing for live registration. lsd and
+  # cfprefsd restarts are the escalation below, not the routine path: cfprefsd
+  # owns NSUserDefaults writes machine-wide, so killing it on every install can
+  # drop unsynchronized preference writes belonging to unrelated apps.
+  /usr/bin/killall TextInputMenuAgent TextInputSwitcher >/dev/null 2>&1 || true
 fi
 
 # Read-only. TISEnableInputSource raises a macOS consent dialog every call, so
 # nothing here or in run-stream enables a source that is already enabled.
 echo "== verify =="
-if poll_registration 30; then
+if poll_registration 10; then
   echo "registered live"
   exit 0
+fi
+
+if [[ "$verify_only" == false ]]; then
+  echo "not visible yet; escalating with a launch-services daemon restart"
+  /usr/bin/killall lsd cfprefsd >/dev/null 2>&1 || true
+  if poll_registration 20; then
+    echo "registered live"
+    exit 0
+  fi
 fi
 
 cat <<MSG

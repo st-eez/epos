@@ -70,11 +70,22 @@ final class ProbeCommandSocket {
 
         ProbeLog.write("listening on \(path)")
         Thread.detachNewThread { [listenerDescriptor] in
+            let transient: Set<Int32> = [ECONNABORTED, EMFILE, ENFILE, ENOBUFS, ENOMEM]
             while true {
                 let connection = accept(listenerDescriptor, nil, nil)
                 if connection < 0 {
                     if errno == EINTR { continue }
-                    ProbeLog.write("accept() failed errno=\(errno)")
+                    // Transient resource pressure must not retire the resident
+                    // input method's only listener: the socket stays bound, so
+                    // Epos's connect() would keep succeeding against a process
+                    // that no longer answers. The pause keeps EMFILE from
+                    // spinning hot while descriptors recover.
+                    if transient.contains(errno) {
+                        ProbeLog.write("accept() transient errno=\(errno); retrying")
+                        usleep(100_000)
+                        continue
+                    }
+                    ProbeLog.write("accept() failed errno=\(errno); listener retired")
                     return
                 }
                 ProbeCommandSocket.shared.adopt(connection)

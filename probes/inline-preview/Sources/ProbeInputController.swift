@@ -291,11 +291,15 @@ final class EposProbeInputController: IMKInputController {
     @discardableResult
     private static func clearComposition(reason: String) -> ClearOutcome {
         guard let current = composition else { return .nothingMarked }
-        composition = nil
         guard let target = compositionTarget(current) else {
+            // Keep the record: hosts rebuild sessions constantly, so the owner
+            // (or a same-bundle replacement) may be reachable on the next
+            // cancel/deactivate retry. Forgetting here turned that retry into
+            // "ok cancelled nothing marked" while the text stayed on screen.
             ProbeLog.write("clear reason=\(reason) UNREACHABLE owner=\(current.bundleID) len=\(current.text.count)")
             return .unreachable("composition owner \(current.bundleID) is gone")
         }
+        composition = nil
         // Zero-length marked text is the reliable discard on hosts whose
         // unmarkText commits the composition instead of dropping it.
         target.client.setMarkedText(

@@ -34,4 +34,28 @@ final class CoordinatorNoticeOverlapTests: XCTestCase {
         XCTAssertFalse(coordinator.startUnavailable)
         XCTAssertFalse(coordinator.pillVisible, "no notice left; the pill should be away")
     }
+
+    @MainActor
+    func testReflashingTheSameNoticeRestartsItsWindow() async throws {
+        let coordinator = AppCoordinator(autoStart: false)
+
+        coordinator.flashStartUnavailableNotice("Preparing")
+        try await Task.sleep(for: .seconds(1))
+        // The readiness re-check re-reports through the same notice with an
+        // updated label; the first flash's timer must not truncate it.
+        coordinator.flashStartUnavailableNotice("Mic blocked")
+
+        // Past the FIRST flash's expiry, inside the second's window.
+        try await Task.sleep(for: .seconds(1.8))
+        XCTAssertTrue(coordinator.startUnavailable, "the re-flash owns a full window")
+        XCTAssertTrue(coordinator.pillVisible)
+
+        // The second flash's own expiry still clears it.
+        let deadline = Date().addingTimeInterval(3)
+        while coordinator.startUnavailable, Date() < deadline {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertFalse(coordinator.startUnavailable)
+        XCTAssertFalse(coordinator.pillVisible)
+    }
 }

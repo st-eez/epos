@@ -446,15 +446,24 @@ public final class AppCoordinator: ObservableObject {
         startUnavailable || insertionUnavailable || microphoneUnavailable || recognitionUnavailable
     }
 
+    /// Re-flashing the SAME notice restarts its window: the generation stamps
+    /// each flash so a superseded timer no-ops instead of clearing the flag and
+    /// hiding the pill out from under the newer flash (which may carry an
+    /// updated label — the readiness re-check re-reports through this).
+    private var noticeFlashGenerations: [ReferenceWritableKeyPath<AppCoordinator, Bool>: Int] = [:]
+
     /// Flash the recording pill with one of its red notices, then clear it and put
     /// the pill away if the coordinator is back at rest. Every notice behaves
     /// identically; only which flag the indicator reads differs.
     private func flashNotice(_ notice: ReferenceWritableKeyPath<AppCoordinator, Bool>) {
+        let generation = (noticeFlashGenerations[notice] ?? 0) + 1
+        noticeFlashGenerations[notice] = generation
         self[keyPath: notice] = true
         cues.showPill()
         Task { [weak self] in
             try? await Task.sleep(for: Self.noticeFlashDuration)
-            guard let self, self[keyPath: notice] else { return }
+            guard let self, self.noticeFlashGenerations[notice] == generation,
+                  self[keyPath: notice] else { return }
             self[keyPath: notice] = false
             // A newer notice may have flashed while this one was up; it owns the
             // pill until its own expiry.
