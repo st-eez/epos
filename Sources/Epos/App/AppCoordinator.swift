@@ -398,7 +398,7 @@ public final class AppCoordinator: ObservableObject {
         // land before the synchronous AX baseline capture below, which can
         // stall for hundreds of milliseconds on slow accessibility targets.
         presentIndicatorForRecordingStart()
-        RecordingStartCue.play()
+        RecordingCue.playStart()
         let reliability = ReliabilityRecording(
             recordingID: recordingID,
             diagnostics: reliabilityDiagnostics
@@ -543,7 +543,14 @@ public final class AppCoordinator: ObservableObject {
             switch await commitFinalTranscript(finalTranscript) {
             case .completed(let insertionResult, let viaIME):
                 let applied = insertionResult == .accepted
-                if !applied { flashInsertionUnavailableNotice() }
+                // The end bell means "your text landed" — accepted writes
+                // only. A refused write gets the notice and NO bell, so
+                // silence itself says check the screen.
+                if applied {
+                    RecordingCue.playEnd()
+                } else {
+                    flashInsertionUnavailableNotice()
+                }
                 let insertedTranscript = textInsertionSession?.insertedTranscript
                 if let evidenceID = recordCorrectionEvidenceIfEnabled(
                     enabled: shouldSaveCorrectionEvidence,

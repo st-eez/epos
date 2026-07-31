@@ -40,10 +40,11 @@ final class SmokeTests: XCTestCase {
     }
 
     @MainActor
-    func testStartCueSynthesizesAParseableSound() {
+    func testRecordingCuesSynthesizeParseableSounds() {
         // A malformed WAV header would make NSSound(data:) nil and silently
-        // kill the cue; this pins the synth-to-container path.
-        XCTAssertNotNil(RecordingStartCue.makeSound())
+        // kill the cue; this pins the synth-to-container path for both bells.
+        XCTAssertNotNil(RecordingCue.makeStartSound())
+        XCTAssertNotNil(RecordingCue.makeEndSound())
     }
 
     func testPermissionsSnapshotReturns() {
