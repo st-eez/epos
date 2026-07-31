@@ -285,6 +285,51 @@ final class SmokeTests: XCTestCase {
         XCTAssertTrue(finished, "Transcriber.finish() hung with no input")
     }
 
+    /// The settle-wait on `analyzer.start` used to sit OUTSIDE the finalize timeout,
+    /// so a `setContext` or `start(inputSequence:)` that hung parked `finish()`
+    /// forever: the event stream never closed, the coordinator never left
+    /// `.finalizing`, and nothing watches the transcription task — the app was dead
+    /// until quit. The bound now covers every framework await, and the timeout path
+    /// has to leave the caller recoverable: stream closed, failure reported.
+    func testFinishIsBoundedWhenTheAnalyzerStartNeverSettles() async {
+        let module = Transcriber.makeTranscriber(locale: Locale(identifier: "en-US"))
+        let (_, inputContinuation) = AsyncStream<AnalyzerInput>.makeStream()
+        let (events, eventContinuation) = AsyncStream<TranscriptEvent>.makeStream()
+        let hungStart = Task<Void, Error> {
+            let (stream, _) = AsyncStream<Void>.makeStream()
+            for await _ in stream {}
+        }
+        let drain = Task<Void, Never> {
+            let (stream, _) = AsyncStream<Void>.makeStream()
+            for await _ in stream {}
+        }
+        defer {
+            hungStart.cancel()
+            drain.cancel()
+        }
+
+        await Transcriber.closeSession(
+            Transcriber.Session(
+                analyzer: SpeechAnalyzer(modules: [module]),
+                inputContinuation: inputContinuation,
+                eventContinuation: eventContinuation,
+                drainTask: drain,
+                startTask: hungStart,
+                hasReceivedBuffer: true
+            ),
+            timeout: .milliseconds(100)
+        )
+
+        // Reaching here at all is half the assertion: `closeSession` returned. The
+        // rest is that the caller's event loop can end and learns why — this loop
+        // would never terminate if the stream were left open.
+        var failures: [String] = []
+        for await event in events {
+            if case .failed(let message) = event { failures.append(message) }
+        }
+        XCTAssertEqual(failures.count, 1, "the hang must be reported, not swallowed")
+    }
+
     /// The with-input `finish()` path is bounded by racing {finalize + drain} against
     /// `Transcriber.finishTimeout` via `completed(within:_:)`. The hang itself cannot be
     /// induced on a real `SpeechAnalyzer`, so the race helper is tested in isolation:

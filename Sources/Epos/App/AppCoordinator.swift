@@ -31,6 +31,13 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var startUnavailable = false
     /// True while the indicator reports that the guarded final write was refused.
     @Published public private(set) var insertionUnavailable = false
+    /// True while the indicator reports that the microphone died mid-recording and
+    /// the dictation was cut short at that point.
+    @Published public private(set) var microphoneUnavailable = false
+    /// True while the indicator reports that speech recognition died while fn was
+    /// still held: nothing more will be recognized, and what was recognized before
+    /// the failure is written at release.
+    @Published public private(set) var recognitionUnavailable = false
 
     /// Running display: committed finals + in-progress partial, put through the
     /// recording's `streamClean(canonicalize(...))` — the SAME transform the one
@@ -69,8 +76,8 @@ public final class AppCoordinator: ObservableObject {
     /// user's real defaults.
     private let settingsDefaults: UserDefaults
     private let hotkey: FnHotkey
-    private let audio: AudioCapture
-    private let transcriber: Transcriber
+    private let audio: any MicrophoneCapture
+    private let transcriber: any SpeechTranscribing
     private let textInsertion: TextInsertionBackend
     private let insertionTargetObserverFactory: @MainActor () -> any InsertionTargetObserver
     private let permissions: PermissionsGate
@@ -89,7 +96,11 @@ public final class AppCoordinator: ObservableObject {
     private let injectLog: EposLogger
     private var transcriptTiming: TranscriptTimingDiagnostics
 
-    private var transcriptionTask: Task<Void, Never>?
+    /// Internal so tests can await one recording's full finalize.
+    var transcriptionTask: Task<Void, Never>?
+    /// Finalizes parked until the fn release, resumed by `finishRecording`. Only the
+    /// recognizer-failed-mid-hold path parks, so this holds at most one waiter.
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
     /// The running recording's transform, shared by the streamed display and the
     /// one final write so they cannot diverge. Built once per recording, so a
     /// mid-dictation correction-rule edit cannot change either of them.
@@ -141,7 +152,8 @@ public final class AppCoordinator: ObservableObject {
 
     public init(
         hotkey: FnHotkey = FnHotkey(),
-        audio: AudioCapture = AudioCapture(),
+        audio: any MicrophoneCapture = AudioCapture(),
+        transcriber: (any SpeechTranscribing)? = nil,
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         insertionTargetObserverFactory: (@MainActor () -> any InsertionTargetObserver)? = nil,
         settings: Settings = Settings.load(),
@@ -176,7 +188,7 @@ public final class AppCoordinator: ObservableObject {
         self.settingsDefaults = settingsDefaults
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
-        self.transcriber = Transcriber(locale: settings.locale)
+        self.transcriber = transcriber ?? Transcriber(locale: settings.locale)
         if autoStart {
             bindHotkey()
             bindDebugDictationTriggerIfEnabled()
@@ -295,10 +307,22 @@ public final class AppCoordinator: ObservableObject {
         didBootstrap = true
         log.info("bootstrap begin")
         let grants = await permissions.requestAll()
+        // Anything short of an installed, reserved model is a reason the pipeline may
+        // have no capture format. Naming it here is what keeps a dropped press from
+        // blaming permissions for a model that is merely still downloading.
         var assetFailure: String?
-        if case .failed(let message) = await assets.prepare() {
+        switch await assets.prepare() {
+        case .ready, .reserved:
+            break
+        case .failed(let message):
             assetFailure = "asset prepare failed: \(message)"
             log.error("bootstrap asset prepare failed: \(message)")
+        case .downloading:
+            assetFailure = "speech model still downloading"
+            log.info("bootstrap: speech model still downloading")
+        case .missing:
+            assetFailure = "speech model not installed"
+            log.error("bootstrap: speech model not installed")
         }
         captureFormat = await transcriber.bestAudioFormat()
         if captureFormat == nil {
@@ -349,28 +373,45 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Flash the existing recording pill with a "Not ready" notice when a deferred
-    /// start had to be dropped because bootstrap finished without a capture format.
-    private func flashStartUnavailableNotice() {
-        startUnavailable = true
+    /// How long one of the pill's red notices stays up. Long enough to read a
+    /// two-word label after the user's attention has returned to their own text.
+    static let noticeFlashDuration: Duration = .milliseconds(2_500)
+
+    /// Flash the recording pill with one of its red notices, then clear it and put
+    /// the pill away if the coordinator is back at rest. Every notice behaves
+    /// identically; only which flag the indicator reads differs.
+    private func flashNotice(_ notice: ReferenceWritableKeyPath<AppCoordinator, Bool>) {
+        self[keyPath: notice] = true
         indicator.show()
         Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            guard let self, self.startUnavailable else { return }
-            self.startUnavailable = false
+            try? await Task.sleep(for: Self.noticeFlashDuration)
+            guard let self, self[keyPath: notice] else { return }
+            self[keyPath: notice] = false
             if self.state == .idle { self.indicator.hide() }
         }
     }
 
+    /// "Not ready": a held-fn dictation was dropped because there is no capture
+    /// format — bootstrap finished without one, or the mic refused to open.
+    private func flashStartUnavailableNotice() {
+        flashNotice(\.startUnavailable)
+    }
+
     private func flashInsertionUnavailableNotice() {
-        insertionUnavailable = true
-        indicator.show()
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_500_000_000)
-            guard let self, self.insertionUnavailable else { return }
-            self.insertionUnavailable = false
-            if self.state == .idle { self.indicator.hide() }
-        }
+        flashNotice(\.insertionUnavailable)
+    }
+
+    /// "Mic lost": distinct from "Not ready" because the dictation did start and the
+    /// text captured before the mic died is still on its way to the field.
+    private func flashMicrophoneUnavailableNotice() {
+        flashNotice(\.microphoneUnavailable)
+    }
+
+    /// "Recognition lost": the recognizer's result stream failed mid-hold. The mic is
+    /// still open and the key is still down, but no further words will be recognized —
+    /// without this the user keeps talking into a session that stopped listening.
+    private func flashRecognitionUnavailableNotice() {
+        flashNotice(\.recognitionUnavailable)
     }
 
     private func bindHotkey() {
@@ -445,11 +486,10 @@ public final class AppCoordinator: ObservableObject {
         currentRecordingID = recordingID
         RecordingLogContext.activate(recordingID)
         log.info("recording start")
-        // Feedback first, work second: the glow (or pill) and the start cue
-        // land before the synchronous AX baseline capture below, which can
-        // stall for hundreds of milliseconds on slow accessibility targets.
+        // Feedback first, work second: the glow (or pill) lands before the
+        // synchronous AX baseline capture below, which can stall for hundreds of
+        // milliseconds on slow accessibility targets.
         presentIndicatorForRecordingStart()
-        RecordingCue.playStart()
         let reliability = ReliabilityRecording(
             recordingID: recordingID,
             diagnostics: reliabilityDiagnostics
@@ -460,7 +500,26 @@ public final class AppCoordinator: ObservableObject {
         partial = ""
         displayText = ""
         amplitude = 0
+        startUnavailable = false
         insertionUnavailable = false
+        microphoneUnavailable = false
+        recognitionUnavailable = false
+
+        let preRoll = CapturePreRoll()
+        do {
+            try openMicrophone(
+                format: format,
+                reliability: reliability,
+                recordingID: recordingID,
+                preRoll: preRoll
+            )
+        } catch {
+            abortRecordingStart(reliability: reliability, recordingID: recordingID, error: error)
+            return
+        }
+        // After the open, so the bell means the mic is actually hot.
+        RecordingCue.playStart()
+
         textInsertionSession = FinalTranscriptInsertionSession(
             insertionSession: textInsertion.startInsertionSession(),
             target: insertionTargetObserverFactory(),
@@ -474,17 +533,103 @@ public final class AppCoordinator: ObservableObject {
 
         transcriptionTask = Task { [weak self] in
             await self?.runSession(
-                format: format,
+                preRoll: preRoll,
                 cleanFinalTranscript: cleanFinalTranscript,
                 contextualStrings: contextualStrings
             )
         }
     }
 
+    /// Open the mic and point the tap at this recording.
+    ///
+    /// This runs BEFORE the AX baseline capture and before the analyzer start; both
+    /// of those used to come first, and every word spoken in that window was gone
+    /// (dogfood logs: press → capture-started median 111ms, p90 272ms, worst case
+    /// 2.6s, the tail of which produced whole recordings with no input at all).
+    /// Nothing forced that order — `captureFormat` is cached at bootstrap precisely
+    /// so opening the mic needs no await. Buffers captured before the analyzer
+    /// exists queue in `preRoll` instead of being dropped.
+    private func openMicrophone(
+        format: AVAudioFormat,
+        reliability: ReliabilityRecording,
+        recordingID: String,
+        preRoll: CapturePreRoll
+    ) throws {
+        audio.onBuffer = { [preRoll] buffer in
+            reliability.recordAudioBuffer(frameCount: Int(buffer.frameLength))
+            preRoll.accept(buffer)
+        }
+        audio.onAmplitude = { [weak self] amp in
+            Task { @MainActor in
+                guard let self, self.state == .recording else { return }
+                self.amplitude = amp
+                // Only while the glow is actually up: a retired glow's
+                // hidden view has no business animating per buffer.
+                if self.edgeGlowVisible {
+                    self.edgeGlow.updateAmplitude(amp)
+                }
+            }
+        }
+        audio.onRawBuffer = settings.saveAudioSamples
+            ? { [dogfood] buffer in dogfood.write(buffer, recordingID: recordingID) }
+            : nil
+        audio.onCaptureFailure = { [weak self] error in
+            self?.endRecordingAfterCaptureFailure(error)
+        }
+        try audio.start(targetFormat: format)
+    }
+
+    /// The mic never opened, so the recording that was just announced has to be
+    /// taken back: the glow is up but no start cue played and nothing downstream
+    /// exists yet (no insertion session, no preview, no transcription task).
+    private func abortRecordingStart(
+        reliability: ReliabilityRecording,
+        recordingID: String,
+        error: Error
+    ) {
+        log.error("recording setup failed: capture start (\(String(describing: error)))")
+        reliability.emit(.setupFailed)
+        currentReliabilityRecording = nil
+        clearAudioCallbacks()
+        hideEdgeGlow()
+        amplitude = 0
+        log.info("recording done (finalChars=0 failed=true)")
+        returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: recordingID)
+        flashStartUnavailableNotice()
+    }
+
+    /// The microphone died mid-hold and could not be recovered (an input-device
+    /// change the engine could not be restarted through). The glow and the start
+    /// cue have been advertising a live mic, so end the recording exactly as a
+    /// release does — whatever was recognized before the mic went away is still
+    /// written — and flash the notice so the truncation is not silent.
+    ///
+    /// The interruption is the recording's terminal reliability outcome: it is the
+    /// dominant operational fact, and the final write's own decision is logged in
+    /// the `inject` category either way.
+    private func endRecordingAfterCaptureFailure(_ error: Error) {
+        guard state == .recording else { return }
+        log.error("recording cut short: microphone capture failed (\(String(describing: error)))")
+        currentReliabilityRecording?.emit(.captureInterrupted)
+        finishRecording()
+        flashMicrophoneUnavailableNotice()
+    }
+
+    private func clearAudioCallbacks() {
+        audio.onBuffer = nil
+        audio.onAmplitude = nil
+        audio.onRawBuffer = nil
+        audio.onCaptureFailure = nil
+    }
+
     public func finishRecording() {
         guard state == .recording else { return }
         currentReliabilityRecording?.markReleased()
         state = .finalizing
+        // Before anything else in the release: a finalize parked on the hold (the
+        // recognizer died mid-dictation) resumes here, and it must never observe
+        // `.recording` again.
+        resumeReleaseWaiters()
         finalizationPhase = .finalizingSpeech
         // Symmetric with the start bell and immediate: it confirms the
         // release REGISTERED (the fn monitor is global and edge-triggered,
@@ -514,7 +659,7 @@ public final class AppCoordinator: ObservableObject {
     }
 
     private func runSession(
-        format: AVAudioFormat,
+        preRoll: CapturePreRoll,
         cleanFinalTranscript: @Sendable (String) -> String,
         contextualStrings: [String]
     ) async {
@@ -530,35 +675,33 @@ public final class AppCoordinator: ObservableObject {
         let events: AsyncStream<TranscriptEvent>
         do {
             events = try await transcriber.start(contextualStrings: contextualStrings)
+            // Released before the analyzer was ready: the mic did run and the
+            // pre-roll holds whatever was said, but the release is already tearing
+            // the analyzer down, so that audio has nowhere to go.
             guard state == .recording else {
-                cancelTextInsertionSession()
-                reliability?.emit(.cancelledBeforeAudio)
-                await resetSessionStateBeforeIdle()
-                log.info("recording done (finalChars=0 cancelledBeforeAudioStart=true)")
-                returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
+                await finishCancelledBeforeAnalyzerReady(
+                    reliability: reliability,
+                    keepingAudioSamples: shouldSaveAudioSamples,
+                    recordingID: sessionRecordingID
+                )
                 return
             }
-            audio.onBuffer = { buffer in
-                reliability?.recordAudioBuffer(frameCount: Int(buffer.frameLength))
-                transcriber.accept(buffer)
-            }
-            audio.onAmplitude = { [weak self] amp in
-                Task { @MainActor in
-                    guard let self, self.state == .recording else { return }
-                    self.amplitude = amp
-                    // Only while the glow is actually up: a retired glow's
-                    // hidden view has no business animating per buffer.
-                    if self.edgeGlowVisible {
-                        self.edgeGlow.updateAmplitude(amp)
-                    }
-                }
-            }
-            if shouldSaveAudioSamples {
-                audio.onRawBuffer = { buffer in dogfood.write(buffer, recordingID: sessionRecordingID) }
-            } else {
-                audio.onRawBuffer = nil
-            }
-            try audio.start(targetFormat: format)
+            // The analyzer exists now: hand it everything the mic captured while it
+            // was starting, then let the tap feed it directly.
+            let preRollBuffers = preRoll.attach { buffer in transcriber.accept(buffer) }
+            log.info("capture pre-roll handed to the analyzer (buffers=\(preRollBuffers))")
+        } catch TranscriberError.tornDownDuringStart {
+            // The release beat the analyzer's start, so `finish()` tore the session
+            // down mid-`start`. Identical user action to the state guard above — a
+            // rapid fn tap — and which of the two a given tap lands on is a race. It
+            // must therefore report the same outcome, not an error-level setup
+            // failure and a "Not ready" notice for something the user did on purpose.
+            await finishCancelledBeforeAnalyzerReady(
+                reliability: reliability,
+                keepingAudioSamples: shouldSaveAudioSamples,
+                recordingID: sessionRecordingID
+            )
+            return
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
             reliability?.emit(.setupFailed)
@@ -567,6 +710,10 @@ public final class AppCoordinator: ObservableObject {
             await resetSessionStateBeforeIdle()
             log.info("recording done (finalChars=0 failed=true)")
             returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
+            // The user held fn, saw the indicator, and spoke into a session that never
+            // started; a log line is no feedback at all. Last, so the indicator
+            // teardown inside the reset above cannot swallow the notice.
+            flashStartUnavailableNotice()
             return
         }
 
@@ -587,16 +734,24 @@ public final class AppCoordinator: ObservableObject {
         audio.stop()
         // Preserve a trailing recognizer partial when no later final arrives.
         promotePartialTranscriptAsFallbackFinalIfNeeded()
+        if recognizerFailed {
+            await parkFailedRecognitionUntilRelease()
+        }
 
-        let hasTranscribedText = !finalText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // The authoritative final text: the per-recording canonicalize +
+        // conservative deterministic clean, matching what the indicator streamed.
+        let finalTranscript = cleanFinalTranscript(finalText)
+        // Emptiness is decided on the text that will actually be written, not on the
+        // raw accumulation. An "um"-only recording cleans away to nothing; running it
+        // through the insertion path buys a backend refusal, a red "Not inserted" pill
+        // inviting the user to retype what they never said, and an insertion-failure
+        // row in the audit for a recording that had nothing to insert.
+        let hasTranscribedText = !finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         // Empty and failed sessions are the samples needed to diagnose silence,
         // wrong-input, capture, and recognizer failures.
         dogfood.stop(keeping: shouldSaveAudioSamples)
 
         if hasTranscribedText {
-            // The authoritative final text: the per-recording canonicalize +
-            // conservative deterministic clean, matching what the indicator streamed.
-            let finalTranscript = cleanFinalTranscript(finalText)
             finalizationPhase = .inserting
             switch await commitFinalTranscript(finalTranscript) {
             case .completed(let insertionResult, let viaIME):
@@ -659,10 +814,68 @@ public final class AppCoordinator: ObservableObject {
             )
         }
 
-        let finalChars = finalText.count
+        // The finalized transcript's length, not the raw accumulation's: the raw count
+        // is what a recording that cleaned away to nothing would report here, which
+        // reads during triage as a transcript that existed and failed to land.
+        let finalChars = finalTranscript.count
         await resetSessionStateBeforeIdle()
         log.info("recording done (finalChars=\(finalChars))")
         returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
+    }
+
+    /// The release arrived before the analyzer was ready for audio: either the state
+    /// guard saw the recording already finalizing, or `start` threw
+    /// `tornDownDuringStart` because the concurrent `finish()` won. The mic did run
+    /// and the pre-roll holds whatever was said, but the release is already tearing
+    /// the analyzer down, so that audio has nowhere to go. A user action, not a
+    /// failure — both races report it identically.
+    private func finishCancelledBeforeAnalyzerReady(
+        reliability: ReliabilityRecording?,
+        keepingAudioSamples: Bool,
+        recordingID: String?
+    ) async {
+        cancelTextInsertionSession()
+        reliability?.emit(.cancelledBeforeAudio)
+        dogfood.stop(keeping: keepingAudioSamples)
+        await resetSessionStateBeforeIdle()
+        log.info("recording done (finalChars=0 cancelledBeforeAnalyzerReady=true)")
+        returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: recordingID)
+    }
+
+    /// The recognizer's result stream failed. If fn is still down, committing here
+    /// would type into a field the user is still dictating into, and the release that
+    /// follows would then be dropped by the state guard — so everything said after the
+    /// failure would vanish with no explanation at all. Instead the assembled text
+    /// waits: the user is told recognition died, and the ordinary release commits what
+    /// was recognized before it did.
+    ///
+    /// The wait is bounded by the hotkey itself, which reconciles a missed release
+    /// against the hardware within `FnHotkey.stuckKeyReconcileInterval`.
+    private func parkFailedRecognitionUntilRelease() async {
+        guard state == .recording else { return }
+        guard isFnKeyHeld() else {
+            // The key is already up with no release event on the way (a trigger that
+            // does not run through the hotkey, or a release still in flight): commit
+            // now rather than park on a release that may never arrive.
+            log.info("recognizer failed with fn already released; committing what was recognized")
+            return
+        }
+        log.error("recognizer failed while fn was held; holding the transcript until release")
+        // The glow says "the mic is hot and this is being transcribed"; only the first
+        // half is still true, so hand the cue to the pill carrying the notice.
+        hideEdgeGlow()
+        flashRecognitionUnavailableNotice()
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    /// Wakes a finalize parked on the hold. Called from the one place `.recording`
+    /// ends, so a park can never outlive the recording it belongs to.
+    private func resumeReleaseWaiters() {
+        let waiters = releaseWaiters
+        releaseWaiters = []
+        waiters.forEach { $0.resume() }
     }
 
     func handlePartialTranscript(_ text: String) {
@@ -1055,7 +1268,8 @@ public final class AppCoordinator: ObservableObject {
             kind: kind,
             eventText: eventText,
             finalText: finalText,
-            partialText: partial
+            partialText: partial,
+            displayText: displayText
         ))
     }
 
@@ -1070,23 +1284,29 @@ public final class AppCoordinator: ObservableObject {
     }
 
     /// Common teardown shared by every exit from `runSession`. Each piece is idempotent
-    /// (callbacks set to nil, `finish()` is idempotent). Path-specific work — `audio.stop()`,
-    /// `dogfood.stop(keeping:)`, insertion session closeout — stays at the call sites; only
-    /// what every path does identically lives here, so the three exits can't drift apart again.
+    /// (`stop()` and `finish()` are no-ops when already done, callbacks set to nil).
+    /// Path-specific work — `dogfood.stop(keeping:)`, insertion session closeout —
+    /// stays at the call sites; only what every path does identically lives here, so
+    /// the three exits can't drift apart again.
     ///
     /// This deliberately does not set `state = .idle`. The caller logs completion and
     /// clears the finished recording scope first, so a queued fn press cannot start the
     /// next recording in the middle of old-session cleanup.
     private func resetSessionStateBeforeIdle() async {
+        // First, and before the preview teardown's socket round-trips: the mic is
+        // open from fn press on every path now, so every exit has one to close.
+        audio.stop()
         // No-op once the pre-write path already finished it; this covers the exits
         // that never reach a final write (setup failure, silence, recognizer error).
         await finishInlinePreview()
-        audio.onBuffer = nil
-        audio.onAmplitude = nil
-        audio.onRawBuffer = nil
+        clearAudioCallbacks()
         await transcriber.finish()
         hideEdgeGlow()
-        if !insertionUnavailable { indicator.hide() }
+        // Any notice still up owns the pill until its own flash expires; the reset
+        // must not put the indicator away underneath one.
+        if !startUnavailable, !insertionUnavailable, !microphoneUnavailable, !recognitionUnavailable {
+            indicator.hide()
+        }
         amplitude = 0
         partial = ""
         transcriptionTask = nil

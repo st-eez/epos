@@ -85,10 +85,13 @@ No `Core/`, no `Utilities/`, no `Models/` folder of empty types. (Settings, the 
 ```
 FnHotkey.press
   -> AppCoordinator.startRecording
+     -> RecordingIndicator.show (edge glow, or the pill)
+     -> AudioCapture.start (16 kHz mono Float32 buffers) — first, so the start cue is
+        an honest "mic is hot"; buffers queue in CapturePreRoll until the analyzer exists
+     -> RecordingCue.playStart
      -> FinalTranscriptInsertionSession captures focused target + selection
-     -> AudioCapture.start (16 kHz mono Float32 buffers)
      -> Transcriber.start (SpeechAnalyzer + SpeechTranscriber module, correction vocabulary as speech context)
-     -> RecordingIndicator.show
+        -> CapturePreRoll hands over everything captured while it was starting
   // volatile partials update only in-memory transcript + RecordingIndicator preview
 FnHotkey.release
   -> AppCoordinator.finishRecording
@@ -141,7 +144,12 @@ A single `NSPanel` (borderless, non-activating, click-through, floats above all)
 - A status dot whose color signals state (idle / recording / finalizing).
 - A live amplitude meter from the audio tap (RMS over a small window).
 - One tail-truncated line of volatile transcript text while recording.
-- A brief visible "Not inserted" result when the fn-press target is no longer safe.
+- A brief visible red notice whenever a dictation cannot complete normally, naming
+  which stage failed: "Not inserted" (the fn-press target is no longer safe),
+  "Mic lost" (the microphone died mid-hold), "Recognition lost" (the recognizer
+  stopped mid-hold; what it heard first is still written at release), and
+  "Not ready" (the session never started). Silence is never an acceptable outcome
+  for a dictation the user held fn and spoke into.
 
 The preview is memory-only and clears with the recording session. No persistent history, frontmost-app icon, waveform history, or draggable position. Centered above the active screen's bottom edge, fixed.
 

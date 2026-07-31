@@ -3,10 +3,21 @@ import Foundation
 import Speech
 
 /// Streaming result emitted by `Transcriber` while a recording is in progress.
-public enum TranscriptEvent: Equatable {
+public enum TranscriptEvent: Equatable, Sendable {
     case partial(String)
     case final(String)
     case failed(String)
+}
+
+/// The recognizer seam `AppCoordinator` drives. `Transcriber` is the only
+/// production conformance; the protocol exists because the recording state
+/// machine's failure paths — a result stream that dies mid-hold, a release that
+/// beats the analyzer's start — cannot be provoked on a live `SpeechAnalyzer`.
+public protocol SpeechTranscribing: Sendable {
+    func bestAudioFormat() async -> AVAudioFormat?
+    func start(contextualStrings: [String]) async throws -> AsyncStream<TranscriptEvent>
+    func accept(_ buffer: AVAudioPCMBuffer)
+    func finish() async
 }
 
 /// Wraps `SpeechAnalyzer` + a `SpeechTranscriber` module.
@@ -18,7 +29,7 @@ public enum TranscriptEvent: Equatable {
 /// `finish()` is idempotent and safe to call concurrently with — or immediately after —
 /// `start()`. The lock-install inside `start()` precedes the `await` on analyzer start,
 /// so a `finish()` racing the in-flight start sees the install and tears down cleanly.
-public final class Transcriber: @unchecked Sendable {
+public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
     public let locale: Locale
 
     static let speechPreset = SpeechTranscriber.Preset(
@@ -39,8 +50,9 @@ public final class Transcriber: @unchecked Sendable {
 
     /// All per-recording state, installed and torn down as a unit under `lock`. Grouping
     /// it means `finish()` extracts a single value instead of a six-field tuple, and the
-    /// install/teardown can't drift field-by-field.
-    private struct Session {
+    /// install/teardown can't drift field-by-field. Internal so `closeSession` can be
+    /// driven with a start that never settles, which no live analyzer can be made to do.
+    struct Session {
         let analyzer: SpeechAnalyzer
         let inputContinuation: AsyncStream<AnalyzerInput>.Continuation
         let eventContinuation: AsyncStream<TranscriptEvent>.Continuation
@@ -189,19 +201,28 @@ public final class Transcriber: @unchecked Sendable {
             return self.session
         }
         guard let session else { return }
+        await Self.closeSession(session, timeout: Self.finishTimeout)
+        Self.log.info("session finished (hadInput=\(session.hasReceivedBuffer)) locale=\(self.locale.identifier)")
+    }
 
-        // Wait for any in-flight analyzer.start to settle before tearing down.
-        _ = try? await session.startTask.value
-
-        session.inputContinuation.finish()
-
-        if session.hasReceivedBuffer {
-            // Bound the whole finalize + drain sequence with a wall-clock timeout:
-            // `finalizeAndFinishThroughEndOfInput()` can hang without throwing, and a
-            // cancelled drain task cannot unblock a suspend inside Apple's opaque
-            // `transcriber.results` sequence — either would wedge the coordinator in
-            // `.finalizing` forever. finish() must ALWAYS return within the bound.
-            let completed = await Self.completed(within: Self.finishTimeout) {
+    /// Tear one extracted session down within `timeout`, whatever hangs.
+    ///
+    /// EVERY framework await lives inside the race, not just the finalize: the
+    /// settle-wait on `analyzer.setContext` / `analyzer.start(inputSequence:)` and
+    /// `cancelAndFinishNow()` can each park without throwing, exactly as
+    /// `finalizeAndFinishThroughEndOfInput()` can. Any one of them outside the bound
+    /// wedges the caller forever — the event stream never closes, the coordinator
+    /// never leaves `.finalizing`, and nothing watches the transcription task, so the
+    /// app is dead until quit. `finish()` must ALWAYS return within the bound.
+    ///
+    /// Static and internal so tests can drive the timeout path with a start task that
+    /// never settles.
+    static func closeSession(_ session: Session, timeout: Duration) async {
+        let completed = await Self.completed(within: timeout) {
+            // Wait for any in-flight analyzer.start to settle before tearing down.
+            _ = try? await session.startTask.value
+            session.inputContinuation.finish()
+            if session.hasReceivedBuffer {
                 do {
                     try await session.analyzer.finalizeAndFinishThroughEndOfInput()
                 } catch {
@@ -215,29 +236,33 @@ public final class Transcriber: @unchecked Sendable {
                     session.drainTask.cancel()
                 }
                 await session.drainTask.value
-            }
-            if !completed {
-                Self.log.error("finalize timed out after \(Self.finishTimeout); forcing session closed")
-                // Session state was already extracted and nilled above, so the next
-                // start() is unaffected. Force-close our event stream so the caller's
-                // event loop ends, and cancel the analyzer without awaiting it — an
-                // analyzer hung in finalize may hang cancelAndFinishNow() too.
+            } else {
+                // `cancelAndFinishNow()` returns promptly, but Apple's
+                // `SpeechTranscriber.results` AsyncSequence does NOT terminate
+                // when no input was ever fed. Awaiting `drainTask.value` here would
+                // block forever (rapid-fn-tap hang). Force-close our event
+                // stream and cancel the drain task so finish() always returns.
+                await session.analyzer.cancelAndFinishNow()
                 session.eventContinuation.finish()
                 session.drainTask.cancel()
-                Task { await session.analyzer.cancelAndFinishNow() }
             }
-        } else {
-            // `cancelAndFinishNow()` returns promptly, but Apple's
-            // `SpeechTranscriber.results` AsyncSequence does NOT terminate
-            // when no input was ever fed. Awaiting `drainTask.value` here would
-            // block forever (rapid-fn-tap hang). Force-close our event
-            // stream and cancel the drain task so finish() always returns.
-            await session.analyzer.cancelAndFinishNow()
-            session.eventContinuation.finish()
-            session.drainTask.cancel()
         }
+        guard !completed else { return }
 
-        Self.log.info("session finished (hadInput=\(session.hasReceivedBuffer)) locale=\(self.locale.identifier)")
+        let message = "transcriber finish timed out after \(timeout)"
+        Self.log.error("\(message); forcing session closed")
+        // Session state was already extracted and nilled by the caller, so the next
+        // start() is unaffected. Cancel the start in case it is somewhere
+        // cancellable, force-close both continuations so the caller's event loop
+        // ends, and report the hang as a recognizer failure — the recording's
+        // outcome must not read as a clean finalize. The analyzer is cancelled
+        // without awaiting it: one hung framework call can hang the next.
+        session.startTask.cancel()
+        session.inputContinuation.finish()
+        session.eventContinuation.yield(.failed(message))
+        session.eventContinuation.finish()
+        session.drainTask.cancel()
+        Task { await session.analyzer.cancelAndFinishNow() }
     }
 
     /// Race `operation` against a wall-clock timeout. Returns true if it completed,

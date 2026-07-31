@@ -16,7 +16,16 @@ public enum ReliabilityOutcome: String, Sendable {
     /// only the readback could not confirm; the audit buckets this one as
     /// incomplete/ambiguous, never as a success.
     case imeCommitUnacknowledged = "ime-commit-unacknowledged"
+    /// Released before the analyzer was ready for audio. The mic itself opens at fn
+    /// press, so such a recording can carry captured buffers (`audioBuffers` > 0)
+    /// that no analyzer ever consumed. The raw string predates that and is kept so
+    /// the outcome stays comparable with the existing log history.
     case cancelledBeforeAudio = "cancelled-before-audio"
+    /// The microphone stopped delivering audio mid-hold (an input-device change the
+    /// engine could not be restarted through) and the recording was cut short there.
+    /// Terminal for the recording: whatever had already been recognized is still
+    /// written, and that write's own decision stays in the `inject` log.
+    case captureInterrupted = "capture-interrupted"
 
 }
 

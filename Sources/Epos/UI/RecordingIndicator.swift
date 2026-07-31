@@ -15,6 +15,8 @@ public struct RecordingIndicator: View {
             amplitude: coordinator.amplitude,
             startUnavailable: coordinator.startUnavailable,
             insertionUnavailable: coordinator.insertionUnavailable,
+            microphoneUnavailable: coordinator.microphoneUnavailable,
+            recognitionUnavailable: coordinator.recognitionUnavailable,
             transcriptPreview: coordinator.hudTranscriptPreview
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
@@ -34,6 +36,14 @@ struct RecordingIndicatorSurface: View {
     /// bootstrap finished without a capture format.
     let startUnavailable: Bool
     let insertionUnavailable: Bool
+    /// Flash a red "Mic lost" notice: the microphone went away mid-hold, so the
+    /// dictation stops where it stopped. Distinct from "Not ready" — this one has
+    /// a partial transcript on its way to the field.
+    let microphoneUnavailable: Bool
+    /// Flash a red "Recognition lost" notice: the recognizer died while fn was still
+    /// held. The mic is still open, but nothing said from here on is transcribed —
+    /// what came before it is written at release.
+    let recognitionUnavailable: Bool
     let transcriptPreview: String
 
     private let teal = EposPalette.teal
@@ -45,6 +55,8 @@ struct RecordingIndicatorSurface: View {
         amplitude: Float,
         startUnavailable: Bool = false,
         insertionUnavailable: Bool = false,
+        microphoneUnavailable: Bool = false,
+        recognitionUnavailable: Bool = false,
         transcriptPreview: String = ""
     ) {
         self.state = state
@@ -52,6 +64,8 @@ struct RecordingIndicatorSurface: View {
         self.amplitude = amplitude
         self.startUnavailable = startUnavailable
         self.insertionUnavailable = insertionUnavailable
+        self.microphoneUnavailable = microphoneUnavailable
+        self.recognitionUnavailable = recognitionUnavailable
         self.transcriptPreview = transcriptPreview
     }
 
@@ -149,6 +163,8 @@ struct RecordingIndicatorSurface: View {
 
     private var noticeText: String? {
         if insertionUnavailable { return "Not inserted" }
+        if microphoneUnavailable { return "Mic lost" }
+        if recognitionUnavailable { return "Recognition lost" }
         if startUnavailable { return "Not ready" }
         return nil
     }
@@ -180,7 +196,7 @@ struct RecordingIndicatorSurface: View {
     }
 
     private var statusColor: Color {
-        if startUnavailable || insertionUnavailable { return EposPalette.red }
+        if noticeText != nil { return EposPalette.red }
         return switch state {
         case .recording: teal
         case .finalizing: amber

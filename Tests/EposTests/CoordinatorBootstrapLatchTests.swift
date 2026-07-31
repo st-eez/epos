@@ -24,10 +24,14 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
 
     private let fn = FnKeyState()
     private let started = StartCounter()
+    /// `startRecording` opens the mic synchronously, so these tests have to hand it
+    /// one that is not the machine's real input device.
+    private let audio = FakeMicrophoneCapture()
 
     private func makeCoordinator() -> AppCoordinator {
         let started = started
         return AppCoordinator(
+            audio: audio,
             textInsertion: NoOpInsertionBackend(),
             settings: Settings(),
             recordingIDGenerator: {

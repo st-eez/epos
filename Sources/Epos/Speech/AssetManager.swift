@@ -67,12 +67,33 @@ public struct AssetManager: Sendable {
 
         let transcriber = Transcriber.makeTranscriber(locale: assetLocale)
         do {
-            if case .missing = status {
-                Self.log.info("downloading asset for locale \(assetLocale.identifier)")
+            switch status {
+            case .missing, .downloading:
+                // `.downloading` is a MobileAsset install still running from an
+                // earlier launch. It used to fall straight through to `reserve`,
+                // which reports a half-installed model as `.reserved`: bootstrap then
+                // finds no audio format and misblames permissions, and the preset
+                // eval host would benchmark an incomplete model.
+                Self.log.info("installing asset for locale \(assetLocale.identifier)")
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: [transcriber]) {
                     // post-baseline: surface progress via request.progress (NSProgress)
                     try await request.downloadAndInstall()
                 }
+                // A background download already in flight leaves no installation
+                // request to await, so confirm the model actually landed rather than
+                // inferring it from a request that was never returned.
+                let installed = await currentStatus(for: assetLocale)
+                switch installed {
+                case .ready, .reserved:
+                    break
+                case .missing, .downloading, .failed:
+                    Self.log.info(
+                        "asset not installed after install attempt for locale \(assetLocale.identifier)"
+                    )
+                    return installed
+                }
+            case .ready, .reserved, .failed:
+                break
             }
             Self.log.info("reserving locale \(assetLocale.identifier)")
             try await AssetInventory.reserve(locale: assetLocale)

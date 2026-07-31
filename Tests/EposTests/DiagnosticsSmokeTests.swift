@@ -141,6 +141,7 @@ final class DiagnosticsSmokeTests: XCTestCase {
             eventText: "private dictated phrase\nnext\tline",
             finalText: "private",
             partialText: "dictated phrase\nnext\tline",
+            displayText: "private dictated phrase next line",
             now: Date(timeIntervalSince1970: 101.234)
         )
 
@@ -151,7 +152,9 @@ final class DiagnosticsSmokeTests: XCTestCase {
         XCTAssertTrue(message.contains("eventChars=33"))
         XCTAssertTrue(message.contains("finalChars=7"))
         XCTAssertTrue(message.contains("partialChars=25"))
-        XCTAssertTrue(message.contains("displayChars=32"))
+        // The display is the cleaned stream, not `finalText + partialText` (which is
+        // 32 characters here); its count has to come from the display itself.
+        XCTAssertTrue(message.contains("displayChars=33"))
         XCTAssertFalse(message.contains("private dictated phrase"))
         XCTAssertFalse(message.contains("eventText="))
         XCTAssertFalse(message.contains("finalText="))
@@ -159,22 +162,29 @@ final class DiagnosticsSmokeTests: XCTestCase {
         XCTAssertFalse(message.contains("displayText="))
     }
 
-    func testTranscriptTimingDiagnosticsCanOptIntoTranscriptText() {
+    /// `displayText=` must be the text the user actually watched — the cleaned
+    /// stream the one final write also applies — not the raw `finalText + partialText`
+    /// concatenation it used to carry. That field is the whole point of the opt-in:
+    /// a log claiming the display was the raw assembly hides the exact divergence
+    /// (streamed vs typed) it exists to investigate.
+    func testTranscriptTimingDiagnosticsLogsTheStreamedDisplayNotTheRawAssembly() {
         var diagnostics = TranscriptTimingDiagnostics(includeTranscriptText: true)
         diagnostics.start(now: Date(timeIntervalSince1970: 100))
 
         let message = diagnostics.eventMessage(
             kind: .partial,
-            eventText: "private dictated phrase\nnext\tline",
-            finalText: "private",
-            partialText: "dictated phrase\nnext\tline",
+            eventText: "the the uh build is broken",
+            finalText: "the the ",
+            partialText: "uh build is broken",
+            displayText: "the build is broken",
             now: Date(timeIntervalSince1970: 101.234)
         )
 
-        XCTAssertTrue(message.contains(#"eventText="private dictated phrase\nnext\tline""#))
-        XCTAssertTrue(message.contains(#"finalText="private""#))
-        XCTAssertTrue(message.contains(#"partialText="dictated phrase\nnext\tline""#))
-        XCTAssertTrue(message.contains(#"displayText="privatedictated phrase\nnext\tline""#))
+        XCTAssertTrue(message.contains(#"eventText="the the uh build is broken""#))
+        XCTAssertTrue(message.contains(#"finalText="the the ""#))
+        XCTAssertTrue(message.contains(#"partialText="uh build is broken""#))
+        XCTAssertTrue(message.contains(#"displayText="the build is broken""#))
+        XCTAssertFalse(message.contains(#"displayText="the the uh build is broken""#))
     }
 
     @MainActor

@@ -35,6 +35,9 @@ OUTCOME_ALIASES = {
     # A fully sent IME commit that was never acknowledged: the transcript may
     # have landed or been lost, so it is ambiguous, never an accepted write.
     "ime-commit-unacknowledged": "incomplete_ambiguous",
+    # The mic died mid-hold and the recording was cut short: a truncated
+    # transcript may still have been written, so the recording is ambiguous.
+    "capture-interrupted": "incomplete_ambiguous",
 }
 
 
