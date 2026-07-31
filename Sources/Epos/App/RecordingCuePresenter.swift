@@ -21,6 +21,10 @@ final class RecordingCuePresenter<PillContent: View> {
 
     /// True while the screen-edge glow is on.
     private(set) var edgeGlowVisible = false
+    /// True while the pill panel is presented. Window ordering is a no-op in
+    /// test processes, so this flag is the pill's testable presentation state,
+    /// like `edgeGlowVisible`.
+    private(set) var pillVisible = false
 
     private let makePillContent: @MainActor () -> PillContent
     private lazy var pill: RecordingIndicatorController = {
@@ -70,10 +74,12 @@ final class RecordingCuePresenter<PillContent: View> {
     }
 
     func showPill() {
+        pillVisible = true
         pill.show()
     }
 
     func hidePill() {
+        pillVisible = false
         pill.hide()
     }
 

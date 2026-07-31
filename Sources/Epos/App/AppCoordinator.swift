@@ -74,6 +74,7 @@ public final class AppCoordinator: ObservableObject {
 
     /// True while the screen-edge glow is on. Internal so tests can pin it.
     var edgeGlowVisible: Bool { cues.edgeGlowVisible }
+    var pillVisible: Bool { cues.pillVisible }
 
     /// Where setting mutations persist; injectable so tests never write the
     /// user's real defaults.
@@ -438,6 +439,13 @@ public final class AppCoordinator: ObservableObject {
     /// two-word label after the user's attention has returned to their own text.
     static let noticeFlashDuration: Duration = .milliseconds(2_500)
 
+    /// Whether any red notice currently owns the pill. Every hide of the pill at
+    /// rest must consult this: putting the panel away under a still-set flag
+    /// leaves the indicator rendering a notice inside a hidden window.
+    var anyNoticeVisible: Bool {
+        startUnavailable || insertionUnavailable || microphoneUnavailable || recognitionUnavailable
+    }
+
     /// Flash the recording pill with one of its red notices, then clear it and put
     /// the pill away if the coordinator is back at rest. Every notice behaves
     /// identically; only which flag the indicator reads differs.
@@ -448,7 +456,9 @@ public final class AppCoordinator: ObservableObject {
             try? await Task.sleep(for: Self.noticeFlashDuration)
             guard let self, self[keyPath: notice] else { return }
             self[keyPath: notice] = false
-            if self.state == .idle { self.cues.hidePill() }
+            // A newer notice may have flashed while this one was up; it owns the
+            // pill until its own expiry.
+            if self.state == .idle, !self.anyNoticeVisible { self.cues.hidePill() }
         }
     }
 
@@ -457,14 +467,16 @@ public final class AppCoordinator: ObservableObject {
     /// refused to open. The label names the blocker; the default reads it off the
     /// current readiness, which is right for every caller that did not resolve a
     /// more specific one.
-    private func flashStartUnavailableNotice(_ label: String? = nil) {
+    func flashStartUnavailableNotice(_ label: String? = nil) {
         startNotice = label ?? startReadiness.noticeLabel
         flashNotice(\.startUnavailable)
     }
 
     static let defaultInsertionNotice = "Not inserted"
 
-    private func flashInsertionUnavailableNotice(_ label: String = defaultInsertionNotice) {
+    /// Internal so the overlapping-notices regression test can flash two notices
+    /// directly; production callers are all in this file.
+    func flashInsertionUnavailableNotice(_ label: String = defaultInsertionNotice) {
         insertionNotice = label
         flashNotice(\.insertionUnavailable)
     }
@@ -1238,7 +1250,7 @@ public final class AppCoordinator: ObservableObject {
         cues.hideEdgeGlow()
         // Any notice still up owns the pill until its own flash expires; the reset
         // must not put the indicator away underneath one.
-        if !startUnavailable, !insertionUnavailable, !microphoneUnavailable, !recognitionUnavailable {
+        if !anyNoticeVisible {
             cues.hidePill()
         }
         amplitude = 0
