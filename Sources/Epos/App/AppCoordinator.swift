@@ -433,6 +433,11 @@ public final class AppCoordinator: ObservableObject {
         currentReliabilityRecording?.markReleased()
         state = .finalizing
         finalizationPhase = .finalizingSpeech
+        // Symmetric with the start bell and immediate: it confirms the
+        // release REGISTERED (the fn monitor is global and edge-triggered,
+        // so "did it stop?" is a real question). Delivery outcome stays
+        // visual — the red notice on a refused write.
+        RecordingCue.playEnd()
         // The glow frames the held dictation only: it fades at release while
         // the committed text becomes the feedback. The non-mirroring pill
         // stays, showing "Finishing"/"Updating" as it always has.
@@ -543,14 +548,7 @@ public final class AppCoordinator: ObservableObject {
             switch await commitFinalTranscript(finalTranscript) {
             case .completed(let insertionResult, let viaIME):
                 let applied = insertionResult == .accepted
-                // The end bell means "your text landed" — accepted writes
-                // only. A refused write gets the notice and NO bell, so
-                // silence itself says check the screen.
-                if applied {
-                    RecordingCue.playEnd()
-                } else {
-                    flashInsertionUnavailableNotice()
-                }
+                if !applied { flashInsertionUnavailableNotice() }
                 let insertedTranscript = textInsertionSession?.insertedTranscript
                 if let evidenceID = recordCorrectionEvidenceIfEnabled(
                     enabled: shouldSaveCorrectionEvidence,

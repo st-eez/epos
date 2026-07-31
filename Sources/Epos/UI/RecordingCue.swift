@@ -4,8 +4,8 @@ import AppKit
 /// START — E4 (the tonic of the user's reference track) with the minor third
 /// glowing inside the strike: "mic is hot".
 /// END — B3, the fifth below, shorter and quieter, with the E above as a
-/// faint partial: "your text landed". It plays only on an ACCEPTED write, so
-/// silence after a dictation is itself a signal to check the screen.
+/// faint partial: "recording closed", played at fn release — symmetric and
+/// immediate. Delivery failures stay visual (the red notice).
 /// Both are synthesized at first use into in-memory WAVs (no bundled asset).
 /// Fire and forget: a failed synthesis means silence, never a failed start.
 @MainActor
