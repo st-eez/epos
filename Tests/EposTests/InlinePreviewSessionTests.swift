@@ -743,6 +743,44 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertFalse(coordinator.edgeGlowVisible)
     }
 
+    /// Toggling the glow off mid-recording must hand off to the pill (a hot
+    /// mic with no cue at all is the failure the glow exists to prevent), and
+    /// re-enabling must relight it (codex review, blocking).
+    @MainActor
+    func testTogglingGlowMidRecordingHandsOffToPillAndBack() async throws {
+        let suiteName = "EposTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let coordinator = AppCoordinator(
+            textInsertion: SilentInsertionBackend(),
+            settings: Settings(),
+            settingsDefaults: defaults,
+            inlinePreviewEnabled: true,
+            autoStart: false
+        )
+        let transport = FakeInlinePreviewTransport()
+        guard let session = coordinator.makeInlinePreviewSession(
+            bundleIdentifier: Self.target,
+            transport: transport
+        ) else { return XCTFail("expected a preview session") }
+        coordinator.stageFinalizationSessions(inlinePreview: session, insertion: nil)
+        coordinator.state = .recording
+
+        coordinator.presentIndicatorForRecordingStart()
+        await session.begin()
+        await waitForMirroring(true, on: coordinator)
+        XCTAssertTrue(coordinator.edgeGlowVisible)
+
+        var style = coordinator.edgeGlowStyle
+        style.enabled = false
+        coordinator.setEdgeGlowStyle(style)
+        XCTAssertFalse(coordinator.edgeGlowVisible)
+
+        style.enabled = true
+        coordinator.setEdgeGlowStyle(style)
+        XCTAssertTrue(coordinator.edgeGlowVisible)
+    }
+
     /// Release ends the glow even when the channel stayed healthy throughout.
     @MainActor
     func testEdgeGlowEndsAtRelease() async {

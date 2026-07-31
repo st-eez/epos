@@ -27,7 +27,9 @@ final class RecordingEdgeGlowController {
     /// Builds the panel ahead of the first recording AND forces its first
     /// render pass (order front at alpha 0, out on the next runloop turn), so
     /// the flattened glow layer is already rasterized when fn goes down —
-    /// the first show pays only the fade.
+    /// the first show pays only the fade. Prewarm uses the current main
+    /// screen; a first show on a differently-sized display re-rasters once,
+    /// which the quarter-resolution layers make cheap.
     func prewarm() {
         guard IndicatorWindowPolicy.canPresentWindows else { return }
         let panel = ensurePanel()
@@ -55,6 +57,9 @@ final class RecordingEdgeGlowController {
         let panel = ensurePanel()
         visibilityGeneration += 1
         log.info("edge glow show")
+        // A fresh recording must not inherit the previous one's
+        // voice-brightened layer while the mic warms up.
+        model.amplitude = 0
         model.isShown = true
         panel.setFrame(frame, display: false)
         if !panel.isVisible { panel.alphaValue = 0 }
@@ -69,7 +74,6 @@ final class RecordingEdgeGlowController {
     func hide() {
         guard let panel, panel.isVisible else { return }
         visibilityGeneration += 1
-        model.isShown = false
         let generation = visibilityGeneration
         NSAnimationContext.runAnimationGroup { context in
             context.duration = Self.hideFadeDuration
@@ -79,6 +83,11 @@ final class RecordingEdgeGlowController {
             // AppKit invokes animation completions on the main thread.
             MainActor.assumeIsolated {
                 guard let self, self.visibilityGeneration == generation else { return }
+                // Stop the motion only once fully faded: resetting it at fade
+                // START snapped the palette while the panel was still near
+                // full opacity. A show() during the fade bumps the generation
+                // and keeps the motion running.
+                self.model.isShown = false
                 panel.orderOut(nil)
             }
         }

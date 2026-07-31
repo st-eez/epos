@@ -61,6 +61,9 @@ public final class AppCoordinator: ObservableObject {
     /// Distributed-notification tokens for the debug dictation trigger.
     private var debugTriggerObservers: [NSObjectProtocol] = []
 
+    /// Where setting mutations persist; injectable so tests never write the
+    /// user's real defaults.
+    private let settingsDefaults: UserDefaults
     private let hotkey: FnHotkey
     private let audio: AudioCapture
     private let transcriber: Transcriber
@@ -124,6 +127,7 @@ public final class AppCoordinator: ObservableObject {
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         insertionTargetObserverFactory: (@MainActor () -> any InsertionTargetObserver)? = nil,
         settings: Settings = Settings.load(),
+        settingsDefaults: UserDefaults = .standard,
         diagnostics: DiagnosticLogSink = .shared,
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
@@ -151,6 +155,7 @@ public final class AppCoordinator: ObservableObject {
             includeTranscriptText: includeTranscriptTextInDiagnostics ?? TranscriptDiagnosticTextPolicy.load()
         )
         self.settings = settings
+        self.settingsDefaults = settingsDefaults
         self.permissions = PermissionsGate()
         self.assets = AssetManager(locale: settings.locale)
         self.transcriber = Transcriber(locale: settings.locale)
@@ -174,7 +179,7 @@ public final class AppCoordinator: ObservableObject {
     public func setSaveAudioSamples(_ enabled: Bool) {
         guard settings.saveAudioSamples != enabled else { return }
         settings.saveAudioSamples = enabled
-        settings.save()
+        settings.save(to: settingsDefaults)
         log.info("audio sample capture \(enabled ? "enabled" : "disabled")")
     }
 
@@ -183,7 +188,7 @@ public final class AppCoordinator: ObservableObject {
     public func setSaveCorrectionEvidence(_ enabled: Bool) {
         guard settings.saveCorrectionEvidence != enabled else { return }
         settings.saveCorrectionEvidence = enabled
-        settings.save()
+        settings.save(to: settingsDefaults)
         log.info("correction evidence capture \(enabled ? "enabled" : "disabled")")
     }
 
@@ -192,12 +197,25 @@ public final class AppCoordinator: ObservableObject {
     public func setEdgeGlowStyle(_ style: EdgeGlowSettings) {
         guard settings.edgeGlow != style else { return }
         settings.edgeGlow = style
-        settings.save()
+        settings.save(to: settingsDefaults)
         edgeGlow.apply(style)
         if style.enabled {
             edgeGlow.prewarm()
+            // Enabled mid-recording with the channel live: light it now, and
+            // the pill (if it was the indicator) yields as usual.
+            if state == .recording, inlinePreviewMirroring {
+                showEdgeGlow()
+                indicator.hide()
+            }
         } else {
+            // Disabled mid-recording: the pill must take over — hiding the
+            // glow alone would leave a hot mic with no cue at all until
+            // release (codex review, blocking).
+            let handOffToPill = edgeGlowVisible && state == .recording
             hideEdgeGlow()
+            if handOffToPill {
+                presentBottomCenterPill()
+            }
         }
     }
 
@@ -227,7 +245,7 @@ public final class AppCoordinator: ObservableObject {
                 try SMAppService.mainApp.unregister()
             }
             settings.launchAtLogin = enabled
-            settings.save()
+            settings.save(to: settingsDefaults)
             log.info("launch-at-login \(enabled ? "enabled" : "disabled")")
         } catch {
             log.error("launch-at-login toggle failed: \(String(describing: error))")
@@ -470,7 +488,11 @@ public final class AppCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard let self, self.state == .recording else { return }
                     self.amplitude = amp
-                    self.edgeGlow.updateAmplitude(amp)
+                    // Only while the glow is actually up: a retired glow's
+                    // hidden view has no business animating per buffer.
+                    if self.edgeGlowVisible {
+                        self.edgeGlow.updateAmplitude(amp)
+                    }
                 }
             }
             if shouldSaveAudioSamples {
