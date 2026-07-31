@@ -78,10 +78,13 @@ struct RecordingIndicatorSurface: View {
             .padding(.vertical, 10)
             .glassEffect(.regular, in: .rect(cornerRadius: 20))
         } else {
+            // Clear glass, not regular: the cue capsule floats over arbitrary
+            // app content, and regular glass over dark windows collapses into
+            // a flat smoked pill with no visible refraction.
             statusRow
                 .padding(.horizontal, 14)
                 .padding(.vertical, 9)
-                .glassEffect(.regular, in: Capsule())
+                .glassEffect(.clear, in: Capsule())
         }
     }
 
