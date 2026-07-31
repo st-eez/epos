@@ -15,8 +15,9 @@ final class RecordingEdgeGlowController {
     private var visibilityGeneration = 0
     private let log = EposLogger(category: "indicator")
 
-    private static let showFadeDuration: TimeInterval = 0.15
-    private static let hideFadeDuration: TimeInterval = 0.4
+    /// Slow enough to read as a bloom, not a pop.
+    private static let showFadeDuration: TimeInterval = 0.55
+    private static let hideFadeDuration: TimeInterval = 0.5
 
     /// Builds the panel ahead of the first recording AND forces its first
     /// render pass (order front at alpha 0, out on the next runloop turn), so
@@ -117,6 +118,7 @@ final class RecordingEdgeGlowModel: ObservableObject {
 struct RecordingEdgeGlowView: View {
     @ObservedObject var model: RecordingEdgeGlowModel
     @State private var breathingDim = false
+    @State private var hueDrifted = false
 
     private static let gradient = AngularGradient(
         colors: [
@@ -132,9 +134,14 @@ struct RecordingEdgeGlowView: View {
         // Same perceptual mapping as the pill's meter bars.
         let level = pow(min(1, max(0, Double(model.amplitude) / 0.075)), 0.55)
         ZStack {
-            // The calm breath: starts BRIGHT (the ignition) and eases into
-            // the dim-bright cycle.
-            glow.opacity(breathingDim ? 0.35 : 0.72)
+            // The calm breath, with a slow hue drift riding on it: the colors
+            // wander gently around the perimeter so the glow never reads as a
+            // static sticker. The two cycles are deliberately non-harmonic
+            // (2.7s vs 6.8s), so the combined motion takes a long time to
+            // visibly repeat.
+            glow
+                .opacity(breathingDim ? 0.34 : 0.66)
+                .hueRotation(.degrees(hueDrifted ? 16 : -6))
             // The voice: brightens the same shape as you speak.
             glow.opacity(0.55 * level)
                 .animation(.easeOut(duration: 0.08), value: model.amplitude)
@@ -142,8 +149,11 @@ struct RecordingEdgeGlowView: View {
         .allowsHitTesting(false)
         .ignoresSafeArea()
         .onAppear {
-            withAnimation(.easeInOut(duration: 1.7).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 2.7).repeatForever(autoreverses: true)) {
                 breathingDim = true
+            }
+            withAnimation(.easeInOut(duration: 6.8).repeatForever(autoreverses: true)) {
+                hueDrifted = true
             }
         }
     }
