@@ -637,13 +637,50 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertEqual(coordinator.hudTranscriptPreview, "hello")
     }
 
-    // MARK: - Edge glow rhythm
+    // MARK: - Edge glow lifetime
 
-    /// Native dictation's rhythm on the glow: edges lit before any text,
-    /// faded the moment the transcript stream is active, back after a real
-    /// pause, gone at release.
+    /// The glow frames the WHOLE held dictation: on through streaming (unlike
+    /// the pill it occludes nothing), out at release, and it retires the
+    /// moment the preview channel it advertises degrades.
     @MainActor
-    func testEdgeGlowShowsBeforeTextHidesOnActivityAndReturnsAfterSilence() async {
+    func testEdgeGlowPersistsThroughStreamingEndsAtReleaseAndOnDegrade() async {
+        let coordinator = AppCoordinator(
+            textInsertion: SilentInsertionBackend(),
+            settings: Settings(),
+            inlinePreviewEnabled: true,
+            autoStart: false
+        )
+        let transport = FakeInlinePreviewTransport(failMarksAfter: 1)
+        guard let session = coordinator.makeInlinePreviewSession(
+            bundleIdentifier: Self.target,
+            transport: transport
+        ) else { return XCTFail("expected a preview session") }
+        coordinator.stageFinalizationSessions(inlinePreview: session, insertion: nil)
+        coordinator.state = .recording
+
+        await session.begin()
+        await waitForMirroring(true, on: coordinator)
+        // The glow is coordinator-driven at fn press; here (staged, no
+        // startRecording) mirroring is live and the glow can be lit directly
+        // through the presentation path the coordinator uses.
+        coordinator.presentIndicatorForRecordingStart()
+        XCTAssertTrue(coordinator.edgeGlowVisible)
+
+        // Streaming text does NOT hide the glow.
+        coordinator.handlePartialTranscript("hello")
+        await Self.waitUntil { await session.report().marksSent == 1 }
+        XCTAssertTrue(coordinator.edgeGlowVisible)
+
+        // A degrade retires the glow with the channel it advertises.
+        coordinator.handlePartialTranscript("hello again")
+        await Self.waitUntil { await session.report().failure == "markFailed" }
+        await waitForMirroring(false, on: coordinator)
+        XCTAssertFalse(coordinator.edgeGlowVisible)
+    }
+
+    /// Release ends the glow even when the channel stayed healthy throughout.
+    @MainActor
+    func testEdgeGlowEndsAtRelease() async {
         let coordinator = AppCoordinator(
             textInsertion: SilentInsertionBackend(),
             settings: Settings(),
@@ -660,19 +697,9 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         await session.begin()
         await waitForMirroring(true, on: coordinator)
-        // Mirroring activation (begin ack) lights the glow as the recording's
-        // first indicator, before any text or pill.
-        await Self.waitUntil { await MainActor.run { coordinator.edgeGlowVisible } }
+        coordinator.presentIndicatorForRecordingStart()
+        XCTAssertTrue(coordinator.edgeGlowVisible)
 
-        // The stream turns active: the glow fades while text flows.
-        coordinator.handlePartialTranscript("hello")
-        XCTAssertFalse(coordinator.edgeGlowVisible)
-
-        // A real pause (glowQuietDelay with no transcript events): the glow
-        // breathes back in.
-        await Self.waitUntil { await MainActor.run { coordinator.edgeGlowVisible } }
-
-        // Release ends the rhythm.
         coordinator.finishRecording()
         XCTAssertFalse(coordinator.edgeGlowVisible)
     }

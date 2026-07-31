@@ -1,20 +1,31 @@
 import AppKit
 import SwiftUI
 
-/// Full-screen, click-through panel that breathes a soft teal glow along the
-/// screen edges while dictation is live but no text is streaming — the
-/// Siri/Apple-Intelligence cue vocabulary, in Epos's palette. Needs no caret
-/// or field geometry, so there is nothing to misplace in AX-opaque targets:
-/// the whole screen is the indicator.
+/// Full-screen, click-through panel that glows softly along the screen edges
+/// for the whole dictation — the Siri/Apple-Intelligence cue vocabulary, in
+/// Epos's palette. Unlike the pill, it never hides while text streams: it is
+/// peripheral, occludes nothing, and doubles as an honest "mic is hot" frame.
+/// The glow brightens with the live mic level, so speaking visibly feeds it.
 @MainActor
 final class RecordingEdgeGlowController {
+    private let model = RecordingEdgeGlowModel()
     private var panel: NSPanel?
     /// Bumped on every show/hide so a hide fade that finishes after a newer
     /// show can never order out the re-shown panel.
     private var visibilityGeneration = 0
 
-    private static let showFadeDuration: TimeInterval = 0.3
+    private static let showFadeDuration: TimeInterval = 0.15
     private static let hideFadeDuration: TimeInterval = 0.4
+
+    /// Builds the panel ahead of the first recording so the first show pays
+    /// no construction cost.
+    func prewarm() {
+        _ = ensurePanel()
+    }
+
+    func updateAmplitude(_ amplitude: Float) {
+        model.amplitude = amplitude
+    }
 
     /// Covers the active screen (the one with the focused window) and fades in.
     func show() {
@@ -67,7 +78,7 @@ final class RecordingEdgeGlowController {
         panel.isOpaque = false
         panel.hasShadow = false
         panel.ignoresMouseEvents = true
-        let host = NSHostingView(rootView: RecordingEdgeGlowView())
+        let host = NSHostingView(rootView: RecordingEdgeGlowView(model: model))
         host.autoresizingMask = [.width, .height]
         panel.contentView = host
         self.panel = panel
@@ -75,10 +86,19 @@ final class RecordingEdgeGlowController {
     }
 }
 
+/// Live mic level feeding the glow's brightness.
+@MainActor
+final class RecordingEdgeGlowModel: ObservableObject {
+    @Published var amplitude: Float = 0
+}
+
 /// The glow itself: two blurred strokes centered on the screen boundary (only
-/// their inner halves are visible), breathing slowly. Timeline-driven, so
-/// rendering pauses whenever the panel is ordered out.
+/// their inner halves are visible). A slow calm breath carries the idle
+/// brightness; the live mic level rides on top, so the edges answer your
+/// voice. Timeline-driven, so rendering pauses whenever the panel is hidden.
 struct RecordingEdgeGlowView: View {
+    @ObservedObject var model: RecordingEdgeGlowModel
+
     /// One full breath — dimmest to brightest and back.
     private static let breathPeriod: TimeInterval = 3.4
 
@@ -96,11 +116,15 @@ struct RecordingEdgeGlowView: View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
             let phase = context.date.timeIntervalSinceReferenceDate
                 * 2 * .pi / Self.breathPeriod
-            let breath = 0.62 + 0.38 * sin(phase)
+            let breath = 0.5 + 0.16 * sin(phase)
+            // Same perceptual mapping as the pill's meter bars.
+            let level = pow(min(1, max(0, Double(model.amplitude) / 0.075)), 0.55)
+            let intensity = min(1, breath + 0.5 * level)
             ZStack {
-                glowStroke(lineWidth: 44, blur: 34, opacity: 0.45 * breath)
-                glowStroke(lineWidth: 16, blur: 10, opacity: 0.6 * breath)
+                glowStroke(lineWidth: 44, blur: 34, opacity: 0.45 * intensity)
+                glowStroke(lineWidth: 16, blur: 10, opacity: 0.6 * intensity)
             }
+            .animation(.easeOut(duration: 0.08), value: model.amplitude)
         }
         .allowsHitTesting(false)
         .ignoresSafeArea()

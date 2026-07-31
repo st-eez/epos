@@ -48,25 +48,16 @@ public final class AppCoordinator: ObservableObject {
     /// restores today's HUD line exactly.
     public var hudTranscriptPreview: String { inlinePreviewMirroring ? "" : displayText }
 
-    /// True while the screen-edge glow is on screen (dictation live, no text
-    /// streaming). Internal so tests can pin the show/hide rhythm.
+    /// True while the screen-edge glow is on. The glow frames the WHOLE
+    /// dictation — lit at fn press, brightening with the voice, out at
+    /// release — unlike the pill it never hides while text streams (it is
+    /// peripheral and occludes nothing). Internal so tests can pin it.
     private(set) var edgeGlowVisible = false
-    /// True once this recording's indicator (glow or pill) has been shown.
-    /// With a preview session the presentation waits for the begin ack; this
-    /// flag keeps the deadline fallback from double-showing.
-    private var indicatorPresented = false
-    /// Pending "silence long enough, bring the glow back" timer.
-    private var quietGlowTask: Task<Void, Never>?
-    /// How long a recording may go with no indicator at all before the pill
-    /// presents anyway (probe dead, connect failure, begin refused — paths
-    /// that never activate mirroring). The healthy path activates within the
-    /// begin round-trip, a few milliseconds.
+    /// How long the preview channel may go unconfirmed before the pill
+    /// presents and the glow retires (probe dead, connect failure, begin
+    /// refused — paths that never activate mirroring). The healthy path
+    /// activates within the begin round-trip, a few milliseconds.
     static let indicatorFallbackDelay: Duration = .milliseconds(200)
-    /// Silence before the edge glow returns. The recognizer emits partials
-    /// at ~1s cadence while speech continues (transcript timing logs), so
-    /// anything at or under that flickers between partials; 1.6s means "the
-    /// stream actually paused".
-    static let glowQuietDelay: Duration = .milliseconds(1600)
     /// Distributed-notification tokens for the debug dictation trigger.
     private var debugTriggerObservers: [NSObjectProtocol] = []
 
@@ -247,6 +238,9 @@ public final class AppCoordinator: ObservableObject {
             log.error("bootstrap asset prepare failed: \(message)")
         }
         captureFormat = await transcriber.bestAudioFormat()
+        if inlinePreviewEnabled {
+            edgeGlow.prewarm()
+        }
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
         replayDeferredStartIfNeeded()
     }
@@ -403,10 +397,9 @@ public final class AppCoordinator: ObservableObject {
         currentReliabilityRecording?.markReleased()
         state = .finalizing
         finalizationPhase = .finalizingSpeech
-        // The glow rhythm ends at release: a glow up during a silence fades
-        // now (the committed text is the feedback). The non-mirroring pill
+        // The glow frames the held dictation only: it fades at release while
+        // the committed text becomes the feedback. The non-mirroring pill
         // stays, showing "Finishing"/"Updating" as it always has.
-        quietGlowTask?.cancel()
         hideEdgeGlow()
         // A preview that is actively marking at release stays alive through
         // recognizer finalization: the provisional text remains visible (no blank
@@ -459,6 +452,7 @@ public final class AppCoordinator: ObservableObject {
                 Task { @MainActor in
                     guard let self, self.state == .recording else { return }
                     self.amplitude = amp
+                    self.edgeGlow.updateAmplitude(amp)
                 }
             }
             if shouldSaveAudioSamples {
@@ -575,14 +569,12 @@ public final class AppCoordinator: ObservableObject {
 
     func handlePartialTranscript(_ text: String) {
         partial = text
-        noteTranscriptActivityForGlow()
         mirrorInlinePreview()
     }
 
     func handleFinalTranscriptSegment(_ text: String) {
         finalText += text
         partial = ""
-        noteTranscriptActivityForGlow()
         mirrorInlinePreview()
     }
 
@@ -632,32 +624,23 @@ public final class AppCoordinator: ObservableObject {
                     self.inlinePreviewMirroring = active
                     // A mid-recording degrade makes the HUD the only feedback
                     // again, so the pill comes back (with its transcript line,
-                    // in the same update) and the glow rhythm stops. At
-                    // finalize `finishInlinePreview` clears the flag with
-                    // state != .recording, skipping this. The activation
-                    // (begin acked, ms after start) shows the glow as the
-                    // recording's first indicator.
-                    if self.state == .recording {
-                        self.quietGlowTask?.cancel()
-                        if active {
-                            self.showEdgeGlow()
-                        } else {
-                            self.hideEdgeGlow()
-                            self.presentBottomCenterPill()
-                        }
+                    // in the same update) and the glow retires with the
+                    // channel it advertises. At finalize `finishInlinePreview`
+                    // clears the flag with state != .recording, skipping this.
+                    if self.state == .recording, !active {
+                        self.hideEdgeGlow()
+                        self.presentBottomCenterPill()
                     }
                 }
             },
             onFirstMarkRendered: { [weak self] in
                 Task { @MainActor in
                     guard let self, self.inlinePreviewGeneration == generation else { return }
-                    // The first letter just landed in the field: from here the
-                    // in-field provisional text IS the recording indicator,
-                    // exactly like native dictation. The glow only returns
-                    // during a silence, the pill only for a degrade (above)
-                    // or a failure notice flash.
+                    // The first letter just landed in the field: the fallback
+                    // pill (if the slow-begin path showed it) yields to the
+                    // in-field provisional text. The glow stays — it frames
+                    // the whole dictation.
                     guard self.state == .recording, self.inlinePreviewMirroring else { return }
-                    self.hideEdgeGlow()
                     self.indicator.hide()
                 }
             }
@@ -665,34 +648,35 @@ public final class AppCoordinator: ObservableObject {
     }
 
     /// With no preview session the pill shows immediately, exactly as it
-    /// always has. With one, nothing is shown yet: mirroring activates within
-    /// the begin round-trip (milliseconds) and the screen-edge glow is the
-    /// recording's first indicator — no pill cameo. The bounded fallback
-    /// presents the pill anyway when mirroring never activated in time, so
-    /// the user is never without an indicator past the deadline.
-    private func presentIndicatorForRecordingStart() {
-        indicatorPresented = false
-        quietGlowTask?.cancel()
+    /// always has. With one, the glow lights instantly at fn press — the
+    /// prewarmed panel makes this a fade, not a construction — and stays for
+    /// the whole dictation. If the preview channel never confirms within the
+    /// deadline, the glow retires and the pill takes over, so the user is
+    /// never left with a glow advertising a channel that is not streaming.
+    /// Internal so glow-lifetime tests can drive the presentation without a
+    /// live audio pipeline.
+    func presentIndicatorForRecordingStart() {
         guard inlinePreview != nil else {
             presentBottomCenterPill()
             return
         }
+        showEdgeGlow()
         let generation = inlinePreviewGeneration
         Task { [weak self] in
             try? await Task.sleep(for: Self.indicatorFallbackDelay)
             guard let self, self.inlinePreviewGeneration == generation,
-                  self.state == .recording, !self.indicatorPresented else { return }
+                  self.state == .recording, !self.inlinePreviewMirroring else { return }
+            self.hideEdgeGlow()
             self.presentBottomCenterPill()
         }
     }
 
     private func presentBottomCenterPill() {
-        indicatorPresented = true
         indicator.show()
     }
 
     private func showEdgeGlow() {
-        indicatorPresented = true
+        guard !edgeGlowVisible else { return }
         edgeGlowVisible = true
         edgeGlow.show()
     }
@@ -701,22 +685,6 @@ public final class AppCoordinator: ObservableObject {
         guard edgeGlowVisible else { return }
         edgeGlowVisible = false
         edgeGlow.hide()
-    }
-
-    /// The native dictation rhythm: the indicator is visible exactly when
-    /// dictation is live but no text is streaming. Every transcript event
-    /// fades the glow and re-arms the quiet timer; when the stream pauses
-    /// long enough, the glow breathes back in.
-    private func noteTranscriptActivityForGlow() {
-        guard state == .recording, inlinePreviewMirroring else { return }
-        quietGlowTask?.cancel()
-        hideEdgeGlow()
-        quietGlowTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.glowQuietDelay)
-            guard let self, !Task.isCancelled else { return }
-            guard self.state == .recording, self.inlinePreviewMirroring else { return }
-            self.showEdgeGlow()
-        }
     }
 
     /// Test staging: installs the per-recording sessions `startRecording` would
@@ -985,7 +953,7 @@ public final class AppCoordinator: ObservableObject {
         audio.onAmplitude = nil
         audio.onRawBuffer = nil
         await transcriber.finish()
-        quietGlowTask?.cancel()
+        hideEdgeGlow()
         if !insertionUnavailable { indicator.hide() }
         amplitude = 0
         partial = ""
