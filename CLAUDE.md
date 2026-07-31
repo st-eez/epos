@@ -176,7 +176,12 @@ as a background capture rig:
 | File | Role |
 |------|------|
 | `App/AppCoordinator.swift` | Recording state machine; wires audio → speech → insertion |
+| `App/StartReadinessProbe.swift` | Resolves (and re-resolves) grants + speech model + capture format |
+| `App/RecordingCuePresenter.swift` | Which cue is up: screen-edge glow, bottom-center pill, or neither |
+| `App/InlinePreviewCoordinator.swift` | One recording's inline-preview session: begin, mirror, discard |
+| `App/CorrectionEvidenceRecorder.swift` | Evidence row + post-insertion watch for the user's own edit |
 | `App/Settings.swift` | Persisted settings (`saveAudioSamples`, `saveCorrectionEvidence`, …) |
+| `App/AppCoordinatorSettings.swift` | The coordinator's settings facade the menu binds to |
 | `Hotkey/FnHotkey.swift` | fn-key push-to-talk monitor |
 | `Audio/AudioCapture.swift` | Mic capture + resample to 16 kHz mono |
 | `Audio/DogfoodTap.swift` | Per-recording WAVs for replay evals (Application Support) |

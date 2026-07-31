@@ -43,6 +43,28 @@ public enum StartBlocker: Equatable, Sendable {
         }
     }
 
+    /// The named reason a readiness resolution produced no capture format. The
+    /// model outranks the grants: a model that is merely still downloading must
+    /// never be reported as a permission problem.
+    public static func resolve(
+        assetStatus: AssetStatus,
+        grants: PermissionsSnapshot
+    ) -> StartBlocker {
+        switch assetStatus {
+        case .downloading:
+            return .speechModelInstalling
+        case .missing:
+            return .speechModelUnavailable("not installed")
+        case .failed(let message):
+            return .speechModelUnavailable(message)
+        case .ready, .reserved:
+            break
+        }
+        if grants.speech != .granted { return .speechDenied }
+        if grants.microphone != .granted { return .microphoneDenied }
+        return .speechEngineUnavailable
+    }
+
     /// Diagnostic-log detail.
     public var logDescription: String {
         switch self {

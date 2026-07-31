@@ -1,6 +1,5 @@
 import AVFoundation
 import Foundation
-import ServiceManagement
 import SwiftUI
 
 public enum CoordinatorState: Equatable {
@@ -17,6 +16,13 @@ public enum FinalizationPhase: Equatable {
     case inserting
 }
 
+/// Owns the recording state machine: what a fn press and a fn release do, and one
+/// dictation's flow from mic open through recognition and assembly to the single
+/// authoritative final write.
+///
+/// Everything the UI observes lives here as published state; the subsystems it
+/// drives — readiness resolution, the on-screen cue, the inline preview, and
+/// correction-evidence capture — are collaborators it delegates to.
 @MainActor
 public final class AppCoordinator: ObservableObject {
     /// `internal(set)` (not `private(set)`) only so latch tests can stage the
@@ -66,18 +72,8 @@ public final class AppCoordinator: ObservableObject {
     /// restores today's HUD line exactly.
     public var hudTranscriptPreview: String { inlinePreviewMirroring ? "" : displayText }
 
-    /// True while the screen-edge glow is on. The glow frames the WHOLE
-    /// dictation — lit at fn press, brightening with the voice, out at
-    /// release — unlike the pill it never hides while text streams (it is
-    /// peripheral and occludes nothing). Internal so tests can pin it.
-    private(set) var edgeGlowVisible = false
-    /// How long the preview channel may go unconfirmed before the pill
-    /// presents and the glow retires (probe dead, connect failure, begin
-    /// refused — paths that never activate mirroring). The healthy path
-    /// activates within the begin round-trip, a few milliseconds.
-    static let indicatorFallbackDelay: Duration = .milliseconds(200)
-    /// Distributed-notification tokens for the debug dictation trigger.
-    private var debugTriggerObservers: [NSObjectProtocol] = []
+    /// True while the screen-edge glow is on. Internal so tests can pin it.
+    var edgeGlowVisible: Bool { cues.edgeGlowVisible }
 
     /// Where setting mutations persist; injectable so tests never write the
     /// user's real defaults.
@@ -87,24 +83,77 @@ public final class AppCoordinator: ObservableObject {
     private let transcriber: any SpeechTranscribing
     private let textInsertion: TextInsertionBackend
     private let insertionTargetObserverFactory: @MainActor () -> any InsertionTargetObserver
-    private let permissions: PermissionsGate
-    private let assets: AssetManager
-    /// Bounded re-read of the speech asset for the readiness re-check; injectable
-    /// so the recovery path is testable without the Speech framework's inventory.
-    private let refreshSpeechAsset: @Sendable () async -> AssetStatus
     private let recordingIDGenerator: @Sendable () -> String
     private let reliabilityDiagnostics: DiagnosticLogSink
     public static let defaultObservedEditCaptureDelays: [TimeInterval] = [2, 6, 12, 15]
-    private let observedEditCaptureDelays: [TimeInterval]
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
     /// editor mutates the same instance (the app hands the editor `coordinator.corrections`).
     public let corrections = CorrectionStore()
     public let correctionEvidence: CorrectionEvidenceStore
     // Opt-in `.wav` capture for local eval material. Disabled by default.
     private let dogfood = DogfoodTap()
-    private let log: EposLogger
+    /// Internal, not private, only so the settings facade in
+    /// `AppCoordinatorSettings.swift` can log its own writes.
+    let log: EposLogger
     private let injectLog: EposLogger
     private var transcriptTiming: TranscriptTimingDiagnostics
+
+    // MARK: - Collaborators
+    //
+    // All lazy because each is handed a callback into this coordinator, which
+    // cannot be captured until `init` has finished.
+
+    /// Resolves — and re-resolves after launch — whether the speech pipeline can
+    /// open a dictation at all.
+    private lazy var readinessProbe = StartReadinessProbe(
+        permissions: permissions,
+        assets: assets,
+        transcriber: transcriber,
+        refreshSpeechAsset: refreshSpeechAsset,
+        log: log,
+        onGrantsObserved: { [weak self] grants in
+            self?.reinstallHotkeyMonitorIfAccessibilityTrustArrived(grants.accessibility)
+        }
+    )
+    /// The on-screen cue for a dictation: glow, pill, or neither.
+    private lazy var cues = RecordingCuePresenter { [unowned self] in
+        RecordingIndicator(coordinator: self)
+    }
+    /// One recording's inline-preview session.
+    private lazy var preview = InlinePreviewCoordinator(
+        isEnabled: { [weak self] in self?.inlinePreviewEnabled ?? false },
+        log: injectLog,
+        onMarkingActivityChange: { [weak self] active in
+            self?.inlinePreviewMirroringDidChange(active)
+        },
+        onFirstMarkRendered: { [weak self] in
+            // The first letter just landed in the field: the fallback pill (if the
+            // slow-begin path showed it) yields to the in-field provisional text.
+            // The glow stays — it frames the whole dictation.
+            guard let self, self.state == .recording, self.inlinePreviewMirroring else { return }
+            self.cues.hidePill()
+        }
+    )
+    /// Correction evidence for the dictation just written, and the post-insertion
+    /// watch for the user's own edit of it. Internal so evidence tests can drive it
+    /// without a live recording.
+    lazy var evidenceRecorder = CorrectionEvidenceRecorder(
+        corrections: corrections,
+        evidence: correctionEvidence,
+        captureDelays: observedEditCaptureDelays,
+        currentRecordingID: { [weak self] in self?.currentRecordingID }
+    )
+
+    // Held only to build `readinessProbe`, which owns them from then on.
+    private let permissions: PermissionsGate
+    private let assets: AssetManager
+    private let refreshSpeechAsset: @Sendable () async -> AssetStatus
+    private let observedEditCaptureDelays: [TimeInterval]
+
+    /// Distributed-notification tokens for the debug dictation trigger.
+    private var debugTriggerObservers: [NSObjectProtocol] = []
+
+    // MARK: - Per-recording state
 
     /// Internal so tests can await one recording's full finalize.
     var transcriptionTask: Task<Void, Never>?
@@ -118,7 +167,6 @@ public final class AppCoordinator: ObservableObject {
     /// Cached at bootstrap; nil until then. Internal so latch tests can install one.
     var captureFormat: AVAudioFormat?
     private var textInsertionSession: FinalTranscriptInsertionSession?
-    private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
     private var currentReliabilityRecording: ReliabilityRecording?
     /// Mirrors the volatile transcript into the fn-press field as input-method
@@ -127,11 +175,9 @@ public final class AppCoordinator: ObservableObject {
     /// value; the app follows the live setting per recording.
     var inlinePreviewEnabled: Bool { inlinePreviewOverride ?? settings.inlinePreview }
     private let inlinePreviewOverride: Bool?
-    private var inlinePreview: InlinePreviewSession?
-    private var inlinePreviewDiscard: Task<Void, Never>?
-    /// Monotonic token so a stale session's marking-activity callback can never
-    /// flip the HUD suppression of a later recording.
-    private var inlinePreviewGeneration = 0
+
+    // MARK: - Start readiness
+
     /// Single deferred-start latch, set when a press arrives while `startRecording`
     /// cannot run it yet: the finalize window (state != .idle) or the launch
     /// window before `bootstrap()` cached `captureFormat`. The key stays down, so the
@@ -168,12 +214,6 @@ public final class AppCoordinator: ObservableObject {
     /// first AX prompt is inert until it is reinstalled.
     private var monitorInstalledUnderTrust: PermissionStatus?
     private var didBindHotkey = false
-    private lazy var indicator: RecordingIndicatorController = {
-        let controller = RecordingIndicatorController()
-        controller.attach(content: RecordingIndicator(coordinator: self))
-        return controller
-    }()
-    private lazy var edgeGlow = RecordingEdgeGlowController()
 
     public init(
         hotkey: FnHotkey = FnHotkey(),
@@ -238,66 +278,6 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// Identifier of the locale this coordinator was configured with. Read-only —
-    /// changing locales mid-session is post-baseline.
-    public var localeIdentifier: String { settings.localeIdentifier }
-
-    public var saveAudioSamples: Bool { settings.saveAudioSamples }
-
-    public func setSaveAudioSamples(_ enabled: Bool) {
-        guard settings.saveAudioSamples != enabled else { return }
-        settings.saveAudioSamples = enabled
-        settings.save(to: settingsDefaults)
-        log.info("audio sample capture \(enabled ? "enabled" : "disabled")")
-    }
-
-    public var saveCorrectionEvidence: Bool { settings.saveCorrectionEvidence }
-
-    public var inlinePreviewSetting: Bool { settings.inlinePreview }
-
-    public func setInlinePreview(_ enabled: Bool) {
-        guard settings.inlinePreview != enabled else { return }
-        settings.inlinePreview = enabled
-        settings.save(to: settingsDefaults)
-    }
-
-    public func setSaveCorrectionEvidence(_ enabled: Bool) {
-        guard settings.saveCorrectionEvidence != enabled else { return }
-        settings.saveCorrectionEvidence = enabled
-        settings.save(to: settingsDefaults)
-        log.info("correction evidence capture \(enabled ? "enabled" : "disabled")")
-    }
-
-    public var edgeGlowStyle: EdgeGlowSettings { settings.edgeGlow }
-
-    public func setEdgeGlowStyle(_ style: EdgeGlowSettings) {
-        guard settings.edgeGlow != style else { return }
-        settings.edgeGlow = style
-        settings.save(to: settingsDefaults)
-        edgeGlow.apply(style)
-        if style.enabled {
-            edgeGlow.prewarm()
-            // Enabled mid-recording: light it now, and the pill (if it was the
-            // indicator) yields as usual.
-            if glowOwnsCurrentRecording {
-                showEdgeGlow()
-                // The pill yields only while the preview mirrors the same text
-                // into the field; otherwise it is the only view of the volatile
-                // transcript and has to stay.
-                if inlinePreviewMirroring { indicator.hide() }
-            }
-        } else {
-            // Disabled mid-recording: the pill must take over — hiding the
-            // glow alone would leave a hot mic with no cue at all until
-            // release (codex review, blocking).
-            let handOffToPill = edgeGlowVisible && state == .recording
-            hideEdgeGlow()
-            if handOffToPill {
-                presentBottomCenterPill()
-            }
-        }
-    }
-
     /// The authoritative final-transcript transform, built once per recording so a
     /// mid-session correction-rule edit cannot alter the finalization behavior of an
     /// already-running dictation. The same closure is held as `activeTranscriptCleaner`
@@ -312,44 +292,12 @@ public final class AppCoordinator: ObservableObject {
         ["Epos"] + corrections.canonicalizer.speechContextualStrings
     }
 
-    /// Live launch-at-login state from the system — the source of truth, which the user
-    /// can also change in System Settings — not the cached `settings` copy.
-    public var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }
-
-    /// Applies the login-item change and returns the state that actually holds
-    /// afterwards, which is what the caller's toggle must show. A failed register
-    /// leaves the app unregistered; a toggle that kept the user's chosen value
-    /// would go on claiming a login item that does not exist.
-    @discardableResult
-    public func setLaunchAtLogin(_ enabled: Bool) -> Bool {
-        do {
-            if enabled {
-                try SMAppService.mainApp.register()
-            } else {
-                try SMAppService.mainApp.unregister()
-            }
-            settings.launchAtLogin = enabled
-            settings.save(to: settingsDefaults)
-            log.info("launch-at-login \(enabled ? "enabled" : "disabled")")
-            return enabled
-        } catch {
-            log.error("launch-at-login toggle failed: \(String(describing: error))")
-            // The live system status, not the requested value: the request failed,
-            // and on failure that status is the only thing that knows the truth.
-            return launchAtLogin
-        }
-    }
+    // MARK: - Start readiness
 
     /// Synchronous read of current permission grants (no prompts).
     /// Used by MenuBarView to surface a warning row when something isn't granted.
-    ///
-    /// Every permission read in the app funnels through here so an Accessibility
-    /// grant made after launch is noticed exactly once, at no extra cost and with
-    /// no polling of its own.
     public func snapshotPermissions() -> PermissionsSnapshot {
-        let snapshot = permissions.snapshot()
-        reinstallHotkeyMonitorIfAccessibilityTrustArrived(snapshot.accessibility)
-        return snapshot
+        readinessProbe.snapshotPermissions()
     }
 
     /// Whether a fn press can open a dictation right now, and if not, why.
@@ -363,34 +311,18 @@ public final class AppCoordinator: ObservableObject {
     /// and cache the analyzer's preferred audio format. Safe to call repeatedly;
     /// downstream calls are idempotent.
     ///
-    /// One-shot because its TCC prompts are. Everything after them —
-    /// `resolveStartReadiness()` — is re-checkable, and has to be: a launch that
-    /// finds the model still installing (or a grant that arrives afterwards in
-    /// System Settings) used to leave `captureFormat` nil until the next relaunch.
+    /// One-shot because its TCC prompts are. Everything after them — the readiness
+    /// resolution itself — is re-checkable, and has to be: a launch that finds the
+    /// model still installing (or a grant that arrives afterwards in System
+    /// Settings) used to leave `captureFormat` nil until the next relaunch.
     public func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
         log.info("bootstrap begin")
-        let grants = await permissions.requestAll()
-        reinstallHotkeyMonitorIfAccessibilityTrustArrived(grants.accessibility)
-        // Anything short of an installed, reserved model is a reason the pipeline may
-        // have no capture format. Naming it here is what keeps a dropped press from
-        // blaming permissions for a model that is merely still downloading.
-        let assetStatus = await assets.prepare()
-        switch assetStatus {
-        case .ready, .reserved:
-            break
-        case .failed(let message):
-            log.error("bootstrap asset prepare failed: \(message)")
-        case .downloading:
-            log.info("bootstrap: speech model still downloading")
-        case .missing:
-            log.error("bootstrap: speech model not installed")
-        }
-        await resolveStartReadiness(assetStatus: assetStatus, grants: grants)
+        apply(await readinessProbe.resolveAtLaunch())
         if settings.edgeGlow.enabled {
-            edgeGlow.apply(settings.edgeGlow)
-            edgeGlow.prewarm()
+            cues.applyEdgeGlowStyle(settings.edgeGlow)
+            cues.prewarmEdgeGlow()
         }
         didCompleteBootstrap = true
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
@@ -408,11 +340,7 @@ public final class AppCoordinator: ObservableObject {
         if let readinessRefreshTask { return readinessRefreshTask }
         let task = Task { [weak self] in
             guard let self else { return }
-            let assetStatus = await self.refreshSpeechAsset()
-            await self.resolveStartReadiness(
-                assetStatus: assetStatus,
-                grants: self.snapshotPermissions()
-            )
+            self.apply(await self.readinessProbe.resolveAgain())
             self.readinessRefreshTask = nil
             self.log.info(
                 "readiness re-check: \(self.startBlocker?.logDescription ?? "capture format available")"
@@ -422,36 +350,9 @@ public final class AppCoordinator: ObservableObject {
         return task
     }
 
-    private func resolveStartReadiness(
-        assetStatus: AssetStatus,
-        grants: PermissionsSnapshot
-    ) async {
-        captureFormat = await transcriber.bestAudioFormat()
-        startBlocker = captureFormat == nil
-            ? Self.startBlocker(assetStatus: assetStatus, grants: grants)
-            : nil
-    }
-
-    /// The named reason a readiness resolution produced no capture format. The
-    /// model outranks the grants: a model that is merely still downloading must
-    /// never be reported as a permission problem.
-    static func startBlocker(
-        assetStatus: AssetStatus,
-        grants: PermissionsSnapshot
-    ) -> StartBlocker {
-        switch assetStatus {
-        case .downloading:
-            return .speechModelInstalling
-        case .missing:
-            return .speechModelUnavailable("not installed")
-        case .failed(let message):
-            return .speechModelUnavailable(message)
-        case .ready, .reserved:
-            break
-        }
-        if grants.speech != .granted { return .speechDenied }
-        if grants.microphone != .granted { return .microphoneDenied }
-        return .speechEngineUnavailable
+    private func apply(_ resolution: StartReadinessResolution) {
+        captureFormat = resolution.captureFormat
+        startBlocker = resolution.blocker
     }
 
     /// Reinstall the fn monitor the first time a grant is observed to have arrived
@@ -470,6 +371,8 @@ public final class AppCoordinator: ObservableObject {
         hotkey.start()
         monitorInstalledUnderTrust = .granted
     }
+
+    // MARK: - Deferred-start latch
 
     /// Replay a latched press at the transition that unblocked it (bootstrap
     /// completion or `.finalizing → .idle`), consuming the latch exactly once.
@@ -529,6 +432,8 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
+    // MARK: - Pill notices
+
     /// How long one of the pill's red notices stays up. Long enough to read a
     /// two-word label after the user's attention has returned to their own text.
     static let noticeFlashDuration: Duration = .milliseconds(2_500)
@@ -538,12 +443,12 @@ public final class AppCoordinator: ObservableObject {
     /// identically; only which flag the indicator reads differs.
     private func flashNotice(_ notice: ReferenceWritableKeyPath<AppCoordinator, Bool>) {
         self[keyPath: notice] = true
-        indicator.show()
+        cues.showPill()
         Task { [weak self] in
             try? await Task.sleep(for: Self.noticeFlashDuration)
             guard let self, self[keyPath: notice] else { return }
             self[keyPath: notice] = false
-            if self.state == .idle { self.indicator.hide() }
+            if self.state == .idle { self.cues.hidePill() }
         }
     }
 
@@ -577,6 +482,8 @@ public final class AppCoordinator: ObservableObject {
         flashNotice(\.recognitionUnavailable)
     }
 
+    // MARK: - Input wiring
+
     /// Internal so the monitor-reinstall behavior can be driven without the
     /// autoStart path, which also runs the real permission prompts.
     func bindHotkey() {
@@ -587,34 +494,18 @@ public final class AppCoordinator: ObservableObject {
         // The trust the monitor just went in under. On a fresh install this is
         // `.denied` — the AX prompt has not been answered yet — and the monitor
         // macOS hands back is inert until the grant arrives and it is reinstalled.
-        monitorInstalledUnderTrust = permissions.snapshot().accessibility
+        monitorInstalledUnderTrust = readinessProbe.currentGrants().accessibility
     }
 
-    /// Dogfood remote control: distributed notifications drive the REAL
-    /// `startRecording`/`finishRecording`, exactly as the fn key would. Armed
-    /// only under `EPOS_DEBUG_DICTATION_TRIGGER=1`; tokens are retained for the
-    /// coordinator's (= the app's) lifetime.
     private func bindDebugDictationTriggerIfEnabled() {
-        guard DebugDictationTriggerPolicy.load() else { return }
-        let center = DistributedNotificationCenter.default()
-        debugTriggerObservers = [
-            center.addObserver(
-                forName: DebugDictationTriggerPolicy.startNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.startRecording() }
-            },
-            center.addObserver(
-                forName: DebugDictationTriggerPolicy.finishNotification,
-                object: nil,
-                queue: .main
-            ) { [weak self] _ in
-                MainActor.assumeIsolated { self?.finishRecording() }
-            },
-        ]
-        log.info("debug dictation trigger armed")
+        debugTriggerObservers = armDebugDictationTrigger(
+            log: log,
+            onStart: { [weak self] in self?.startRecording() },
+            onFinish: { [weak self] in self?.finishRecording() }
+        )
     }
+
+    // MARK: - Recording lifecycle
 
     public func startRecording() {
         guard state == .idle else {
@@ -645,7 +536,7 @@ public final class AppCoordinator: ObservableObject {
         // transcript as a user edit. Burst dictation therefore under-collects
         // correction evidence by design — precision over recall; extending capture
         // past this point would record unrelated typing as an "edit".
-        cancelObservedEditCaptureChecks()
+        evidenceRecorder.cancelObservedEditCaptureChecks()
         state = .recording
         let recordingID = recordingIDGenerator()
         currentRecordingID = recordingID
@@ -728,11 +619,7 @@ public final class AppCoordinator: ObservableObject {
             Task { @MainActor in
                 guard let self, self.state == .recording else { return }
                 self.amplitude = amp
-                // Only while the glow is actually up: a retired glow's
-                // hidden view has no business animating per buffer.
-                if self.edgeGlowVisible {
-                    self.edgeGlow.updateAmplitude(amp)
-                }
+                self.cues.updateEdgeGlowAmplitude(amp)
             }
         }
         audio.onRawBuffer = settings.saveAudioSamples
@@ -756,7 +643,7 @@ public final class AppCoordinator: ObservableObject {
         reliability.emit(.setupFailed)
         currentReliabilityRecording = nil
         clearAudioCallbacks()
-        hideEdgeGlow()
+        cues.hideEdgeGlow()
         amplitude = 0
         log.info("recording done (finalChars=0 failed=true)")
         returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: recordingID)
@@ -804,7 +691,7 @@ public final class AppCoordinator: ObservableObject {
         // The glow frames the held dictation only: it fades at release while
         // the committed text becomes the feedback. The non-mirroring pill
         // stays, showing "Finishing"/"Updating" as it always has.
-        hideEdgeGlow()
+        cues.hideEdgeGlow()
         // A preview that is actively marking at release stays alive through
         // recognizer finalization: the provisional text remains visible (no blank
         // gap) and the final-commit router owns the lifecycle from here (acked
@@ -815,7 +702,7 @@ public final class AppCoordinator: ObservableObject {
         // finalization. If the preview degrades after this check, the router
         // finds it ineligible and its fallback discards before any keystroke.
         if !inlinePreviewMirroring {
-            startInlinePreviewDiscard()
+            preview.startDiscard()
         }
         log.info("recording finalize")
         audio.stop()
@@ -919,68 +806,13 @@ public final class AppCoordinator: ObservableObject {
 
         if hasTranscribedText {
             finalizationPhase = .inserting
-            switch await commitFinalTranscript(finalTranscript) {
-            case .completed(let insertionResult, let viaIME):
-                let applied = insertionResult == .accepted
-                if !applied {
-                    // A refusal caused by revoked Accessibility is not the user
-                    // having clicked away, and "Not inserted" would send them
-                    // looking for the wrong thing.
-                    flashInsertionUnavailableNotice(
-                        insertionResult == .accessibilityUntrusted
-                            ? "No access"
-                            : Self.defaultInsertionNotice
-                    )
-                }
-                let insertedTranscript = textInsertionSession?.insertedTranscript
-                if let evidenceID = recordCorrectionEvidenceIfEnabled(
-                    enabled: shouldSaveCorrectionEvidence,
-                    rawTranscript: finalText,
-                    finalTranscript: finalTranscript,
-                    applied: applied,
-                    finalInsertedTranscript: insertedTranscript == finalTranscript ? insertedTranscript : nil,
-                    recordingID: sessionRecordingID,
-                    session: textInsertionSession
-                ) {
-                    if let finalInsertedTranscript = correctionEvidence.evidence.last(
-                        where: { $0.id == evidenceID }
-                    )?.finalInsertedTranscript {
-                        scheduleObservedUserEditCapture(
-                            evidenceID: evidenceID,
-                            finalInsertedTranscript: finalInsertedTranscript,
-                            session: textInsertionSession
-                        )
-                    }
-                }
-                emitFinalReliabilityOutcome(
-                    reliability: reliability,
-                    recognizerFailed: recognizerFailed,
-                    insertionResult: insertionResult,
-                    transcript: finalTranscript,
-                    session: textInsertionSession,
-                    viaIMECommit: viaIME
-                )
-                finishTextInsertionSession()
-            case .imeAmbiguous:
-                // The commit was fully sent over a healthy channel and the ack
-                // never arrived: it may have landed. A keystroke fallback could
-                // insert the transcript twice, and flashing "Not inserted" would
-                // invite a manual retype with the same double-text risk — so
-                // write nothing, flash nothing, and report the recording as an
-                // unacknowledged IME commit.
-                reliability?.emit(
-                    recognizerFailed ? .recognizerFailed : .imeCommitUnacknowledged,
-                    transcriptUTF16: finalTranscript.utf16.count,
-                    writeAttempted: true,
-                    writeAccepted: false,
-                    imeCommit: true,
-                    imeCommitAcknowledged: false
-                )
-                injectLog.info(
-                    "final insertion ime commit unacknowledged; keystroke fallback suppressed"
-                )
-                cancelTextInsertionSession()
-            }
+            await deliverFinalTranscript(
+                finalTranscript,
+                reliability: reliability,
+                recognizerFailed: recognizerFailed,
+                savingCorrectionEvidence: shouldSaveCorrectionEvidence,
+                recordingID: sessionRecordingID
+            )
         } else {
             cancelTextInsertionSession()
             microphoneDenied = !recognizerFailed && isMicrophoneAccessMissing()
@@ -1058,7 +890,7 @@ public final class AppCoordinator: ObservableObject {
         log.error("recognizer failed while fn was held; holding the transcript until release")
         // The glow says "the mic is hot and this is being transcribed"; only the first
         // half is still true, so hand the cue to the pill carrying the notice.
-        hideEdgeGlow()
+        cues.hideEdgeGlow()
         flashRecognitionUnavailableNotice()
         await withCheckedContinuation { continuation in
             releaseWaiters.append(continuation)
@@ -1073,17 +905,19 @@ public final class AppCoordinator: ObservableObject {
         waiters.forEach { $0.resume() }
     }
 
+    // MARK: - Transcript accumulation
+
     func handlePartialTranscript(_ text: String) {
         partial = text
         refreshDisplayText()
-        mirrorInlinePreview()
+        preview.mirror(displayText)
     }
 
     func handleFinalTranscriptSegment(_ text: String) {
         finalText += text
         partial = ""
         refreshDisplayText()
-        mirrorInlinePreview()
+        preview.mirror(displayText)
     }
 
     /// Re-runs the recording's transform over the accumulated raw text. Outside a
@@ -1095,202 +929,6 @@ public final class AppCoordinator: ObservableObject {
         displayText = clean(finalText + partial)
     }
 
-    /// Mirror exactly what the HUD shows. Off unless the preview is enabled, where
-    /// it costs one nil check per recognizer event.
-    private func mirrorInlinePreview() {
-        guard let inlinePreview else { return }
-        let text = displayText
-        Task { await inlinePreview.mark(text) }
-    }
-
-    private func startInlinePreview() {
-        inlinePreview = nil
-        inlinePreviewDiscard = nil
-        inlinePreviewMirroring = false
-        let bundleIdentifier = textInsertionSession?.targetApplicationBundleIdentifier()
-        guard let inlinePreview = makeInlinePreviewSession(bundleIdentifier: bundleIdentifier) else {
-            if inlinePreviewEnabled {
-                // Correlates a "saw nothing in app X" report with an unidentifiable
-                // fn-press target rather than a rendering failure.
-                injectLog.info("inline preview skipped: no target bundle id")
-            }
-            return
-        }
-        self.inlinePreview = inlinePreview
-        Task { await inlinePreview.begin() }
-    }
-
-    /// Preview needs the fn-press application up front, because the probe pins its
-    /// focus lock by bundle id. An unidentifiable target means no preview this
-    /// recording — never a delayed or retried one.
-    func makeInlinePreviewSession(
-        bundleIdentifier: String?,
-        transport: (any InlinePreviewTransport)? = nil
-    ) -> InlinePreviewSession? {
-        guard inlinePreviewEnabled, let bundleIdentifier, !bundleIdentifier.isEmpty else {
-            return nil
-        }
-        inlinePreviewGeneration += 1
-        let generation = inlinePreviewGeneration
-        return InlinePreviewSession(
-            transport: transport ?? UnixSocketInlinePreviewTransport(),
-            bundleIdentifier: bundleIdentifier,
-            onMarkingActivityChange: { [weak self] active in
-                Task { @MainActor in
-                    guard let self, self.inlinePreviewGeneration == generation else { return }
-                    self.inlinePreviewMirroring = active
-                    // A mid-recording degrade makes the HUD the only feedback
-                    // again, so the pill comes back (with its transcript line,
-                    // in the same update) and the glow retires with the
-                    // channel it advertises. Activation is the mirror image:
-                    // a begin ack slower than the fallback deadline arrives
-                    // AFTER the pill took over — the glow reclaims the
-                    // recording and the pill yields, otherwise the first mark
-                    // would hide the pill and leave NO mic-hot cue at all
-                    // (review finding, e90dcae..). On the fast path both
-                    // calls are no-ops. At finalize `finishInlinePreview`
-                    // clears the flag with state != .recording, skipping this.
-                    if self.state == .recording {
-                        if active, self.settings.edgeGlow.enabled {
-                            // With the glow disabled the pill stays the
-                            // pre-text indicator; the first mark hides it.
-                            self.showEdgeGlow()
-                            self.indicator.hide()
-                        } else if !active {
-                            self.hideEdgeGlow()
-                            self.presentBottomCenterPill()
-                        }
-                    }
-                }
-            },
-            onFirstMarkRendered: { [weak self] in
-                Task { @MainActor in
-                    guard let self, self.inlinePreviewGeneration == generation else { return }
-                    // The first letter just landed in the field: the fallback
-                    // pill (if the slow-begin path showed it) yields to the
-                    // in-field provisional text. The glow stays — it frames
-                    // the whole dictation.
-                    guard self.state == .recording, self.inlinePreviewMirroring else { return }
-                    self.indicator.hide()
-                }
-            }
-        )
-    }
-
-    /// The glow lights instantly at fn press — before the AX capture and (with
-    /// the preview on) the probe handshake, so the prewarmed panel makes this
-    /// a pure fade. With the glow turned off in settings the pill shows instead,
-    /// exactly as it always has. Internal so glow-lifetime tests can drive the
-    /// presentation without a live audio pipeline.
-    func presentIndicatorForRecordingStart() {
-        guard settings.edgeGlow.enabled else {
-            presentBottomCenterPill()
-            return
-        }
-        showEdgeGlow()
-        guard inlinePreviewEnabled else {
-            // No preview: the glow frames the recording, and the pill presents
-            // alongside it because it is the only view of the volatile transcript.
-            presentBottomCenterPill()
-            return
-        }
-        // With the preview on the glow doubles as the channel's cue: if the preview
-        // never confirms within the deadline (unidentifiable target, probe dead,
-        // begin refused), the glow retires and the pill takes over, so the user is
-        // never left with a glow advertising a channel that is not streaming.
-        // Keyed to the recording, not the preview generation: this runs
-        // before `startInlinePreview` bumps it.
-        let recordingID = currentRecordingID
-        Task { [weak self] in
-            try? await Task.sleep(for: Self.indicatorFallbackDelay)
-            guard let self, self.currentRecordingID == recordingID,
-                  self.state == .recording, !self.inlinePreviewMirroring else { return }
-            self.hideEdgeGlow()
-            self.presentBottomCenterPill()
-        }
-    }
-
-    /// Whether the glow — rather than the pill — is the right indicator for the
-    /// recording in progress. With the preview on the glow tracks the channel
-    /// it advertises; with it off the glow owns every recording.
-    private var glowOwnsCurrentRecording: Bool {
-        state == .recording && (!inlinePreviewEnabled || inlinePreviewMirroring)
-    }
-
-    private func presentBottomCenterPill() {
-        indicator.show()
-    }
-
-    private func showEdgeGlow() {
-        guard !edgeGlowVisible else { return }
-        edgeGlowVisible = true
-        edgeGlow.show()
-    }
-
-    private func hideEdgeGlow() {
-        guard edgeGlowVisible else { return }
-        edgeGlowVisible = false
-        edgeGlow.hide()
-    }
-
-    /// Test staging: installs the per-recording sessions `startRecording` would
-    /// have created, so release/commit ordering can be pinned without a live
-    /// speech pipeline. Production code never calls this.
-    func stageFinalizationSessions(
-        inlinePreview: InlinePreviewSession?,
-        insertion: FinalTranscriptInsertionSession?
-    ) {
-        self.inlinePreview = inlinePreview
-        textInsertionSession = insertion
-    }
-
-    /// Routes the one authoritative final write. The IME commit is attempted only
-    /// over a channel that stayed healthy all recording; every other case is
-    /// today's path unchanged. Internal so ordering tests can drive the full
-    /// release → route chain.
-    func commitFinalTranscript(_ transcript: String) async -> FinalTranscriptCommitRouter.Route {
-        if let inlinePreview,
-           let route = await FinalTranscriptCommitRouter.attemptIMECommit(
-               transcript: transcript,
-               preview: inlinePreview,
-               insertion: textInsertionSession
-           ) {
-            await finishInlinePreview()
-            return route
-        }
-        // Ordering is load-bearing: the marked text must be gone before the one
-        // guarded write, or the field shows the utterance twice.
-        await finishInlinePreview()
-        return .completed(insertFinalTranscriptResult(transcript), viaIME: false)
-    }
-
-    private func startInlinePreviewDiscard() {
-        guard let inlinePreview, inlinePreviewDiscard == nil else { return }
-        inlinePreviewDiscard = Task { await inlinePreview.discard() }
-    }
-
-    /// Waits out the discard and emits the one per-recording diagnostic line. The
-    /// wait is bounded by the transport's per-operation socket timeouts, and is
-    /// normally already satisfied because the discard started at fn release.
-    private func finishInlinePreview() async {
-        guard let inlinePreview else { return }
-        startInlinePreviewDiscard()
-        await inlinePreviewDiscard?.value
-        let report = await inlinePreview.report()
-        if report.didAttemptMark, !report.committed {
-            // Keyed to the attempt, not the ack: a mark whose reply timed out
-            // leaves marksSent at zero and may still be drawn in the field, and
-            // that is exactly the case keystrokes must not land on top of.
-            // After an acked IME commit no keystrokes follow, so there is nothing
-            // to settle for.
-            try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay)
-        }
-        injectLog.info(report.logLine)
-        self.inlinePreview = nil
-        inlinePreviewDiscard = nil
-        inlinePreviewMirroring = false
-    }
-
     func promotePartialTranscriptAsFallbackFinalIfNeeded() {
         guard !partial.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return
@@ -1300,6 +938,233 @@ public final class AppCoordinator: ObservableObject {
         partial = ""
         finalText = fallbackFinalText
         log.info("recording promoted partial fallback finalChars=\(self.finalText.count)")
+    }
+
+    func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {
+        log.info(transcriptTiming.eventMessage(
+            kind: kind,
+            eventText: eventText,
+            finalText: finalText,
+            partialText: partial,
+            displayText: displayText
+        ))
+    }
+
+    // MARK: - Indicator presentation
+
+    /// Internal so glow-lifetime tests can drive the presentation without a live
+    /// audio pipeline.
+    func presentIndicatorForRecordingStart() {
+        // Keyed to the recording, not the preview generation: this runs before
+        // `startInlinePreview` bumps it.
+        let recordingID = currentRecordingID
+        cues.presentForRecordingStart(
+            glowEnabled: settings.edgeGlow.enabled,
+            previewEnabled: inlinePreviewEnabled,
+            previewStillUnconfirmed: { [weak self] in
+                guard let self else { return false }
+                return self.currentRecordingID == recordingID
+                    && self.state == .recording
+                    && !self.inlinePreviewMirroring
+            }
+        )
+    }
+
+    /// Whether the glow — rather than the pill — is the right indicator for the
+    /// recording in progress. With the preview on the glow tracks the channel
+    /// it advertises; with it off the glow owns every recording.
+    private var glowOwnsCurrentRecording: Bool {
+        state == .recording && (!inlinePreviewEnabled || inlinePreviewMirroring)
+    }
+
+    /// A glow style change has to reach the recording already in progress; the cue
+    /// can never be left advertising something that is no longer true. Internal so
+    /// the settings facade can call it.
+    func applyEdgeGlowStyleToCurrentRecording(_ style: EdgeGlowSettings) {
+        cues.applyEdgeGlowStyle(style)
+        if style.enabled {
+            cues.prewarmEdgeGlow()
+            // Enabled mid-recording: light it now, and the pill (if it was the
+            // indicator) yields as usual.
+            if glowOwnsCurrentRecording {
+                cues.showEdgeGlow()
+                // The pill yields only while the preview mirrors the same text
+                // into the field; otherwise it is the only view of the volatile
+                // transcript and has to stay.
+                if inlinePreviewMirroring { cues.hidePill() }
+            }
+        } else {
+            // Disabled mid-recording: the pill must take over — hiding the
+            // glow alone would leave a hot mic with no cue at all until
+            // release (codex review, blocking).
+            let handOffToPill = cues.edgeGlowVisible && state == .recording
+            cues.hideEdgeGlow()
+            if handOffToPill {
+                cues.showPill()
+            }
+        }
+    }
+
+    /// The one place a setting is changed and persisted. Internal (not private) so
+    /// the settings facade can reach it; `settings` itself stays `private(set)`, so
+    /// this stays the only writer.
+    func updateSettings(_ mutate: (inout Settings) -> Void) {
+        mutate(&settings)
+        settings.save(to: settingsDefaults)
+    }
+
+    // MARK: - Inline preview
+
+    private func startInlinePreview() {
+        inlinePreviewMirroring = false
+        preview.start(bundleIdentifier: textInsertionSession?.targetApplicationBundleIdentifier())
+    }
+
+    /// Internal so preview tests can build a session over a fake transport.
+    func makeInlinePreviewSession(
+        bundleIdentifier: String?,
+        transport: (any InlinePreviewTransport)? = nil
+    ) -> InlinePreviewSession? {
+        preview.makeSession(bundleIdentifier: bundleIdentifier, transport: transport)
+    }
+
+    /// The preview's channel became (or stopped being) healthy enough to mirror.
+    ///
+    /// A mid-recording degrade makes the HUD the only feedback again, so the pill
+    /// comes back (with its transcript line, in the same update) and the glow
+    /// retires with the channel it advertises. Activation is the mirror image: a
+    /// begin ack slower than the fallback deadline arrives AFTER the pill took over
+    /// — the glow reclaims the recording and the pill yields, otherwise the first
+    /// mark would hide the pill and leave NO mic-hot cue at all (review finding,
+    /// e90dcae..). On the fast path both calls are no-ops. At finalize
+    /// `finishInlinePreview` clears the flag with state != .recording, skipping this.
+    private func inlinePreviewMirroringDidChange(_ active: Bool) {
+        inlinePreviewMirroring = active
+        guard state == .recording else { return }
+        if active, settings.edgeGlow.enabled {
+            // With the glow disabled the pill stays the pre-text indicator; the
+            // first mark hides it.
+            cues.showEdgeGlow()
+            cues.hidePill()
+        } else if !active {
+            cues.hideEdgeGlow()
+            cues.showPill()
+        }
+    }
+
+    private func finishInlinePreview() async {
+        guard preview.isActive else { return }
+        await preview.finish()
+        inlinePreviewMirroring = false
+    }
+
+    // MARK: - Final write
+
+    /// Test staging: installs the per-recording sessions `startRecording` would
+    /// have created, so release/commit ordering can be pinned without a live
+    /// speech pipeline. Production code never calls this.
+    func stageFinalizationSessions(
+        inlinePreview: InlinePreviewSession?,
+        insertion: FinalTranscriptInsertionSession?
+    ) {
+        preview.stage(inlinePreview)
+        textInsertionSession = insertion
+    }
+
+    /// The one authoritative write for a recording that produced text, plus the
+    /// evidence and reliability records that describe how it went.
+    private func deliverFinalTranscript(
+        _ finalTranscript: String,
+        reliability: ReliabilityRecording?,
+        recognizerFailed: Bool,
+        savingCorrectionEvidence: Bool,
+        recordingID: String?
+    ) async {
+        switch await commitFinalTranscript(finalTranscript) {
+        case .completed(let insertionResult, let viaIME):
+            let applied = insertionResult == .accepted
+            if !applied {
+                // A refusal caused by revoked Accessibility is not the user
+                // having clicked away, and "Not inserted" would send them
+                // looking for the wrong thing.
+                flashInsertionUnavailableNotice(
+                    insertionResult == .accessibilityUntrusted
+                        ? "No access"
+                        : Self.defaultInsertionNotice
+                )
+            }
+            let insertedTranscript = textInsertionSession?.insertedTranscript
+            if let evidenceID = evidenceRecorder.recordIfEnabled(
+                enabled: savingCorrectionEvidence,
+                // The recognizer's own text, read here rather than at the call
+                // site: evidence describes the raw transcript as it stands after
+                // the write, exactly as it did before this was its own method.
+                rawTranscript: finalText,
+                finalTranscript: finalTranscript,
+                applied: applied,
+                finalInsertedTranscript: insertedTranscript == finalTranscript ? insertedTranscript : nil,
+                recordingID: recordingID,
+                session: textInsertionSession
+            ) {
+                if let finalInsertedTranscript = correctionEvidence.evidence.last(
+                    where: { $0.id == evidenceID }
+                )?.finalInsertedTranscript {
+                    evidenceRecorder.scheduleObservedUserEditCapture(
+                        evidenceID: evidenceID,
+                        finalInsertedTranscript: finalInsertedTranscript,
+                        session: textInsertionSession
+                    )
+                }
+            }
+            emitFinalReliabilityOutcome(
+                reliability: reliability,
+                recognizerFailed: recognizerFailed,
+                insertionResult: insertionResult,
+                transcript: finalTranscript,
+                session: textInsertionSession,
+                viaIMECommit: viaIME
+            )
+            finishTextInsertionSession()
+        case .imeAmbiguous:
+            // The commit was fully sent over a healthy channel and the ack
+            // never arrived: it may have landed. A keystroke fallback could
+            // insert the transcript twice, and flashing "Not inserted" would
+            // invite a manual retype with the same double-text risk — so
+            // write nothing, flash nothing, and report the recording as an
+            // unacknowledged IME commit.
+            reliability?.emit(
+                recognizerFailed ? .recognizerFailed : .imeCommitUnacknowledged,
+                transcriptUTF16: finalTranscript.utf16.count,
+                writeAttempted: true,
+                writeAccepted: false,
+                imeCommit: true,
+                imeCommitAcknowledged: false
+            )
+            injectLog.info(
+                "final insertion ime commit unacknowledged; keystroke fallback suppressed"
+            )
+            cancelTextInsertionSession()
+        }
+    }
+
+    /// Routes the one authoritative final write. The IME commit is attempted only
+    /// over a channel that stayed healthy all recording; every other case is
+    /// today's path unchanged. Internal so ordering tests can drive the full
+    /// release → route chain.
+    func commitFinalTranscript(_ transcript: String) async -> FinalTranscriptCommitRouter.Route {
+        if let session = preview.session,
+           let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+               transcript: transcript,
+               preview: session,
+               insertion: textInsertionSession
+           ) {
+            await finishInlinePreview()
+            return route
+        }
+        // Ordering is load-bearing: the marked text must be gone before the one
+        // guarded write, or the field shows the utterance twice.
+        await finishInlinePreview()
+        return .completed(insertFinalTranscriptResult(transcript), viaIME: false)
     }
 
     func insertFinalTranscriptResult(_ text: String) -> FinalInsertionResult {
@@ -1340,134 +1205,6 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
-    @discardableResult
-    func recordCorrectionEvidenceIfEnabled(
-        enabled: Bool,
-        rawTranscript: String,
-        finalTranscript: String,
-        applied: Bool,
-        finalInsertedTranscript: String? = nil,
-        recordingID: String? = nil,
-        session: FinalTranscriptInsertionSession? = nil
-    ) -> String? {
-        guard enabled,
-              applied,
-              finalInsertedTranscript == finalTranscript else {
-            return nil
-        }
-        return recordCorrectionEvidence(
-            rawTranscript: rawTranscript,
-            finalTranscript: finalTranscript,
-            applied: applied,
-            finalInsertedTranscript: finalInsertedTranscript,
-            recordingID: recordingID,
-            session: session
-        )
-    }
-
-    @discardableResult
-    func recordCorrectionEvidence(
-        rawTranscript: String,
-        finalTranscript: String,
-        applied: Bool,
-        finalInsertedTranscript: String? = nil,
-        recordingID: String? = nil,
-        session: FinalTranscriptInsertionSession? = nil
-    ) -> String {
-        let canonicalizedRaw = corrections.canonicalize(rawTranscript)
-        return correctionEvidence.record(CorrectionEvidence(
-            id: UUID().uuidString,
-            observedAt: Date(),
-            recordingID: recordingID ?? currentRecordingID,
-            rawTranscript: rawTranscript,
-            canonicalizedTranscript: canonicalizedRaw,
-            finalInsertedTranscript: finalInsertedTranscript ?? (applied ? finalTranscript : canonicalizedRaw),
-            userEditedTranscript: nil,
-            applicationBundleIdentifier: session?.targetApplicationBundleIdentifier(),
-            windowTitle: session?.targetWindowTitle(),
-            appliedRuleIDs: corrections.dictionary.appliedRecordIDs(in: rawTranscript)
-        ))
-    }
-
-    func scheduleObservedUserEditCapture(
-        evidenceID: String,
-        finalInsertedTranscript: String,
-        session: FinalTranscriptInsertionSession?
-    ) {
-        cancelObservedEditCaptureChecks()
-        guard let session else { return }
-
-        let delays = observedEditCaptureDelays.isEmpty ? [0] : observedEditCaptureDelays
-
-        for delay in delays {
-            guard delay > 0 else {
-                if captureObservedUserEdit(
-                    evidenceID: evidenceID,
-                    finalInsertedTranscript: finalInsertedTranscript,
-                    session: session
-                ) {
-                    cancelObservedEditCaptureChecks()
-                    return
-                }
-                continue
-            }
-
-            let workItem = DispatchWorkItem { [weak self, session, evidenceID, finalInsertedTranscript] in
-                guard let self else { return }
-                MainActor.assumeIsolated {
-                    if self.captureObservedUserEdit(
-                        evidenceID: evidenceID,
-                        finalInsertedTranscript: finalInsertedTranscript,
-                        session: session
-                    ) {
-                        self.cancelObservedEditCaptureChecks()
-                    }
-                }
-            }
-            observedEditCaptureWorkItems.append(workItem)
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + delay,
-                execute: workItem
-            )
-        }
-    }
-
-    @discardableResult
-    func captureObservedUserEdit(
-        evidenceID: String,
-        finalInsertedTranscript: String,
-        session: FinalTranscriptInsertionSession
-    ) -> Bool {
-        guard let observedInsertedText = session.observedInsertedText(),
-              observedInsertedText != finalInsertedTranscript,
-              let validatedEdit = ObservedUserEditFilter.validatedEdit(
-                observed: observedInsertedText,
-                final: finalInsertedTranscript
-              ) else {
-            return false
-        }
-
-        return correctionEvidence.recordUserEdit(
-            evidenceID: evidenceID,
-            userEditedTranscript: validatedEdit
-        )
-    }
-
-    private func cancelObservedEditCaptureChecks() {
-        observedEditCaptureWorkItems.forEach { $0.cancel() }
-        observedEditCaptureWorkItems = []
-    }
-
-    func logTranscriptTiming(kind: TranscriptTimingEventKind, eventText: String) {
-        log.info(transcriptTiming.eventMessage(
-            kind: kind,
-            eventText: eventText,
-            finalText: finalText,
-            partialText: partial,
-            displayText: displayText
-        ))
-    }
-
     private func finishTextInsertionSession() {
         textInsertionSession?.finish()
         textInsertionSession = nil
@@ -1477,6 +1214,8 @@ public final class AppCoordinator: ObservableObject {
         textInsertionSession?.cancel()
         textInsertionSession = nil
     }
+
+    // MARK: - Teardown
 
     /// Common teardown shared by every exit from `runSession`. Each piece is idempotent
     /// (`stop()` and `finish()` are no-ops when already done, callbacks set to nil).
@@ -1496,11 +1235,11 @@ public final class AppCoordinator: ObservableObject {
         await finishInlinePreview()
         clearAudioCallbacks()
         await transcriber.finish()
-        hideEdgeGlow()
+        cues.hideEdgeGlow()
         // Any notice still up owns the pill until its own flash expires; the reset
         // must not put the indicator away underneath one.
         if !startUnavailable, !insertionUnavailable, !microphoneUnavailable, !recognitionUnavailable {
-            indicator.hide()
+            cues.hidePill()
         }
         amplitude = 0
         partial = ""

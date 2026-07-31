@@ -22,7 +22,7 @@ final class StartReadinessTests: XCTestCase {
     /// permission problem: that misblame is what sent dogfood triage after TCC for
     /// a download that simply had not finished.
     func testAnInstallingModelOutranksTheGrants() {
-        let blocker = AppCoordinator.startBlocker(
+        let blocker = StartBlocker.resolve(
             assetStatus: .downloading(progress: 0.4),
             grants: PermissionsSnapshot(microphone: .denied, speech: .denied, accessibility: .denied)
         )
@@ -33,25 +33,25 @@ final class StartReadinessTests: XCTestCase {
 
     func testMissingAndFailedModelsBothReportTheModel() {
         XCTAssertEqual(
-            AppCoordinator.startBlocker(assetStatus: .missing, grants: allGranted),
+            StartBlocker.resolve(assetStatus: .missing, grants: allGranted),
             .speechModelUnavailable("not installed")
         )
         XCTAssertEqual(
-            AppCoordinator.startBlocker(assetStatus: .failed(message: "disk full"), grants: allGranted),
+            StartBlocker.resolve(assetStatus: .failed(message: "disk full"), grants: allGranted),
             .speechModelUnavailable("disk full")
         )
     }
 
     func testGrantsAreNamedOnceTheModelIsInPlace() {
         XCTAssertEqual(
-            AppCoordinator.startBlocker(
+            StartBlocker.resolve(
                 assetStatus: .reserved,
                 grants: PermissionsSnapshot(microphone: .granted, speech: .denied, accessibility: .granted)
             ),
             .speechDenied
         )
         XCTAssertEqual(
-            AppCoordinator.startBlocker(
+            StartBlocker.resolve(
                 assetStatus: .reserved,
                 grants: PermissionsSnapshot(
                     microphone: .notDetermined,
@@ -67,7 +67,7 @@ final class StartReadinessTests: XCTestCase {
     /// grant at random to blame.
     func testAModelAndGrantsInPlaceReportTheEngine() {
         XCTAssertEqual(
-            AppCoordinator.startBlocker(assetStatus: .ready, grants: allGranted),
+            StartBlocker.resolve(assetStatus: .ready, grants: allGranted),
             .speechEngineUnavailable
         )
     }

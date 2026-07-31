@@ -24,3 +24,34 @@ enum DebugDictationTriggerPolicy {
         environment[environmentKey] == "1"
     }
 }
+
+/// Arms the dogfood remote control: distributed notifications drive the REAL
+/// start/finish handlers, exactly as the fn key would. Returns the observer tokens
+/// to retain — empty, and nothing observed, unless the env var is set.
+@MainActor
+func armDebugDictationTrigger(
+    log: EposLogger,
+    onStart: @escaping @Sendable @MainActor () -> Void,
+    onFinish: @escaping @Sendable @MainActor () -> Void
+) -> [NSObjectProtocol] {
+    guard DebugDictationTriggerPolicy.load() else { return [] }
+    let center = DistributedNotificationCenter.default()
+    let observers = [
+        center.addObserver(
+            forName: DebugDictationTriggerPolicy.startNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { onStart() }
+        },
+        center.addObserver(
+            forName: DebugDictationTriggerPolicy.finishNotification,
+            object: nil,
+            queue: .main
+        ) { _ in
+            MainActor.assumeIsolated { onFinish() }
+        },
+    ]
+    log.info("debug dictation trigger armed")
+    return observers
+}

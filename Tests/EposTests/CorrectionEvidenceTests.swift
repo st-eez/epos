@@ -431,7 +431,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             autoStart: false
         )
 
-        coordinator.recordCorrectionEvidence(
+        coordinator.evidenceRecorder.record(
             rawTranscript: "open siemux",
             finalTranscript: "open CMUX",
             applied: true,
@@ -459,7 +459,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             autoStart: false
         )
 
-        let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
+        let evidenceID = coordinator.evidenceRecorder.recordIfEnabled(
             enabled: false,
             rawTranscript: "open siemux",
             finalTranscript: "open CMUX",
@@ -484,7 +484,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             autoStart: false
         )
 
-        let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
+        let evidenceID = coordinator.evidenceRecorder.recordIfEnabled(
             enabled: true,
             rawTranscript: "open siemux",
             finalTranscript: "open CMUX",
@@ -510,7 +510,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             autoStart: false
         )
 
-        let evidenceID = coordinator.recordCorrectionEvidenceIfEnabled(
+        let evidenceID = coordinator.evidenceRecorder.recordIfEnabled(
             enabled: true,
             rawTranscript: "open siemux",
             finalTranscript: "open CMUX",
@@ -536,7 +536,7 @@ final class CorrectionEvidenceTests: XCTestCase {
             autoStart: false
         )
 
-        let evidenceID = coordinator.recordCorrectionEvidence(
+        let evidenceID = coordinator.evidenceRecorder.record(
             rawTranscript: "open widget pro",
             finalTranscript: "open widget pro",
             applied: true,
@@ -571,7 +571,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         )
 
         _ = session.insertFinalResult("open widget pro")
-        coordinator.recordCorrectionEvidence(
+        coordinator.evidenceRecorder.record(
             rawTranscript: "open widget pro",
             finalTranscript: "open widget pro",
             applied: true,
@@ -616,7 +616,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         _ = session.insertFinalResult("widget pro")
         session.finish()
         observer.value = "open WidgetPro please"
-        coordinator.scheduleObservedUserEditCapture(
+        coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
             session: session
@@ -658,7 +658,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         _ = session.insertFinalResult("widget pro")
         session.finish()
         observer.value = "open widget pro please"
-        coordinator.scheduleObservedUserEditCapture(
+        coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
             session: session
@@ -706,12 +706,12 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         _ = session.insertFinalResult("widget pro")
         session.finish()
-        coordinator.scheduleObservedUserEditCapture(
+        coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
             session: session
         )
-        coordinator.scheduleObservedUserEditCapture(
+        coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
             session: nil
@@ -808,7 +808,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         session.finish()
         // The inserted segment was wiped: only the baseline prefix/suffix remain.
         observer.value = "open  please"
-        coordinator.scheduleObservedUserEditCapture(
+        coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
             session: session

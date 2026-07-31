@@ -53,6 +53,10 @@ Sources/Epos/
   App/
     EposApp.swift               # @main, scenes, dependency wiring
     AppCoordinator.swift        # state machine: idle <-> recording <-> finalizing
+    StartReadinessProbe.swift   # can a press open a dictation: grants + model + capture format
+    RecordingCuePresenter.swift # which cue is up: screen-edge glow, pill, or neither
+    InlinePreviewCoordinator.swift # one recording's inline-preview session lifecycle
+    CorrectionEvidenceRecorder.swift # evidence row + post-insertion watch for the user's edit
   Permissions/
     PermissionsGate.swift       # mic + speech + accessibility, request + status
   Speech/
@@ -78,7 +82,11 @@ Sources/Epos/
     ReliabilityDiagnostics.swift # privacy-safe per-recording terminal outcome (Shipped Since Baseline)
 ```
 
-No `Core/`, no `Utilities/`, no `Models/` folder of empty types. (Settings, the indicator controller, and small view styles also live under `App/` and `UI/`; the tree above lists the load-bearing modules.)
+No `Core/`, no `Utilities/`, no `Models/` folder of empty types. (Settings, the
+indicator controller, the coordinator's settings facade, and small view styles also
+live under `App/` and `UI/`; the tree above lists the load-bearing modules.) The
+four `App/` types below `AppCoordinator` are its collaborators: it owns the state
+machine and every published value the UI observes, and delegates the subsystems.
 
 ### Data flow
 
