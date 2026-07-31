@@ -333,19 +333,19 @@ struct RecordingEdgeGlowView: View {
         )
         // Two flame bodies with different tongue shapes cross-fade in
         // counter-phase: the aura appears to roll and lick.
-        flame(FlameEdgeShape.variants[0], fire, style, depth: 15, blur: 5)
+        flame(FlameEdgeShape.variants[0], fire, style, depth: 8.5, blur: 4)
             .opacity(min(1, (breathingDim ? 0.5 : 0.85) * style.intensity))
             .scaleEffect(breathingDim ? 1.0 : 1.006)
-        flame(FlameEdgeShape.variants[1], fireAlt, style, depth: 17, blur: 6)
+        flame(FlameEdgeShape.variants[1], fireAlt, style, depth: 9.5, blur: 4.5)
             .opacity(min(1, (driftedIn ? 0.75 : 0.15) * style.intensity))
             .scaleEffect(driftedIn ? 1.005 : 1.0)
         // Bright tips: thinner tongues, fast counter-cycled flicker.
-        flame(FlameEdgeShape.variants[2], tips, style, depth: 10, blur: 2.5)
+        flame(FlameEdgeShape.variants[2], tips, style, depth: 5.5, blur: 2)
             .opacity(flickerHot ? 0.55 : 0.2)
             .opacity(flickerArc ? 1 : 0.5)
             .opacity(min(1, style.intensity))
         // The menace: dark smoke layered OVER the fire, occluding as it rolls.
-        flame(FlameEdgeShape.variants[3], smoke, style, depth: 24, blur: 8)
+        flame(FlameEdgeShape.variants[3], smoke, style, depth: 13, blur: 6)
             .opacity(min(1, (breathingDim ? 0.78 : 0.5) * style.intensity))
         // Black lightning: black-sheathed hot-core bolts, one random variant
         // at a time, flashed by the surge task.
@@ -353,7 +353,7 @@ struct RecordingEdgeGlowView: View {
             bolt(EdgeBoltShape.variants[index], style)
                 .opacity(boltVisible && boltIndex == index ? min(1, style.intensity) : 0)
         }
-        flame(FlameEdgeShape.variants[0], fire, style, depth: 15, blur: 5)
+        flame(FlameEdgeShape.variants[0], fire, style, depth: 8.5, blur: 4)
             .opacity(min(1, 0.7 * style.intensity * level))
             .animation(.easeOut(duration: 0.08), value: model.amplitude)
     }
@@ -368,7 +368,16 @@ struct RecordingEdgeGlowView: View {
     ) -> some View {
         GeometryReader { geo in
             let scale = Self.rasterScale
-            FlameEdgeShape(waves: waves, baseDepth: depth * style.thickness)
+            FlameEdgeShape(
+                waves: waves.map {
+                    FlameEdgeShape.Wave(
+                        frequency: $0.frequency,
+                        amplitude: $0.amplitude * 0.6 * style.thickness,
+                        phase: $0.phase
+                    )
+                },
+                baseDepth: depth * style.thickness
+            )
                 .fill(gradient, style: FillStyle(eoFill: true))
                 .blur(radius: blur)
                 .frame(width: geo.size.width / scale, height: geo.size.height / scale)
