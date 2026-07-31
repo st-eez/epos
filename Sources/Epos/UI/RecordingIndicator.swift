@@ -10,7 +10,7 @@ public struct RecordingIndicator: View {
 
     public var body: some View {
         if coordinator.indicatorBadge {
-            RecordingCaretBadgeSurface()
+            RecordingCaretBadgeSurface(amplitude: coordinator.amplitude)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             RecordingIndicatorSurface(
@@ -27,20 +27,31 @@ public struct RecordingIndicator: View {
     }
 }
 
-/// The native-dictation-style mic bubble shown at the caret while dictation is
-/// live but no text is streaming (pre-first-word and during silences).
+/// The caret indicator shown while dictation is live but no text is streaming
+/// (pre-first-word and during silences): a Liquid Glass orb holding a live
+/// teal amplitude meter, so it reads "mic is hot and hearing you" in Epos's
+/// own glass + teal language rather than native dictation's blue bubble.
 struct RecordingCaretBadgeSurface: View {
+    let amplitude: Float
+
     var body: some View {
-        let inset = RecordingCaretBadgePolicy.badgeInset
-        Circle()
-            .fill(Color(nsColor: .controlAccentColor))
-            .overlay {
-                Image(systemName: "mic.fill")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.white)
+        HStack(spacing: 2.5) {
+            ForEach(0..<3, id: \.self) { index in
+                Capsule()
+                    .fill(EposPalette.teal.opacity(
+                        RecordingIndicatorSurface.barOpacity(index, amplitude: amplitude)
+                    ))
+                    .frame(
+                        width: 2.5,
+                        height: RecordingIndicatorSurface.barHeight(index, amplitude: amplitude) * 0.7
+                    )
             }
-            .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
-            .padding(inset)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .glassEffect(.clear, in: Circle())
+        .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+        .padding(RecordingCaretBadgePolicy.badgeInset)
+        .animation(.easeOut(duration: 0.08), value: amplitude)
     }
 }
 
