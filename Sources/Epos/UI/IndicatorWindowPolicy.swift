@@ -1,12 +1,17 @@
 import Foundation
 
-/// Whether indicator windows (pill panel, edge glow) may actually be ordered
-/// on screen. `swift test` drives the real coordinator, whose presentation
-/// paths would otherwise flash real panels over whatever the developer is
-/// doing; under XCTest every window-ordering call is a no-op while all
-/// coordinator-side state (flags, callbacks, fades' bookkeeping) behaves
-/// identically — that state is what the tests assert.
+/// Whether user-audible/visible side effects (pill panel, edge glow, recording
+/// bells) may actually fire. `swift test` drives the real coordinator, whose
+/// presentation paths would otherwise flash real panels and ping real bells
+/// over whatever the developer is doing; in a test process every such call is
+/// a no-op while all coordinator-side state (flags, callbacks, fades'
+/// bookkeeping) behaves identically — that state is what the tests assert.
+/// Both markers are checked because the toolchain's runner sets
+/// `SWIFT_TESTING_ENABLED` for the whole `swift test` process while
+/// `XCTestConfigurationFilePath` is only present under Xcode's runner — the
+/// same detection `EposLogger` uses to keep test bursts out of the dogfood log.
 enum IndicatorWindowPolicy {
     nonisolated static let canPresentWindows =
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
+            && ProcessInfo.processInfo.environment["SWIFT_TESTING_ENABLED"] == nil
 }

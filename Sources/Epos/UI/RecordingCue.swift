@@ -24,7 +24,7 @@ enum RecordingCue {
     }
 
     private static func play(_ sound: NSSound?) {
-        guard let sound else { return }
+        guard IndicatorWindowPolicy.canPresentWindows, let sound else { return }
         // A restart beats a dropped cue when recordings come back-to-back.
         if sound.isPlaying { sound.stop() }
         sound.play()
