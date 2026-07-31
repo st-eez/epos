@@ -41,7 +41,7 @@ struct RecordingCaretBadgeSurface: View {
         HStack(spacing: 2.5) {
             ForEach(0..<3, id: \.self) { index in
                 Capsule()
-                    .fill(Color(white: 0.94).opacity(
+                    .fill(Color.black.opacity(
                         RecordingIndicatorSurface.barOpacity(index, amplitude: amplitude)
                     ))
                     .frame(
