@@ -20,8 +20,10 @@ public final class RecordingIndicatorController {
     public init() {}
 
     /// Build the floating panel and host the supplied SwiftUI content. Idempotent —
-    /// subsequent calls are no-ops; the first content sticks.
+    /// subsequent calls are no-ops; the first content sticks. Under XCTest no
+    /// panel is ever built, so test runs cannot flash real windows.
     public func attach<Content: View>(content: Content) {
+        guard IndicatorWindowPolicy.canPresentWindows else { return }
         guard panel == nil else { return }
         let frame = NSRect(origin: .zero, size: Self.panelSize)
         let panel = NSPanel(
@@ -53,6 +55,7 @@ public final class RecordingIndicatorController {
     /// mid-recording and for the failure notice flashes. A show landing during
     /// a hide fade reclaims the panel from whatever alpha the fade reached.
     public func show() {
+        guard IndicatorWindowPolicy.canPresentWindows else { return }
         guard let panel else {
             log.error("show() called before attach(content:); ignoring")
             return

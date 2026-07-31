@@ -24,6 +24,7 @@ final class RecordingEdgeGlowController {
     /// the flattened glow layer is already rasterized when fn goes down —
     /// the first show pays only the fade.
     func prewarm() {
+        guard IndicatorWindowPolicy.canPresentWindows else { return }
         let panel = ensurePanel()
         guard !panel.isVisible else { return }
         if let frame = (NSScreen.main ?? NSScreen.screens.first)?.frame {
@@ -44,6 +45,7 @@ final class RecordingEdgeGlowController {
 
     /// Covers the active screen (the one with the focused window) and fades in.
     func show() {
+        guard IndicatorWindowPolicy.canPresentWindows else { return }
         let screen = NSScreen.main ?? NSScreen.screens.first
         guard let frame = screen?.frame else { return }
         let panel = ensurePanel()
