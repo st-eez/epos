@@ -76,19 +76,55 @@ struct RecordingIndicatorSurface: View {
             .frame(width: 304, alignment: .leading)
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .glassEffect(.regular.tint(statusColor.opacity(0.06)), in: .rect(cornerRadius: 20))
-            .shadow(color: statusColor.opacity(0.12), radius: 10, y: 3)
+            .glassEffect(.regular, in: .rect(cornerRadius: 20))
         } else {
             // Clear glass, not regular: the cue capsule floats over arbitrary
             // app content, and regular glass over dark windows collapses into
-            // a flat smoked pill with no visible refraction. The tint and glow
-            // follow the status color, so the capsule reads teal while
-            // listening, amber while finishing, red on a failure notice.
+            // a flat smoked pill with no visible refraction. While listening,
+            // a specular sheen sweeps through the glass; notices stay still so
+            // a red "Not inserted" reads as a warning, not a decoration.
             statusRow
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
-                .glassEffect(.clear.tint(statusColor.opacity(0.1)), in: Capsule())
-                .shadow(color: statusColor.opacity(0.18), radius: 12, y: 4)
+                .glassEffect(.clear, in: Capsule())
+                .overlay {
+                    if state == .recording, noticeText == nil {
+                        GlassShimmer()
+                            .clipShape(Capsule())
+                            .allowsHitTesting(false)
+                    }
+                }
+        }
+    }
+
+    /// A diagonal specular band that sweeps across the capsule during the
+    /// pre-text window (the only time the capsule is on screen), then rests
+    /// off-glass for the remainder of each cycle so the pill breathes instead
+    /// of strobing. Timeline-driven: no stored animation state, and rendering
+    /// pauses whenever the panel is ordered out.
+    private struct GlassShimmer: View {
+        private static let period: TimeInterval = 2.6
+        /// Fraction of each cycle spent traversing the glass.
+        private static let sweepFraction = 0.45
+        private static let bandWidth: CGFloat = 56
+
+        var body: some View {
+            TimelineView(.animation(minimumInterval: 1.0 / 30.0)) { context in
+                GeometryReader { geo in
+                    let cycle = context.date.timeIntervalSinceReferenceDate
+                        .truncatingRemainder(dividingBy: Self.period) / Self.period
+                    let sweep = min(cycle / Self.sweepFraction, 1)
+                    let travel = (geo.size.width + Self.bandWidth * 2) * sweep
+                    LinearGradient(
+                        colors: [.clear, .white.opacity(0.22), .clear],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    )
+                    .frame(width: Self.bandWidth, height: geo.size.height * 2.4)
+                    .rotationEffect(.degrees(16))
+                    .offset(x: travel - Self.bandWidth * 2, y: -geo.size.height * 0.7)
+                }
+            }
         }
     }
 
