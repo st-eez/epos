@@ -51,8 +51,20 @@ struct RecordingCaretBadgeSurface: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .glassEffect(.regular.tint(EposPalette.teal.opacity(0.85)), in: Circle())
-        .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+        // Solid fill, not glass tint: Glass composites its tint against the
+        // sampled backdrop, which washes teal out to grey over dark windows.
+        // The gradient + rim highlight keep the orb reading as a lit sphere.
+        .background(
+            Circle().fill(
+                LinearGradient(
+                    colors: [EposPalette.teal.opacity(0.95), EposPalette.teal.opacity(0.7)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        )
+        .overlay(Circle().strokeBorder(.white.opacity(0.28), lineWidth: 1))
+        .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
         .padding(RecordingCaretBadgePolicy.badgeInset)
         .animation(.easeOut(duration: 0.08), value: amplitude)
     }
