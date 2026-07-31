@@ -365,6 +365,7 @@ public final class AppCoordinator: ObservableObject {
         startInlinePreview()
         transcriptTiming.start()
         indicator.show()
+        RecordingStartCue.play()
         let cleanFinalTranscript = makeFinalTranscriptCleaner()
         let contextualStrings = speechContextualStrings()
 

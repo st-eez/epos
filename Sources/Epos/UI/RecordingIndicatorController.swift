@@ -9,8 +9,13 @@ import SwiftUI
 public final class RecordingIndicatorController {
     private var panel: NSPanel?
     private let log = EposLogger(category: "indicator")
+    /// Bumped on every show/hide so a hide fade that finishes after a newer
+    /// show can never order out the re-shown panel.
+    private var visibilityGeneration = 0
 
     private static let panelSize = CGSize(width: 360, height: 110)
+    private static let showFadeDuration: TimeInterval = 0.12
+    private static let hideFadeDuration: TimeInterval = 0.18
 
     public init() {}
 
@@ -43,20 +48,40 @@ public final class RecordingIndicatorController {
         self.panel = panel
     }
 
-    /// Reposition to the active screen's bottom-center and order front. Also the
-    /// live restore path when the inline preview degrades mid-recording and for
-    /// the failure notice flashes.
+    /// Reposition to the active screen's bottom-center, order front, and fade
+    /// in. Also the live restore path when the inline preview degrades
+    /// mid-recording and for the failure notice flashes. A show landing during
+    /// a hide fade reclaims the panel from whatever alpha the fade reached.
     public func show() {
         guard let panel else {
             log.error("show() called before attach(content:); ignoring")
             return
         }
+        visibilityGeneration += 1
         repositionToActiveScreen(panel)
+        if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.showFadeDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1
+        }
     }
 
+    /// Fade out, then order out — the pill yields to the text that just landed
+    /// in the field instead of blinking off.
     public func hide() {
-        panel?.orderOut(nil)
+        guard let panel, panel.isVisible else { return }
+        visibilityGeneration += 1
+        let generation = visibilityGeneration
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = Self.hideFadeDuration
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 0
+        } completionHandler: { [weak self] in
+            guard let self, self.visibilityGeneration == generation else { return }
+            panel.orderOut(nil)
+        }
     }
 
     private func repositionToActiveScreen(_ panel: NSPanel) {
