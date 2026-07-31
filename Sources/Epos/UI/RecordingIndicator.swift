@@ -34,9 +34,11 @@ public struct RecordingIndicator: View {
 struct RecordingCaretBadgeSurface: View {
     let amplitude: Float
 
-    /// Deeper and fully saturated compared to `EposPalette.teal`, whose red
-    /// component reads pastel/washed out at orb size over arbitrary backdrops.
-    private let orbTeal = Color(red: 0, green: 0.68, blue: 0.62)
+    /// Deep gemstone teal (#00897B): fully saturated so it never reads
+    /// pastel, dark enough to look rich over any backdrop, but still light
+    /// enough that the black meter bars keep ~5:1 contrast inside it —
+    /// deeper than this and the bars would have to flip to white.
+    private let orbTeal = Color(red: 0, green: 0.537, blue: 0.482)
 
     var body: some View {
         // Inverted from the pill's palette on purpose: a solid-teal glass orb
