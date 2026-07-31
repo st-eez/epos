@@ -57,8 +57,36 @@ public final class RecordingIndicatorController {
             log.error("show() called before attach(content:); ignoring")
             return
         }
-        visibilityGeneration += 1
         repositionToActiveScreen(panel)
+        fadeIn(panel)
+    }
+
+    /// Fade the mic badge in at the caret. False means no usable placement
+    /// (missing/degenerate rect, caret on no connected screen) and nothing on
+    /// screen changed; the caller picks the fallback. `display: false` defers
+    /// drawing to the runloop commit so the caller's SwiftUI variant flip and
+    /// this frame change land together.
+    func showBadge(caretRect: CGRect?) -> Bool {
+        guard let panel else {
+            log.error("showBadge(caretRect:) called before attach(content:); ignoring")
+            return false
+        }
+        guard let frame = RecordingCaretBadgePolicy.panelFrame(
+            caretRect: caretRect,
+            screens: NSScreen.screens.map {
+                RecordingCaretBadgePolicy.Screen(frame: $0.frame, visibleFrame: $0.visibleFrame)
+            }
+        ) else {
+            log.info("caret badge anchor unavailable; using bottom-center pill")
+            return false
+        }
+        panel.setFrame(frame, display: false)
+        fadeIn(panel)
+        return true
+    }
+
+    private func fadeIn(_ panel: NSPanel) {
+        visibilityGeneration += 1
         if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
         NSAnimationContext.runAnimationGroup { context in

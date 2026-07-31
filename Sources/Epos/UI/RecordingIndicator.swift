@@ -9,16 +9,38 @@ public struct RecordingIndicator: View {
     }
 
     public var body: some View {
-        RecordingIndicatorSurface(
-            state: coordinator.state,
-            finalizationPhase: coordinator.finalizationPhase,
-            amplitude: coordinator.amplitude,
-            startUnavailable: coordinator.startUnavailable,
-            insertionUnavailable: coordinator.insertionUnavailable,
-            transcriptPreview: coordinator.hudTranscriptPreview
-        )
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-        .padding(.bottom, 20)
+        if coordinator.indicatorBadge {
+            RecordingCaretBadgeSurface()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            RecordingIndicatorSurface(
+                state: coordinator.state,
+                finalizationPhase: coordinator.finalizationPhase,
+                amplitude: coordinator.amplitude,
+                startUnavailable: coordinator.startUnavailable,
+                insertionUnavailable: coordinator.insertionUnavailable,
+                transcriptPreview: coordinator.hudTranscriptPreview
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+            .padding(.bottom, 20)
+        }
+    }
+}
+
+/// The native-dictation-style mic bubble shown at the caret while dictation is
+/// live but no text is streaming (pre-first-word and during silences).
+struct RecordingCaretBadgeSurface: View {
+    var body: some View {
+        let inset = RecordingCaretBadgePolicy.badgeInset
+        Circle()
+            .fill(Color(nsColor: .controlAccentColor))
+            .overlay {
+                Image(systemName: "mic.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+            .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
+            .padding(inset)
     }
 }
 
