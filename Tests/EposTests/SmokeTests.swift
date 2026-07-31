@@ -39,6 +39,13 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(coordinator.displayText, "settled words volatile tail")
     }
 
+    @MainActor
+    func testStartCueSynthesizesAParseableSound() {
+        // A malformed WAV header would make NSSound(data:) nil and silently
+        // kill the cue; this pins the synth-to-container path.
+        XCTAssertNotNil(RecordingStartCue.makeSound())
+    }
+
     func testPermissionsSnapshotReturns() {
         let snapshot = PermissionsGate().snapshot()
         _ = snapshot.microphone
