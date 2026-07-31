@@ -29,7 +29,9 @@ public struct EdgeGlowSettings: Equatable, Sendable {
     public init(
         enabled: Bool = true,
         theme: EdgeGlowTheme = .standard,
-        intensity: Double = 1,
+        // 0.85, not 1: the default indicator for an all-day utility should
+        // sit just below conscious notice; the slider goes louder.
+        intensity: Double = 0.85,
         thickness: Double = 1,
         red: Double = 0.22,
         green: Double = 0.78,

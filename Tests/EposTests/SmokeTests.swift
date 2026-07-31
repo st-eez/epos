@@ -65,7 +65,7 @@ final class SmokeTests: XCTestCase {
         // Never-saved defaults: the glow ships enabled with the teal base.
         let fresh = Settings.load(from: defaults).edgeGlow
         XCTAssertTrue(fresh.enabled)
-        XCTAssertEqual(fresh.intensity, 1)
+        XCTAssertEqual(fresh.intensity, 0.85)
         XCTAssertEqual(fresh.red, 0.22)
 
         // Round-trip, including a stored false (distinct from "never set")
