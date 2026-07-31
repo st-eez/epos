@@ -28,6 +28,8 @@ public final class FnHotkey {
     private var reconcileTask: Task<Void, Never>?
     private let hardwareStateReader: @MainActor () -> Bool
     private let reconcileInterval: Duration
+    private let installMonitor: @MainActor (@escaping @Sendable @MainActor (Bool) -> Void) -> Any?
+    private let removeMonitor: @MainActor (Any) -> Void
 
     /// The live hardware fn-key state, read straight from the current modifier flags
     /// (not the cached edge state) so a caller can re-check whether fn is still held
@@ -37,30 +39,42 @@ public final class FnHotkey {
     }
 
     /// `hardwareStateReader` and `reconcileInterval` are injectable so the
-    /// stuck-key reconciliation can be tested without a real key or a real wait.
+    /// stuck-key reconciliation can be tested without a real key or a real wait;
+    /// the monitor install/remove pair so monitor lifetime (the reinstall after
+    /// Accessibility trust arrives) can be tested without a real global monitor.
     public init(
         hardwareStateReader: (@MainActor () -> Bool)? = nil,
-        reconcileInterval: Duration = FnHotkey.stuckKeyReconcileInterval
+        reconcileInterval: Duration = FnHotkey.stuckKeyReconcileInterval,
+        installMonitor: (@MainActor (@escaping @Sendable @MainActor (Bool) -> Void) -> Any?)? = nil,
+        removeMonitor: (@MainActor (Any) -> Void)? = nil
     ) {
         self.hardwareStateReader = hardwareStateReader ?? {
             NSEvent.modifierFlags.contains(.function)
         }
         self.reconcileInterval = reconcileInterval
+        self.installMonitor = installMonitor ?? { handler in
+            NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { event in
+                let pressed = event.modifierFlags.contains(.function)
+                Task { @MainActor in handler(pressed) }
+            }
+        }
+        self.removeMonitor = removeMonitor ?? { NSEvent.removeMonitor($0) }
     }
 
+    /// Installs the global monitor. Idempotent, and safe to pair with `stop()` to
+    /// reinstall: macOS delivers global keyboard events only to an
+    /// Accessibility-trusted process, and a monitor installed while untrusted
+    /// stays inert after the grant arrives — a reinstall is the only recovery.
     public func start() {
         guard monitor == nil else { return }
-        monitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            let pressed = event.modifierFlags.contains(.function)
-            Task { @MainActor [weak self] in
-                self?.handleFlagsChanged(pressed: pressed)
-            }
+        monitor = installMonitor { [weak self] pressed in
+            self?.handleFlagsChanged(pressed: pressed)
         }
     }
 
     public func stop() {
         if let monitor {
-            NSEvent.removeMonitor(monitor)
+            removeMonitor(monitor)
             self.monitor = nil
         }
         stopReconciling()

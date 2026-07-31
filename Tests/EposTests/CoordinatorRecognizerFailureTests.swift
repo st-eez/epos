@@ -29,13 +29,17 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
     private static let recognizedRaw = "the the uh build is broken"
     private static let recognizedClean = "the build is broken"
 
-    private func makeCoordinator(diagnostics: DiagnosticLogSink) -> AppCoordinator {
+    private func makeCoordinator(
+        diagnostics: DiagnosticLogSink,
+        microphone: PermissionStatus = .granted
+    ) -> AppCoordinator {
         let coordinator = AppCoordinator(
             audio: audio,
             transcriber: transcriber,
             textInsertion: backend,
             insertionTargetObserverFactory: { StubInsertionTargetObserver() },
             settings: Settings(),
+            permissions: .stub(microphone: microphone),
             diagnostics: diagnostics,
             isFnKeyHeld: { [fn] in fn.held },
             observedEditCaptureDelays: [],
@@ -133,6 +137,32 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
         let contents = try log.contents()
         XCTAssertTrue(contents.contains("outcome=empty-transcript"))
         XCTAssertFalse(contents.contains("outcome=backend-refused"))
+    }
+
+    /// A revoked microphone grant is not a user who said nothing. macOS keeps
+    /// feeding a denied process buffers — silent ones — so the frames arrive, the
+    /// audio-input check passes, and the recording used to file itself under
+    /// `empty-transcript` with no feedback at all. The grant is consulted on this
+    /// path only, once the transcript is known to be empty.
+    func testEmptyRecordingWithARevokedMicrophoneIsReportedAsAPermissionFailure() async throws {
+        let log = try TemporaryDiagnosticLog()
+        let coordinator = makeCoordinator(diagnostics: log.sink, microphone: .denied)
+
+        coordinator.startRecording()
+        let session = coordinator.transcriptionTask
+        // The silent buffers a denied process is fed: indistinguishable from
+        // silence at the audio layer, which is the whole problem.
+        audio.onBuffer?(try Self.makeBuffer())
+        await advance(until: { self.transcriber.didStart }, "the transcriber never started")
+
+        coordinator.finishRecording()
+        await session?.value
+
+        let contents = try log.contents()
+        XCTAssertTrue(contents.contains("outcome=microphone-denied"))
+        XCTAssertFalse(contents.contains("outcome=empty-transcript"))
+        XCTAssertTrue(coordinator.startUnavailable, "a dead mic cannot be reported silently")
+        XCTAssertEqual(coordinator.startNotice, "Mic blocked")
     }
 
     /// A tap released during `transcriber.start` either trips the state guard or

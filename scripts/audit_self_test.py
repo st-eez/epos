@@ -101,6 +101,8 @@ def run_self_test(root: Path) -> None:
         "delivery-mismatch": "delivery_mismatch",
         "write-accepted-unverified": "accepted_unverified",
         "ime-commit-unacknowledged": "incomplete_ambiguous",
+        "microphone-denied": "permission_failure",
+        "accessibility-untrusted": "permission_failure",
     }
     assert {name: OUTCOME_ALIASES[name] for name in exact} == exact
     ledger_rows = corpus_rows(confirmed=[

@@ -14,13 +14,21 @@ final class FakeTranscriber: SpeechTranscribing, @unchecked Sendable {
     private var continuation: AsyncStream<TranscriptEvent>.Continuation?
     private var startCount = 0
     private var acceptedBuffers = 0
+    private var format: AVAudioFormat? = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)
 
     /// `start` runs off the main actor, so its bookkeeping is read under the lock.
     var didStart: Bool { lock.withLock { startCount > 0 } }
     var acceptedBufferCount: Int { lock.withLock { acceptedBuffers } }
 
+    /// What `bestAudioFormat()` resolves. Settable so a readiness re-check can be
+    /// given a pipeline that resolves no format until the speech model lands.
+    var audioFormat: AVAudioFormat? {
+        get { lock.withLock { format } }
+        set { lock.withLock { format = newValue } }
+    }
+
     func bestAudioFormat() async -> AVAudioFormat? {
-        AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)
+        audioFormat
     }
 
     func start(contextualStrings: [String]) async throws -> AsyncStream<TranscriptEvent> {

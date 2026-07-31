@@ -6,10 +6,10 @@ import math
 from typing import Any, Iterable
 
 OPERATIONAL_BUCKETS = (
-    "setup_failure", "cancelled_before_audio", "no_audio_input",
-    "recognizer_failure", "empty_transcript", "target_refusal",
-    "backend_refusal", "delivery_mismatch", "verified_delivery",
-    "accepted_unverified", "incomplete_ambiguous",
+    "setup_failure", "permission_failure", "cancelled_before_audio",
+    "no_audio_input", "recognizer_failure", "empty_transcript",
+    "target_refusal", "backend_refusal", "delivery_mismatch",
+    "verified_delivery", "accepted_unverified", "incomplete_ambiguous",
 )
 ACCURACY_BUCKETS = (
     "exact", "residual_substitution", "residual_insertion",
@@ -38,6 +38,11 @@ OUTCOME_ALIASES = {
     # The mic died mid-hold and the recording was cut short: a truncated
     # transcript may still have been written, so the recording is ambiguous.
     "capture-interrupted": "incomplete_ambiguous",
+    # A revoked grant, not a pipeline that failed to set up and not a user who
+    # said nothing: macOS feeds a denied process silent buffers, and an
+    # untrusted process cannot read the insertion target at all.
+    "microphone-denied": "permission_failure",
+    "accessibility-untrusted": "permission_failure",
 }
 
 

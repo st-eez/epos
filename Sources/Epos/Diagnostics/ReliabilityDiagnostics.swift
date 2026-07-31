@@ -26,7 +26,13 @@ public enum ReliabilityOutcome: String, Sendable {
     /// Terminal for the recording: whatever had already been recognized is still
     /// written, and that write's own decision stays in the `inject` log.
     case captureInterrupted = "capture-interrupted"
-
+    /// The recording produced no transcript and the microphone grant was missing.
+    /// macOS feeds a denied process silent buffers, so without this the recording
+    /// audits as `empty-transcript` — a user who said nothing.
+    case microphoneDenied = "microphone-denied"
+    /// The final write was refused because this process is not
+    /// Accessibility-trusted, not because the fn-press target moved.
+    case accessibilityUntrusted = "accessibility-untrusted"
 }
 
 /// Per-recording, privacy-safe operational evidence. The terminal emitter is
@@ -134,6 +140,8 @@ public final class ReliabilityRecording: @unchecked Sendable {
         switch insertionResult {
         case .targetRefused:
             evidence = (.targetRefused, false, false, false, false)
+        case .accessibilityUntrusted:
+            evidence = (.accessibilityUntrusted, false, false, false, false)
         case .backendRefused:
             evidence = (.backendRefused, true, false, false, false)
         case .accepted:

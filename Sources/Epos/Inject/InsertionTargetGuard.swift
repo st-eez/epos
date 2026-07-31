@@ -130,7 +130,17 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
 
     public func captureBaseline() {
         guard let baseline = copyFocusedElement() else {
-            log.info("insertion guard: no focused element at session start; focus guard inactive")
+            // An untrusted process cannot read the focused element at all, so this
+            // is where a revoked Accessibility grant first shows up. Naming it here
+            // is what stops the refusal it causes from reading as a moved target.
+            if AXIsProcessTrusted() {
+                log.info("insertion guard: no focused element at session start; focus guard inactive")
+            } else {
+                log.error(
+                    "insertion guard: Accessibility permission is not granted; "
+                        + "no insertion target can be captured"
+                )
+            }
             return
         }
         homeElement = baseline

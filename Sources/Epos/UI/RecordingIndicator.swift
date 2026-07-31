@@ -14,7 +14,9 @@ public struct RecordingIndicator: View {
             finalizationPhase: coordinator.finalizationPhase,
             amplitude: coordinator.amplitude,
             startUnavailable: coordinator.startUnavailable,
+            startNotice: coordinator.startNotice,
             insertionUnavailable: coordinator.insertionUnavailable,
+            insertionNotice: coordinator.insertionNotice,
             microphoneUnavailable: coordinator.microphoneUnavailable,
             recognitionUnavailable: coordinator.recognitionUnavailable,
             transcriptPreview: coordinator.hudTranscriptPreview
@@ -32,10 +34,16 @@ struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
     let finalizationPhase: FinalizationPhase
     let amplitude: Float
-    /// Flash a red "Not ready" notice: a held-fn dictation was dropped because
-    /// bootstrap finished without a capture format.
+    /// Flash a red not-ready notice: a held-fn dictation was dropped because there
+    /// was no capture format.
     let startUnavailable: Bool
+    /// What that notice says — it names the blocker ("Preparing", "Mic blocked")
+    /// rather than always reading "Not ready".
+    let startNotice: String
     let insertionUnavailable: Bool
+    /// What the refused-write notice says: "Not inserted", or "No access" when the
+    /// refusal was Accessibility rather than a moved target.
+    let insertionNotice: String
     /// Flash a red "Mic lost" notice: the microphone went away mid-hold, so the
     /// dictation stops where it stopped. Distinct from "Not ready" — this one has
     /// a partial transcript on its way to the field.
@@ -54,7 +62,9 @@ struct RecordingIndicatorSurface: View {
         finalizationPhase: FinalizationPhase = .finalizingSpeech,
         amplitude: Float,
         startUnavailable: Bool = false,
+        startNotice: String = "Not ready",
         insertionUnavailable: Bool = false,
+        insertionNotice: String = AppCoordinator.defaultInsertionNotice,
         microphoneUnavailable: Bool = false,
         recognitionUnavailable: Bool = false,
         transcriptPreview: String = ""
@@ -63,7 +73,9 @@ struct RecordingIndicatorSurface: View {
         self.finalizationPhase = finalizationPhase
         self.amplitude = amplitude
         self.startUnavailable = startUnavailable
+        self.startNotice = startNotice
         self.insertionUnavailable = insertionUnavailable
+        self.insertionNotice = insertionNotice
         self.microphoneUnavailable = microphoneUnavailable
         self.recognitionUnavailable = recognitionUnavailable
         self.transcriptPreview = transcriptPreview
@@ -162,10 +174,10 @@ struct RecordingIndicatorSurface: View {
     }
 
     private var noticeText: String? {
-        if insertionUnavailable { return "Not inserted" }
+        if insertionUnavailable { return insertionNotice }
         if microphoneUnavailable { return "Mic lost" }
         if recognitionUnavailable { return "Recognition lost" }
-        if startUnavailable { return "Not ready" }
+        if startUnavailable { return startNotice }
         return nil
     }
 

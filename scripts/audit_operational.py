@@ -109,6 +109,7 @@ def infer(messages: list[str]) -> tuple[str, bool]:
         ("recording setup failed:", "setup_failure"),
         ("cancelledBeforeAudioStart=true", "cancelled_before_audio"),
         ("transcription failed:", "recognizer_failure"),
+        ("final insertion refused: Accessibility permission is not granted", "permission_failure"),
         ("final insertion refused: fn-press target changed", "target_refusal"),
         ("guarded final insertion refused", "target_refusal"),
         ("final insertion refused: keystroke backend unavailable", "backend_refusal"),

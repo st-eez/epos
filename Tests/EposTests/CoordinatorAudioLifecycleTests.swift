@@ -21,6 +21,7 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
             textInsertion: NoOpInsertionBackend(),
             insertionTargetObserverFactory: { LoggingInsertionTargetObserver(events: events) },
             settings: Settings(),
+            permissions: .stub(),
             inlinePreviewEnabled: false,
             autoStart: false
         )

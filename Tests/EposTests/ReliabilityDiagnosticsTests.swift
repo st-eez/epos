@@ -15,7 +15,10 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
                 ReliabilityOutcome.deliveryMismatch.rawValue,
                 ReliabilityOutcome.writeAcceptedUnverified.rawValue,
                 ReliabilityOutcome.imeCommitUnacknowledged.rawValue,
-                ReliabilityOutcome.cancelledBeforeAudio.rawValue
+                ReliabilityOutcome.cancelledBeforeAudio.rawValue,
+                ReliabilityOutcome.captureInterrupted.rawValue,
+                ReliabilityOutcome.microphoneDenied.rawValue,
+                ReliabilityOutcome.accessibilityUntrusted.rawValue
             ],
             [
                 "setup-failed",
@@ -28,7 +31,10 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
                 "delivery-mismatch",
                 "write-accepted-unverified",
                 "ime-commit-unacknowledged",
-                "cancelled-before-audio"
+                "cancelled-before-audio",
+                "capture-interrupted",
+                "microphone-denied",
+                "accessibility-untrusted"
             ]
         )
     }

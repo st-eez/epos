@@ -54,6 +54,15 @@ public struct MenuBarView: View {
             saveAudioSamples = coordinator.saveAudioSamples
             saveCorrectionEvidence = coordinator.saveCorrectionEvidence
         }
+        .task {
+            // Opening the menu is the other natural moment to re-check a launch
+            // that came up without a capture format (a model that has finished
+            // installing since, a grant made in System Settings). A no-op when the
+            // pipeline is live; grants are re-read after it so the tiles and the
+            // banner agree.
+            await coordinator.refreshStartReadinessIfNeeded()?.value
+            permissions = coordinator.snapshotPermissions()
+        }
     }
 
     private var readinessBanner: some View {
@@ -103,7 +112,12 @@ public struct MenuBarView: View {
                     .scaleEffect(0.74)
                     .frame(width: 42, height: 22)
                     .onChange(of: launchAtLogin) { _, newValue in
-                        coordinator.setLaunchAtLogin(newValue)
+                        // Snap back when the register/unregister failed: the
+                        // coordinator reports the state that actually holds, and a
+                        // toggle left showing the user's choice would claim a login
+                        // item that does not exist.
+                        let applied = coordinator.setLaunchAtLogin(newValue)
+                        if applied != newValue { launchAtLogin = applied }
                     }
             }
             Divider().overlay(.white.opacity(0.08))
@@ -326,9 +340,16 @@ public struct MenuBarView: View {
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
-    private func allGranted(_ snapshot: PermissionsSnapshot?) -> Bool {
-        guard let snapshot else { return false }
-        return snapshot.microphone == .granted && snapshot.speech == .granted && snapshot.accessibility == .granted
+    /// The grants that are not in place, named as System Settings names them and
+    /// ordered as the tiles show them. Both the banner's decision and its wording
+    /// come from this one read: "Open Privacy to finish setup" left the user to
+    /// work out which of the three tiles was the problem.
+    static func missingPermissionNames(_ snapshot: PermissionsSnapshot) -> [String] {
+        var missing: [String] = []
+        if snapshot.microphone != .granted { missing.append("Microphone") }
+        if snapshot.speech != .granted { missing.append("Speech Recognition") }
+        if snapshot.accessibility != .granted { missing.append("Accessibility") }
+        return missing
     }
 
     private func permissionColor(_ status: PermissionStatus?) -> Color {
@@ -356,9 +377,15 @@ public struct MenuBarView: View {
         let color: Color
     }
 
-    /// Single source for the banner's icon/title/subtitle/color. Permission state
-    /// outranks recording state; these four facets were previously four parallel
-    /// computed properties that each re-derived the same two-axis decision.
+    /// Single source for the banner's icon/title/subtitle/color. Whether dictation
+    /// can actually start outranks recording state; these four facets were
+    /// previously four parallel computed properties that each re-derived the same
+    /// two-axis decision.
+    ///
+    /// The pipeline's own readiness comes first and by name. Deriving the banner
+    /// from grants alone let it read "Ready to dictate" over a coordinator with no
+    /// capture format — every press flashing "Not ready" while the menu insisted
+    /// everything was fine.
     private var readiness: Readiness {
         guard let permissions else {
             return Readiness(
@@ -368,11 +395,30 @@ public struct MenuBarView: View {
                 color: .white.opacity(0.56)
             )
         }
-        guard allGranted(permissions) else {
+        switch coordinator.startReadiness {
+        case .preparing:
+            return Readiness(
+                icon: "ellipsis",
+                title: "Starting up",
+                subtitle: "Preparing the speech pipeline",
+                color: amber
+            )
+        case .blocked(let blocker):
+            return Readiness(
+                icon: "exclamationmark.triangle.fill",
+                title: "Not ready",
+                subtitle: blocker.bannerSubtitle,
+                color: amber
+            )
+        case .ready:
+            break
+        }
+        let missingPermissions = Self.missingPermissionNames(permissions)
+        guard missingPermissions.isEmpty else {
             return Readiness(
                 icon: "exclamationmark.triangle.fill",
                 title: "Needs permission",
-                subtitle: "Open Privacy to finish setup",
+                subtitle: "Allow \(missingPermissions.joined(separator: " and ")) in Privacy",
                 color: amber
             )
         }

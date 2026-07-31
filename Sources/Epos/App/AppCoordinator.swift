@@ -29,8 +29,15 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var settings: Settings
     /// True while the indicator pill flashes the dropped-start notice; read by `RecordingIndicator`.
     @Published public private(set) var startUnavailable = false
+    /// What that notice says. It names the actual blocker — "Preparing" while the
+    /// speech model installs, "Mic blocked" for a revoked grant — because a bare
+    /// "Not ready" leaves the user with nothing to act on.
+    @Published public private(set) var startNotice = StartReadiness.ready.noticeLabel
     /// True while the indicator reports that the guarded final write was refused.
     @Published public private(set) var insertionUnavailable = false
+    /// What that notice says: "Not inserted" for a refused write, "No access" when
+    /// the refusal was Accessibility being untrusted rather than a moved target.
+    @Published public private(set) var insertionNotice = AppCoordinator.defaultInsertionNotice
     /// True while the indicator reports that the microphone died mid-recording and
     /// the dictation was cut short at that point.
     @Published public private(set) var microphoneUnavailable = false
@@ -82,6 +89,9 @@ public final class AppCoordinator: ObservableObject {
     private let insertionTargetObserverFactory: @MainActor () -> any InsertionTargetObserver
     private let permissions: PermissionsGate
     private let assets: AssetManager
+    /// Bounded re-read of the speech asset for the readiness re-check; injectable
+    /// so the recovery path is testable without the Speech framework's inventory.
+    private let refreshSpeechAsset: @Sendable () async -> AssetStatus
     private let recordingIDGenerator: @Sendable () -> String
     private let reliabilityDiagnostics: DiagnosticLogSink
     public static let defaultObservedEditCaptureDelays: [TimeInterval] = [2, 6, 12, 15]
@@ -141,8 +151,23 @@ public final class AppCoordinator: ObservableObject {
     /// will ever replay it. Internal so latch tests can stage the completed state
     /// without running the real permission prompts.
     var didCompleteBootstrap = false
-    /// Why bootstrap finished without a capture format; nil unless that happened.
-    private var startUnavailableReason: String?
+    /// Why the last readiness resolution produced no capture format; nil when it
+    /// produced one. Published so the menu banner can never claim "Ready to
+    /// dictate" over a dead pipeline. `internal(set)` (not `private(set)`) only so
+    /// recovery tests can stage a blocked launch; production code assigns it in
+    /// this file alone.
+    @Published public internal(set) var startBlocker: StartBlocker?
+    /// In-flight readiness re-check, so a press and a menu open share one probe.
+    private var readinessRefreshTask: Task<Void, Never>?
+    /// The re-check-then-replay a post-bootstrap press kicks off. Internal so
+    /// tests can await the whole recovery.
+    var readinessRecoveryTask: Task<Void, Never>?
+    /// Accessibility trust as it stood when the fn monitor was installed. `NSEvent`
+    /// global keyboard monitors deliver only to a trusted process and do not
+    /// retro-activate when the grant arrives, so a monitor installed before the
+    /// first AX prompt is inert until it is reinstalled.
+    private var monitorInstalledUnderTrust: PermissionStatus?
+    private var didBindHotkey = false
     private lazy var indicator: RecordingIndicatorController = {
         let controller = RecordingIndicatorController()
         controller.attach(content: RecordingIndicator(coordinator: self))
@@ -158,6 +183,8 @@ public final class AppCoordinator: ObservableObject {
         insertionTargetObserverFactory: (@MainActor () -> any InsertionTargetObserver)? = nil,
         settings: Settings = Settings.load(),
         settingsDefaults: UserDefaults = .standard,
+        permissions: PermissionsGate = PermissionsGate(),
+        refreshSpeechAsset: (@Sendable () async -> AssetStatus)? = nil,
         diagnostics: DiagnosticLogSink = .shared,
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
@@ -186,8 +213,19 @@ public final class AppCoordinator: ObservableObject {
         )
         self.settings = settings
         self.settingsDefaults = settingsDefaults
-        self.permissions = PermissionsGate()
-        self.assets = AssetManager(locale: settings.locale)
+        self.permissions = permissions
+        let assets = AssetManager(locale: settings.locale)
+        self.assets = assets
+        self.refreshSpeechAsset = refreshSpeechAsset ?? {
+            // The re-check probe, deliberately not `prepare()`: a press must not
+            // block on a multi-minute download. Read the status, and claim the
+            // process-scoped reservation only when the model is already installed
+            // — which is exactly the state a launch that gave up mid-download
+            // wakes into.
+            let status = await assets.currentStatus()
+            guard case .ready = status else { return status }
+            return await assets.prepare()
+        }
         self.transcriber = transcriber ?? Transcriber(locale: settings.locale)
         if autoStart {
             bindHotkey()
@@ -278,7 +316,12 @@ public final class AppCoordinator: ObservableObject {
     /// can also change in System Settings — not the cached `settings` copy.
     public var launchAtLogin: Bool { SMAppService.mainApp.status == .enabled }
 
-    public func setLaunchAtLogin(_ enabled: Bool) {
+    /// Applies the login-item change and returns the state that actually holds
+    /// afterwards, which is what the caller's toggle must show. A failed register
+    /// leaves the app unregistered; a toggle that kept the user's chosen value
+    /// would go on claiming a login item that does not exist.
+    @discardableResult
+    public func setLaunchAtLogin(_ enabled: Bool) -> Bool {
         do {
             if enabled {
                 try SMAppService.mainApp.register()
@@ -288,47 +331,63 @@ public final class AppCoordinator: ObservableObject {
             settings.launchAtLogin = enabled
             settings.save(to: settingsDefaults)
             log.info("launch-at-login \(enabled ? "enabled" : "disabled")")
+            return enabled
         } catch {
             log.error("launch-at-login toggle failed: \(String(describing: error))")
+            // The live system status, not the requested value: the request failed,
+            // and on failure that status is the only thing that knows the truth.
+            return launchAtLogin
         }
     }
 
     /// Synchronous read of current permission grants (no prompts).
     /// Used by MenuBarView to surface a warning row when something isn't granted.
+    ///
+    /// Every permission read in the app funnels through here so an Accessibility
+    /// grant made after launch is noticed exactly once, at no extra cost and with
+    /// no polling of its own.
     public func snapshotPermissions() -> PermissionsSnapshot {
-        permissions.snapshot()
+        let snapshot = permissions.snapshot()
+        reinstallHotkeyMonitorIfAccessibilityTrustArrived(snapshot.accessibility)
+        return snapshot
+    }
+
+    /// Whether a fn press can open a dictation right now, and if not, why.
+    public var startReadiness: StartReadiness {
+        if captureFormat != nil { return .ready }
+        if let startBlocker { return .blocked(startBlocker) }
+        return .preparing
     }
 
     /// One-time launch wiring: prompt for permissions, install the locale asset,
     /// and cache the analyzer's preferred audio format. Safe to call repeatedly;
     /// downstream calls are idempotent.
+    ///
+    /// One-shot because its TCC prompts are. Everything after them —
+    /// `resolveStartReadiness()` — is re-checkable, and has to be: a launch that
+    /// finds the model still installing (or a grant that arrives afterwards in
+    /// System Settings) used to leave `captureFormat` nil until the next relaunch.
     public func bootstrap() async {
         guard !didBootstrap else { return }
         didBootstrap = true
         log.info("bootstrap begin")
         let grants = await permissions.requestAll()
+        reinstallHotkeyMonitorIfAccessibilityTrustArrived(grants.accessibility)
         // Anything short of an installed, reserved model is a reason the pipeline may
         // have no capture format. Naming it here is what keeps a dropped press from
         // blaming permissions for a model that is merely still downloading.
-        var assetFailure: String?
-        switch await assets.prepare() {
+        let assetStatus = await assets.prepare()
+        switch assetStatus {
         case .ready, .reserved:
             break
         case .failed(let message):
-            assetFailure = "asset prepare failed: \(message)"
             log.error("bootstrap asset prepare failed: \(message)")
         case .downloading:
-            assetFailure = "speech model still downloading"
             log.info("bootstrap: speech model still downloading")
         case .missing:
-            assetFailure = "speech model not installed"
             log.error("bootstrap: speech model not installed")
         }
-        captureFormat = await transcriber.bestAudioFormat()
-        if captureFormat == nil {
-            startUnavailableReason = assetFailure
-                ?? "speech \(grants.speech), microphone \(grants.microphone)"
-        }
+        await resolveStartReadiness(assetStatus: assetStatus, grants: grants)
         if settings.edgeGlow.enabled {
             edgeGlow.apply(settings.edgeGlow)
             edgeGlow.prewarm()
@@ -336,6 +395,80 @@ public final class AppCoordinator: ObservableObject {
         didCompleteBootstrap = true
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
         replayDeferredStartIfNeeded()
+    }
+
+    /// Re-run the part of bootstrap that can succeed later: the speech asset probe,
+    /// the analyzer's format resolution, and a fresh (never prompting) grant read.
+    /// A no-op unless bootstrap finished without a capture format, and single-flight
+    /// so a press and a menu open share one probe. Internal so recovery tests can
+    /// await it.
+    @discardableResult
+    func refreshStartReadinessIfNeeded() -> Task<Void, Never>? {
+        guard didCompleteBootstrap, captureFormat == nil else { return nil }
+        if let readinessRefreshTask { return readinessRefreshTask }
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let assetStatus = await self.refreshSpeechAsset()
+            await self.resolveStartReadiness(
+                assetStatus: assetStatus,
+                grants: self.snapshotPermissions()
+            )
+            self.readinessRefreshTask = nil
+            self.log.info(
+                "readiness re-check: \(self.startBlocker?.logDescription ?? "capture format available")"
+            )
+        }
+        readinessRefreshTask = task
+        return task
+    }
+
+    private func resolveStartReadiness(
+        assetStatus: AssetStatus,
+        grants: PermissionsSnapshot
+    ) async {
+        captureFormat = await transcriber.bestAudioFormat()
+        startBlocker = captureFormat == nil
+            ? Self.startBlocker(assetStatus: assetStatus, grants: grants)
+            : nil
+    }
+
+    /// The named reason a readiness resolution produced no capture format. The
+    /// model outranks the grants: a model that is merely still downloading must
+    /// never be reported as a permission problem.
+    static func startBlocker(
+        assetStatus: AssetStatus,
+        grants: PermissionsSnapshot
+    ) -> StartBlocker {
+        switch assetStatus {
+        case .downloading:
+            return .speechModelInstalling
+        case .missing:
+            return .speechModelUnavailable("not installed")
+        case .failed(let message):
+            return .speechModelUnavailable(message)
+        case .ready, .reserved:
+            break
+        }
+        if grants.speech != .granted { return .speechDenied }
+        if grants.microphone != .granted { return .microphoneDenied }
+        return .speechEngineUnavailable
+    }
+
+    /// Reinstall the fn monitor the first time a grant is observed to have arrived
+    /// after the monitor went in. Idempotent — the recorded trust advances with the
+    /// reinstall — and never fires mid-recording, where tearing the monitor out
+    /// would swallow the release that ends the hold.
+    private func reinstallHotkeyMonitorIfAccessibilityTrustArrived(_ trust: PermissionStatus) {
+        guard didBindHotkey else { return }
+        guard trust == .granted else {
+            monitorInstalledUnderTrust = trust
+            return
+        }
+        guard monitorInstalledUnderTrust != .granted, state == .idle else { return }
+        log.info("accessibility trust arrived after launch; reinstalling the fn monitor")
+        hotkey.stop()
+        hotkey.start()
+        monitorInstalledUnderTrust = .granted
     }
 
     /// Replay a latched press at the transition that unblocked it (bootstrap
@@ -352,7 +485,7 @@ public final class AppCoordinator: ObservableObject {
             // asset download failed); an error log alone gives them zero feedback.
             log.error(
                 "pending start dropped: capture format unavailable after bootstrap "
-                    + "(\(self.startUnavailableReason ?? "unknown"))"
+                    + "(\(self.startBlocker?.logDescription ?? "unknown"))"
             )
             flashStartUnavailableNotice()
             return
@@ -370,6 +503,29 @@ public final class AppCoordinator: ObservableObject {
             }
             self.log.info("replaying start: fn still held")
             self.startRecording()
+        }
+    }
+
+    /// A press arriving after bootstrap finished without a capture format. That
+    /// verdict goes stale: the model may have finished installing since, or a grant
+    /// may have been made in System Settings. Report the press immediately — the
+    /// user is holding fn right now and has to know it did not take — then re-check
+    /// the re-checkable tail of bootstrap and replay the press through the ordinary
+    /// latch. A recovery that lands while fn is still held starts the recording,
+    /// which clears the notice; one that does not re-reports with the updated
+    /// reason. Internal, with its task exposed, so recovery tests can await it.
+    func startAfterReadinessRefresh() {
+        log.error(
+            "start dropped: no capture format after bootstrap "
+                + "(\(self.startBlocker?.logDescription ?? "unknown")); re-checking readiness"
+        )
+        flashStartUnavailableNotice()
+        pendingDeferredStart = true
+        readinessRecoveryTask = Task { [weak self] in
+            await self?.refreshStartReadinessIfNeeded()?.value
+            // Drains the latch on both outcomes: a recovery replays the press
+            // while fn is held, a persistent blocker re-reports it by name.
+            self?.replayDeferredStartIfNeeded()
         }
     }
 
@@ -391,13 +547,20 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// "Not ready": a held-fn dictation was dropped because there is no capture
-    /// format — bootstrap finished without one, or the mic refused to open.
-    private func flashStartUnavailableNotice() {
+    /// A held-fn dictation was dropped because there is no capture format —
+    /// bootstrap finished without one, it is still resolving one, or the mic
+    /// refused to open. The label names the blocker; the default reads it off the
+    /// current readiness, which is right for every caller that did not resolve a
+    /// more specific one.
+    private func flashStartUnavailableNotice(_ label: String? = nil) {
+        startNotice = label ?? startReadiness.noticeLabel
         flashNotice(\.startUnavailable)
     }
 
-    private func flashInsertionUnavailableNotice() {
+    static let defaultInsertionNotice = "Not inserted"
+
+    private func flashInsertionUnavailableNotice(_ label: String = defaultInsertionNotice) {
+        insertionNotice = label
         flashNotice(\.insertionUnavailable)
     }
 
@@ -414,10 +577,17 @@ public final class AppCoordinator: ObservableObject {
         flashNotice(\.recognitionUnavailable)
     }
 
-    private func bindHotkey() {
+    /// Internal so the monitor-reinstall behavior can be driven without the
+    /// autoStart path, which also runs the real permission prompts.
+    func bindHotkey() {
         hotkey.onPress = { [weak self] in self?.startRecording() }
         hotkey.onRelease = { [weak self] in self?.finishRecording() }
         hotkey.start()
+        didBindHotkey = true
+        // The trust the monitor just went in under. On a fresh install this is
+        // `.denied` — the AX prompt has not been answered yet — and the monitor
+        // macOS hands back is inert until the grant arrives and it is reinstalled.
+        monitorInstalledUnderTrust = permissions.snapshot().accessibility
     }
 
     /// Dogfood remote control: distributed notifications drive the REAL
@@ -458,21 +628,16 @@ public final class AppCoordinator: ObservableObject {
         }
         guard let format = captureFormat else {
             guard !didCompleteBootstrap else {
-                // Bootstrap already finished without a capture format, so no later
-                // transition can produce one. Latching here would swallow this press
-                // and every press after it in silence: the one-shot replay already
-                // consumed the latch, and the only other drain needs a finalize.
-                log.error(
-                    "start dropped: no capture format after bootstrap "
-                        + "(\(self.startUnavailableReason ?? "unknown"))"
-                )
-                flashStartUnavailableNotice()
+                startAfterReadinessRefresh()
                 return
             }
             // The launch window: fn pressed before bootstrap cached the format.
             // Latch the press instead of dropping it; `bootstrap()` replays it.
+            // The latch is silent by itself, and on a first launch it can hold for
+            // the whole model download — so say so, without disturbing the replay.
             pendingDeferredStart = true
             log.info("start requested before bootstrap completed; will replay when capture format is ready")
+            flashStartUnavailableNotice()
             return
         }
         // Drop the prior recording's pending edit-capture polls: once new dictation
@@ -671,6 +836,7 @@ public final class AppCoordinator: ObservableObject {
         let sessionRecordingID = currentRecordingID
         let reliability = currentReliabilityRecording
         var recognizerFailed = false
+        var microphoneDenied = false
 
         let events: AsyncStream<TranscriptEvent>
         do {
@@ -756,7 +922,16 @@ public final class AppCoordinator: ObservableObject {
             switch await commitFinalTranscript(finalTranscript) {
             case .completed(let insertionResult, let viaIME):
                 let applied = insertionResult == .accepted
-                if !applied { flashInsertionUnavailableNotice() }
+                if !applied {
+                    // A refusal caused by revoked Accessibility is not the user
+                    // having clicked away, and "Not inserted" would send them
+                    // looking for the wrong thing.
+                    flashInsertionUnavailableNotice(
+                        insertionResult == .accessibilityUntrusted
+                            ? "No access"
+                            : Self.defaultInsertionNotice
+                    )
+                }
                 let insertedTranscript = textInsertionSession?.insertedTranscript
                 if let evidenceID = recordCorrectionEvidenceIfEnabled(
                     enabled: shouldSaveCorrectionEvidence,
@@ -808,8 +983,13 @@ public final class AppCoordinator: ObservableObject {
             }
         } else {
             cancelTextInsertionSession()
+            microphoneDenied = !recognizerFailed && isMicrophoneAccessMissing()
+            if microphoneDenied {
+                log.error("recording produced no transcript: microphone access is not granted")
+            }
             reliability?.emit(
                 recognizerFailed ? .recognizerFailed :
+                    microphoneDenied ? .microphoneDenied :
                     (reliability?.hasAudioInput == true ? .emptyTranscript : .noInput)
             )
         }
@@ -821,6 +1001,21 @@ public final class AppCoordinator: ObservableObject {
         await resetSessionStateBeforeIdle()
         log.info("recording done (finalChars=\(finalChars))")
         returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: sessionRecordingID)
+        // Last, so the indicator teardown in the reset above cannot swallow it.
+        if microphoneDenied {
+            flashStartUnavailableNotice(StartBlocker.microphoneDenied.noticeLabel)
+        }
+    }
+
+    /// Whether the microphone grant is missing, asked ONLY of a recording that
+    /// produced nothing. macOS feeds a TCC-denied process a stream of silent
+    /// buffers, so such a recording is indistinguishable at the audio layer from a
+    /// user who said nothing: buffers and frames both arrive, `hasAudioInput`
+    /// passes, and the outcome has been auditing as `empty-transcript` ever since.
+    /// The grant read is one TCC lookup on a path that runs once per recording,
+    /// never per buffer.
+    private func isMicrophoneAccessMissing() -> Bool {
+        snapshotPermissions().microphone != .granted
     }
 
     /// The release arrived before the analyzer was ready for audio: either the state

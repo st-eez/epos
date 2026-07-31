@@ -1,7 +1,13 @@
+import ApplicationServices
 import Foundation
 
 public enum FinalInsertionResult: Equatable, Sendable {
     case targetRefused
+    /// The guard could not verify the fn-press target because this process is not
+    /// Accessibility-trusted: every AX read fails, so the target looks changed no
+    /// matter where focus actually is. Split out from `targetRefused` because the
+    /// two send the user to completely different places.
+    case accessibilityUntrusted
     case backendRefused
     case accepted
 }
@@ -30,19 +36,25 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     private let insertionSession: any TextInsertionSession
     private let target: any InsertionTargetObserver
     private let recordingID: String?
+    private let isAccessibilityTrusted: @Sendable () -> Bool
     private let log = EposLogger(category: "inject")
 
     private var didClose = false
     public private(set) var insertedTranscript: String?
 
+    /// `isAccessibilityTrusted` is injectable because TCC state cannot be staged
+    /// from a test process, and the untrusted branch is exactly the one that used
+    /// to be misreported as a moved target.
     public init(
         insertionSession: any TextInsertionSession,
         target: any InsertionTargetObserver = NullInsertionTargetObserver(),
-        recordingID: String? = nil
+        recordingID: String? = nil,
+        isAccessibilityTrusted: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() }
     ) {
         self.insertionSession = insertionSession
         self.target = target
         self.recordingID = recordingID
+        self.isAccessibilityTrusted = isAccessibilityTrusted
         target.captureBaseline()
     }
 
@@ -77,6 +89,21 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             return .refused(.backendRefused)
         }
         guard targetIsUnchanged() else {
+            // With Accessibility revoked there is no baseline to compare against and
+            // every AX read fails, so this refusal fires for a reason that has
+            // nothing to do with focus. The keystroke backend's own trust check is
+            // the only one that names it, and it sits behind this refusal where it
+            // can never run — leaving triage (and the user) blaming a moved target
+            // for a permissions outage.
+            guard isAccessibilityTrusted() else {
+                log.error(
+                    "final insertion refused: Accessibility permission is not granted "
+                        + "(System Settings > Privacy & Security > Accessibility)",
+                    recordingID: recordingID
+                )
+                cancel()
+                return .refused(.accessibilityUntrusted)
+            }
             log.info(
                 "final insertion refused: fn-press target changed",
                 recordingID: recordingID

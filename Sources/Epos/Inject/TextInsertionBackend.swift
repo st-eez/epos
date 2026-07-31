@@ -31,9 +31,12 @@ public final class KeystrokeTextInjector: TextInsertionBackend {
         KeystrokeTextInsertionSession()
     }
 
-    /// Splits `text` into UTF-16 chunks no longer than `maxUTF16Units`, never
-    /// cutting across a grapheme so multi-unit characters (emoji, combining
-    /// marks) survive intact.
+    /// Splits `text` into UTF-16 chunks, never cutting across a grapheme so
+    /// multi-unit characters (emoji, combining marks) survive intact. Chunks are
+    /// at most `maxUTF16Units` units EXCEPT for a single grapheme longer than
+    /// that, which forms its own oversize chunk: keeping it whole is worth more
+    /// than the limit, since a split grapheme is guaranteed to render wrong while
+    /// an oversize event is only at risk of truncation.
     static func unicodeChunks(of text: String, maxUTF16Units: Int = maxUTF16UnitsPerEvent) -> [[UniChar]] {
         var chunks: [[UniChar]] = []
         var current: [UniChar] = []

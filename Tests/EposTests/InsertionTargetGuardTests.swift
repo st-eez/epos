@@ -1,7 +1,44 @@
 import XCTest
 @testable import Epos
 
+/// The pre-write guard. Every refusal test states the process's Accessibility
+/// trust explicitly: the same refusal means two different things depending on it,
+/// and the xctest host's own trust varies by machine.
 final class InsertionTargetGuardTests: XCTestCase {
+    /// With Accessibility revoked the baseline is empty and every AX read fails, so
+    /// the guard refuses for a reason that has nothing to do with focus. The only
+    /// check that can name it — the keystroke backend's own trust read — sits
+    /// behind this refusal and never runs, so both the log and the reliability
+    /// outcome used to say the fn-press target had changed.
+    func testUntrustedAccessibilityIsRefusedAsAPermissionFailureNotAMovedTarget() {
+        let backend = FinalRecordingBackend()
+        let observer = FinalTargetObserver()
+        observer.focusChanged = true
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            target: observer,
+            isAccessibilityTrusted: { false }
+        )
+
+        XCTAssertEqual(session.insertFinalResult("must not land"), .accessibilityUntrusted)
+        // The refusal itself is unchanged: nothing is ever written blind.
+        XCTAssertEqual(backend.operations, [])
+        XCTAssertEqual(backend.cancelCount, 1)
+    }
+
+    /// A target that never moved is authorized whatever the trust read says — the
+    /// backend's own check is the one that stops an untrusted write there.
+    func testTrustIsOnlyConsultedOnRefusal() {
+        let backend = FinalRecordingBackend()
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            target: FinalTargetObserver(),
+            isAccessibilityTrusted: { XCTFail("trust must not be read on the accepting path"); return true }
+        )
+
+        XCTAssertEqual(session.insertFinalResult("terminal text"), .accepted)
+    }
+
     func testFinalSessionWritesExactlyOnceWhenTargetIsUnchanged() {
         let backend = FinalRecordingBackend()
         let observer = FinalTargetObserver(
@@ -31,7 +68,8 @@ final class InsertionTargetGuardTests: XCTestCase {
         let observer = FinalTargetObserver()
         let session = FinalTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
-            target: observer
+            target: observer,
+            isAccessibilityTrusted: { true }
         )
         observer.focusChanged = true
 
@@ -49,7 +87,8 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
         let session = FinalTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
-            target: observer
+            target: observer,
+            isAccessibilityTrusted: { true }
         )
         observer.value = "user edit"
         observer.range = .init(location: 9, length: 0)
@@ -67,7 +106,8 @@ final class InsertionTargetGuardTests: XCTestCase {
         )
         let session = FinalTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
-            target: observer
+            target: observer,
+            isAccessibilityTrusted: { true }
         )
         observer.range = .init(location: 0, length: 5)
 
@@ -92,7 +132,8 @@ final class InsertionTargetGuardTests: XCTestCase {
         let observer = FinalTargetObserver(requiresTextContextValidation: true)
         let session = FinalTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
-            target: observer
+            target: observer,
+            isAccessibilityTrusted: { true }
         )
 
         XCTAssertEqual(session.insertFinalResult("must not land"), .targetRefused)
@@ -116,7 +157,8 @@ final class InsertionTargetGuardTests: XCTestCase {
         changedObserver.focusChanged = true
         let targetSession = FinalTranscriptInsertionSession(
             insertionSession: FinalRecordingBackend().startInsertionSession(),
-            target: changedObserver
+            target: changedObserver,
+            isAccessibilityTrusted: { true }
         )
         let backendSession = FinalTranscriptInsertionSession(
             insertionSession: FinalRecordingBackend(insertionSucceeds: false).startInsertionSession()
