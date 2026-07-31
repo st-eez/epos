@@ -7,13 +7,6 @@ public struct MenuBarView: View {
     @State private var launchAtLogin = false
     @State private var saveAudioSamples = false
     @State private var saveCorrectionEvidence = false
-    @State private var glowEnabled = true
-    @State private var glowTheme = EdgeGlowTheme.standard
-    @State private var glowIntensity = 1.0
-    @State private var glowThickness = 1.0
-    @State private var glowRed = 0.22
-    @State private var glowGreen = 0.78
-    @State private var glowBlue = 0.72
 
     /// Curated glow palette. Swatches, not a SwiftUI ColorPicker: its well
     /// cannot present NSColorPanel from a non-activating menu-bar popover in
@@ -60,14 +53,6 @@ public struct MenuBarView: View {
             launchAtLogin = coordinator.launchAtLogin
             saveAudioSamples = coordinator.saveAudioSamples
             saveCorrectionEvidence = coordinator.saveCorrectionEvidence
-            let glow = coordinator.edgeGlowStyle
-            glowEnabled = glow.enabled
-            glowTheme = glow.theme
-            glowIntensity = glow.intensity
-            glowThickness = glow.thickness
-            glowRed = glow.red
-            glowGreen = glow.green
-            glowBlue = glow.blue
         }
     }
 
@@ -147,36 +132,30 @@ public struct MenuBarView: View {
             }
             Divider().overlay(.white.opacity(0.08))
             metaRow("Edge glow") {
-                Toggle("", isOn: $glowEnabled)
+                Toggle("", isOn: glowBinding(\.enabled))
                     .labelsHidden()
                     .toggleStyle(.switch)
                     .tint(teal)
                     .scaleEffect(0.74)
                     .frame(width: 42, height: 22)
-                    .onChange(of: glowEnabled) { _, _ in pushGlowStyle() }
             }
-            if glowEnabled {
+            if glow.enabled {
                 metaRow("Glow intensity") {
-                    Slider(value: $glowIntensity, in: EdgeGlowSettings.intensityRange)
+                    Slider(value: glowBinding(\.intensity), in: EdgeGlowSettings.intensityRange)
                         .controlSize(.mini)
                         .tint(teal)
                         .frame(width: 110)
-                        .onChange(of: glowIntensity) { _, _ in pushGlowStyle() }
                 }
                 metaRow("Glow thickness") {
-                    Slider(value: $glowThickness, in: EdgeGlowSettings.thicknessRange)
+                    Slider(value: glowBinding(\.thickness), in: EdgeGlowSettings.thicknessRange)
                         .controlSize(.mini)
                         .tint(teal)
                         .frame(width: 110)
-                        .onChange(of: glowThickness) { _, _ in pushGlowStyle() }
                 }
                 metaRow("Ember aura") {
                     Toggle("", isOn: Binding(
-                        get: { glowTheme == .ember },
-                        set: { on in
-                            glowTheme = on ? .ember : .standard
-                            pushGlowStyle()
-                        }
+                        get: { glow.theme == .ember },
+                        set: { on in setGlowTheme(on ? .ember : .standard) }
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)
@@ -184,18 +163,19 @@ public struct MenuBarView: View {
                     .scaleEffect(0.74)
                     .frame(width: 42, height: 22)
                 }
-                if glowTheme == .standard {
+                if glow.theme == .standard {
                     metaRow("Glow color") {
                         HStack(spacing: 6) {
                             ForEach(Array(Self.glowSwatches.enumerated()), id: \.offset) { _, swatch in
-                                let selected = abs(swatch.red - glowRed) < 0.01
-                                    && abs(swatch.green - glowGreen) < 0.01
-                                    && abs(swatch.blue - glowBlue) < 0.01
+                                let selected = abs(swatch.red - glow.red) < 0.01
+                                    && abs(swatch.green - glow.green) < 0.01
+                                    && abs(swatch.blue - glow.blue) < 0.01
                                 Button {
-                                    glowRed = swatch.red
-                                    glowGreen = swatch.green
-                                    glowBlue = swatch.blue
-                                    pushGlowStyle()
+                                    setGlowColor(
+                                        red: swatch.red,
+                                        green: swatch.green,
+                                        blue: swatch.blue
+                                    )
                                 } label: {
                                     Circle()
                                         .fill(Color(red: swatch.red, green: swatch.green, blue: swatch.blue))
@@ -227,33 +207,49 @@ public struct MenuBarView: View {
         .background(.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 
-    private func pushGlowStyle() {
-        coordinator.setEdgeGlowStyle(EdgeGlowSettings(
-            enabled: glowEnabled,
-            theme: glowTheme,
-            intensity: glowIntensity,
-            thickness: glowThickness,
-            red: glowRed,
-            green: glowGreen,
-            blue: glowBlue
-        ))
+    /// The glow controls read and write the coordinator's persisted settings
+    /// directly — no mirrored view state, so a change made anywhere (swatch,
+    /// slider, the color panel that outlives the popover) is immediately what
+    /// every control shows.
+    private var glow: EdgeGlowSettings { coordinator.edgeGlowStyle }
+
+    private func glowBinding<Value>(
+        _ keyPath: WritableKeyPath<EdgeGlowSettings, Value>
+    ) -> Binding<Value> {
+        Binding(
+            get: { glow[keyPath: keyPath] },
+            set: { newValue in
+                var style = glow
+                style[keyPath: keyPath] = newValue
+                coordinator.setEdgeGlowStyle(style)
+            }
+        )
+    }
+
+    private func setGlowTheme(_ theme: EdgeGlowTheme) {
+        var style = glow
+        style.theme = theme
+        coordinator.setEdgeGlowStyle(style)
+    }
+
+    /// Picking a color implies the standard theme.
+    private func setGlowColor(red: Double, green: Double, blue: Double) {
+        var style = glow
+        style.theme = .standard
+        style.red = red
+        style.green = green
+        style.blue = blue
+        coordinator.setEdgeGlowStyle(style)
     }
 
     /// Arbitrary colors via NSColorPanel, bridged manually: the app must be
     /// activated for the panel to come frontmost (the popover may close —
-    /// the panel stays and applies continuously). Picking a custom color
-    /// implies the standard theme.
+    /// the panel stays and applies continuously).
     private func openGlowColorPanel() {
-        let coordinator = self.coordinator
         GlowColorPanelBridge.shared.present(
-            red: glowRed, green: glowGreen, blue: glowBlue
+            red: glow.red, green: glow.green, blue: glow.blue
         ) { red, green, blue in
-            var style = coordinator.edgeGlowStyle
-            style.theme = .standard
-            style.red = red
-            style.green = green
-            style.blue = blue
-            coordinator.setEdgeGlowStyle(style)
+            setGlowColor(red: red, green: green, blue: blue)
         }
     }
 

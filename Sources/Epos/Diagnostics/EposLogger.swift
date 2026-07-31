@@ -97,10 +97,6 @@ public enum RecordingID {
 enum RecordingLogContext {
     private static let storage = RecordingLogContextStorage()
 
-    static func makeRecordingID() -> String {
-        RecordingID.make()
-    }
-
     static func activate(_ recordingID: String) {
         storage.activate(sanitize(recordingID))
     }

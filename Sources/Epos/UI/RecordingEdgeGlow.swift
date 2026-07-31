@@ -412,12 +412,11 @@ struct RecordingEdgeGlowView: View {
     /// layer per palette and scaled back up.
     private func glow(
         _ gradient: AngularGradient,
-        _ style: EdgeGlowSettings,
-        widthScale: CGFloat = 1
+        _ style: EdgeGlowSettings
     ) -> some View {
         GeometryReader { geo in
             let scale = Self.rasterScale
-            let thickness = style.thickness * widthScale
+            let thickness = style.thickness
             ZStack {
                 glowStroke(gradient, lineWidth: 36 * thickness / scale, blur: 26 / scale)
                 glowStroke(gradient, lineWidth: 14 * thickness / scale, blur: 9 / scale)

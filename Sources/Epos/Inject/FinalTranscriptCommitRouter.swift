@@ -33,7 +33,7 @@ enum FinalTranscriptCommitRouter {
         transcript: String,
         preview: InlinePreviewSession,
         insertion: FinalTranscriptInsertionSession?,
-        settle: () async -> Void = { try? await Task.sleep(for: .milliseconds(30)) }
+        settle: () async -> Void = { try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay) }
     ) async -> Route? {
         guard let insertion, InlinePreviewSession.isCommittableText(transcript) else {
             return nil

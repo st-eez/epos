@@ -32,10 +32,14 @@ public final class AppCoordinator: ObservableObject {
     /// True while the indicator reports that the guarded final write was refused.
     @Published public private(set) var insertionUnavailable = false
 
-    /// Running display: committed finals + in-progress partial. The partial replaces
-    /// only the tail because `SpeechTranscriber` emits volatile partials for the
-    /// in-progress segment alongside committed per-segment finals.
-    public var displayText: String { finalText + partial }
+    /// Running display: committed finals + in-progress partial, put through the
+    /// recording's `streamClean(canonicalize(...))` — the SAME transform the one
+    /// final write applies — so what the user watches is what gets written. The
+    /// partial replaces only the tail because `SpeechTranscriber` emits volatile
+    /// partials for the in-progress segment alongside committed per-segment finals.
+    /// Stored, not computed: the transform runs once per recognizer event rather
+    /// than once per SwiftUI read.
+    @Published public private(set) var displayText: String = ""
 
     /// True while the inline preview is actively mirroring the volatile transcript
     /// into the fn-press field (begin acked, channel healthy this whole recording).
@@ -86,6 +90,10 @@ public final class AppCoordinator: ObservableObject {
     private var transcriptTiming: TranscriptTimingDiagnostics
 
     private var transcriptionTask: Task<Void, Never>?
+    /// The running recording's transform, shared by the streamed display and the
+    /// one final write so they cannot diverge. Built once per recording, so a
+    /// mid-dictation correction-rule edit cannot change either of them.
+    private var activeTranscriptCleaner: (@Sendable (String) -> String)?
     /// Cached at bootstrap; nil until then. Internal so latch tests can install one.
     var captureFormat: AVAudioFormat?
     private var textInsertionSession: FinalTranscriptInsertionSession?
@@ -114,6 +122,14 @@ public final class AppCoordinator: ObservableObject {
     /// tests can pin both replay outcomes; defaults to the hotkey's hardware read.
     private let isFnKeyHeld: @MainActor () -> Bool
     private var didBootstrap = false
+    /// `didBootstrap` only means bootstrap STARTED. This is set when it has run
+    /// to completion, which is what tells a press with no capture format apart:
+    /// mid-bootstrap it is a legitimate deferred start, after completion nothing
+    /// will ever replay it. Internal so latch tests can stage the completed state
+    /// without running the real permission prompts.
+    var didCompleteBootstrap = false
+    /// Why bootstrap finished without a capture format; nil unless that happened.
+    private var startUnavailableReason: String?
     private lazy var indicator: RecordingIndicatorController = {
         let controller = RecordingIndicatorController()
         controller.attach(content: RecordingIndicator(coordinator: self))
@@ -201,11 +217,14 @@ public final class AppCoordinator: ObservableObject {
         edgeGlow.apply(style)
         if style.enabled {
             edgeGlow.prewarm()
-            // Enabled mid-recording with the channel live: light it now, and
-            // the pill (if it was the indicator) yields as usual.
-            if state == .recording, inlinePreviewMirroring {
+            // Enabled mid-recording: light it now, and the pill (if it was the
+            // indicator) yields as usual.
+            if glowOwnsCurrentRecording {
                 showEdgeGlow()
-                indicator.hide()
+                // The pill yields only while the preview mirrors the same text
+                // into the field; otherwise it is the only view of the volatile
+                // transcript and has to stay.
+                if inlinePreviewMirroring { indicator.hide() }
             }
         } else {
             // Disabled mid-recording: the pill must take over — hiding the
@@ -221,9 +240,9 @@ public final class AppCoordinator: ObservableObject {
 
     /// The authoritative final-transcript transform, built once per recording so a
     /// mid-session correction-rule edit cannot alter the finalization behavior of an
-    /// already-running dictation. It is the same `streamClean(canonicalize(...))` the
-    /// live indicator applies to every streamed partial, so the one final write cannot
-    /// re-type text the user already saw cleaned on screen.
+    /// already-running dictation. The same closure is held as `activeTranscriptCleaner`
+    /// and applied to every streamed partial (`displayText`), so the one final write
+    /// cannot re-type text differently from what the user watched on screen.
     func makeFinalTranscriptCleaner() -> @Sendable (String) -> String {
         let canonicalizer = corrections.canonicalizer
         return { TranscriptDeterministicCleaner.streamClean(canonicalizer.canonicalize($0)) }
@@ -265,15 +284,22 @@ public final class AppCoordinator: ObservableObject {
         guard !didBootstrap else { return }
         didBootstrap = true
         log.info("bootstrap begin")
-        _ = await permissions.requestAll()
+        let grants = await permissions.requestAll()
+        var assetFailure: String?
         if case .failed(let message) = await assets.prepare() {
+            assetFailure = "asset prepare failed: \(message)"
             log.error("bootstrap asset prepare failed: \(message)")
         }
         captureFormat = await transcriber.bestAudioFormat()
-        if inlinePreviewEnabled, settings.edgeGlow.enabled {
+        if captureFormat == nil {
+            startUnavailableReason = assetFailure
+                ?? "speech \(grants.speech), microphone \(grants.microphone)"
+        }
+        if settings.edgeGlow.enabled {
             edgeGlow.apply(settings.edgeGlow)
             edgeGlow.prewarm()
         }
+        didCompleteBootstrap = true
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
         replayDeferredStartIfNeeded()
     }
@@ -290,7 +316,10 @@ public final class AppCoordinator: ObservableObject {
         guard captureFormat != nil else {
             // The user held fn and spoke into a dead pipeline (permission denied or
             // asset download failed); an error log alone gives them zero feedback.
-            log.error("pending start dropped: capture format unavailable after bootstrap")
+            log.error(
+                "pending start dropped: capture format unavailable after bootstrap "
+                    + "(\(self.startUnavailableReason ?? "unknown"))"
+            )
             flashStartUnavailableNotice()
             return
         }
@@ -377,6 +406,18 @@ public final class AppCoordinator: ObservableObject {
             return
         }
         guard let format = captureFormat else {
+            guard !didCompleteBootstrap else {
+                // Bootstrap already finished without a capture format, so no later
+                // transition can produce one. Latching here would swallow this press
+                // and every press after it in silence: the one-shot replay already
+                // consumed the latch, and the only other drain needs a finalize.
+                log.error(
+                    "start dropped: no capture format after bootstrap "
+                        + "(\(self.startUnavailableReason ?? "unknown"))"
+                )
+                flashStartUnavailableNotice()
+                return
+            }
             // The launch window: fn pressed before bootstrap cached the format.
             // Latch the press instead of dropping it; `bootstrap()` replays it.
             pendingDeferredStart = true
@@ -407,6 +448,7 @@ public final class AppCoordinator: ObservableObject {
         finalizationPhase = .finalizingSpeech
         finalText = ""
         partial = ""
+        displayText = ""
         amplitude = 0
         insertionUnavailable = false
         textInsertionSession = FinalTranscriptInsertionSession(
@@ -417,6 +459,7 @@ public final class AppCoordinator: ObservableObject {
         startInlinePreview()
         transcriptTiming.start()
         let cleanFinalTranscript = makeFinalTranscriptCleaner()
+        activeTranscriptCleaner = cleanFinalTranscript
         let contextualStrings = speechContextualStrings()
 
         transcriptionTask = Task { [weak self] in
@@ -614,13 +657,24 @@ public final class AppCoordinator: ObservableObject {
 
     func handlePartialTranscript(_ text: String) {
         partial = text
+        refreshDisplayText()
         mirrorInlinePreview()
     }
 
     func handleFinalTranscriptSegment(_ text: String) {
         finalText += text
         partial = ""
+        refreshDisplayText()
         mirrorInlinePreview()
+    }
+
+    /// Re-runs the recording's transform over the accumulated raw text. Outside a
+    /// recording (test staging, a stray late event) the current correction rules
+    /// stand in, which is what the next recording would use anyway.
+    private func refreshDisplayText() {
+        let clean = activeTranscriptCleaner ?? makeFinalTranscriptCleaner()
+        activeTranscriptCleaner = clean
+        displayText = clean(finalText + partial)
     }
 
     /// Mirror exactly what the HUD shows. Off unless the spike is enabled, where it
@@ -705,20 +759,27 @@ public final class AppCoordinator: ObservableObject {
         )
     }
 
-    /// With the preview disabled the pill shows immediately, exactly as it
-    /// always has. Enabled, the glow lights instantly at fn press — before
-    /// the AX capture and the probe handshake, so the prewarmed panel makes
-    /// this a pure fade. If the preview channel never confirms within the
-    /// deadline (unidentifiable target, probe dead, begin refused), the glow
-    /// retires and the pill takes over, so the user is never left with a glow
-    /// advertising a channel that is not streaming. Internal so glow-lifetime
-    /// tests can drive the presentation without a live audio pipeline.
+    /// The glow lights instantly at fn press — before the AX capture and (under
+    /// the preview spike) the probe handshake, so the prewarmed panel makes this
+    /// a pure fade. With the glow turned off in settings the pill shows instead,
+    /// exactly as it always has. Internal so glow-lifetime tests can drive the
+    /// presentation without a live audio pipeline.
     func presentIndicatorForRecordingStart() {
-        guard inlinePreviewEnabled, settings.edgeGlow.enabled else {
+        guard settings.edgeGlow.enabled else {
             presentBottomCenterPill()
             return
         }
         showEdgeGlow()
+        guard inlinePreviewEnabled else {
+            // No preview: the glow frames the recording, and the pill presents
+            // alongside it because it is the only view of the volatile transcript.
+            presentBottomCenterPill()
+            return
+        }
+        // Under the spike the glow doubles as the channel's cue: if the preview
+        // never confirms within the deadline (unidentifiable target, probe dead,
+        // begin refused), the glow retires and the pill takes over, so the user is
+        // never left with a glow advertising a channel that is not streaming.
         // Keyed to the recording, not the preview generation: this runs
         // before `startInlinePreview` bumps it.
         let recordingID = currentRecordingID
@@ -729,6 +790,13 @@ public final class AppCoordinator: ObservableObject {
             self.hideEdgeGlow()
             self.presentBottomCenterPill()
         }
+    }
+
+    /// Whether the glow — rather than the pill — is the right indicator for the
+    /// recording in progress. Under the preview spike the glow tracks the channel
+    /// it advertises; without it the glow owns every recording.
+    private var glowOwnsCurrentRecording: Bool {
+        state == .recording && (!inlinePreviewEnabled || inlinePreviewMirroring)
     }
 
     private func presentBottomCenterPill() {
@@ -792,11 +860,9 @@ public final class AppCoordinator: ObservableObject {
         await inlinePreviewDiscard?.value
         let report = await inlinePreview.report()
         if report.marksSent > 0, !report.committed {
-            // The probe acknowledges issuing the discard, not the target app having
-            // drawn it. A short fixed settle keeps the composition from still being
-            // on screen when the keystrokes land. After an acked IME commit no
-            // keystrokes follow, so there is nothing to settle for.
-            try? await Task.sleep(for: .milliseconds(30))
+            // After an acked IME commit no keystrokes follow, so there is nothing
+            // to settle for.
+            try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay)
         }
         injectLog.info(report.logLine)
         self.inlinePreview = nil
@@ -813,13 +879,6 @@ public final class AppCoordinator: ObservableObject {
         partial = ""
         finalText = fallbackFinalText
         log.info("recording promoted partial fallback finalChars=\(self.finalText.count)")
-    }
-
-    /// Insert the already-canonicalized final text through the fn-press session.
-    @discardableResult
-    func insertFinalTranscript(_ text: String) -> Bool {
-        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
-        return textInsertionSession?.insertFinal(text) ?? false
     }
 
     func insertFinalTranscriptResult(_ text: String) -> FinalInsertionResult {
@@ -1018,6 +1077,7 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         partial = ""
         transcriptionTask = nil
+        activeTranscriptCleaner = nil
         currentReliabilityRecording = nil
         transcriptTiming.finish()
         finalizationPhase = .finalizingSpeech

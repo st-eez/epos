@@ -71,6 +71,39 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
         XCTAssertTrue(coordinator.startUnavailable)
     }
 
+    /// Bootstrap already finished and produced no capture format (speech denied,
+    /// asset install failed). Latching here would be a black hole: the one-shot
+    /// replay is spent and the only other drain needs a `.finalizing → .idle`
+    /// transition that a never-starting recording cannot produce. Every press
+    /// must instead report itself.
+    func testPressAfterCompletedBootstrapWithoutCaptureFormatReportsInsteadOfLatching() {
+        let coordinator = makeCoordinator()
+        coordinator.didCompleteBootstrap = true
+        fn.held = true
+
+        coordinator.startRecording()
+
+        XCTAssertFalse(coordinator.pendingDeferredStart)
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertEqual(started.count, 0)
+        XCTAssertTrue(coordinator.startUnavailable)
+    }
+
+    /// The notice is not one-shot: a second press with the pipeline still dead
+    /// must report again rather than fall into the silent latch.
+    func testRepeatedPressesAfterCompletedNilBootstrapKeepReporting() {
+        let coordinator = makeCoordinator()
+        coordinator.didCompleteBootstrap = true
+        fn.held = true
+
+        coordinator.startRecording()
+        coordinator.startRecording()
+
+        XCTAssertFalse(coordinator.pendingDeferredStart)
+        XCTAssertTrue(coordinator.startUnavailable)
+        XCTAssertEqual(started.count, 0)
+    }
+
     func testReplayWithoutPendingPressIsANoOp() {
         let coordinator = makeCoordinator()
 

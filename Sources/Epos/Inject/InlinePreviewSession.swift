@@ -74,6 +74,11 @@ actor InlinePreviewSession {
     /// ambiguous write), while a slow ack only delays finalization.
     static let commitAckTimeout: TimeInterval = 0.5
 
+    /// The probe acks issuing an un-mark/discard, not the host app having drawn
+    /// it. Any keystrokes that follow wait this long so they never land on a
+    /// composition still on screen.
+    static let compositionSettleDelay: Duration = .milliseconds(30)
+
     private let transport: InlinePreviewTransport
     private let bundleIdentifier: String
     private let throttle: Duration
@@ -92,6 +97,9 @@ actor InlinePreviewSession {
     private var pendingMark: String?
     private var lastSentMark: String?
     private var draining = false
+    /// Woken when the in-flight drain finishes, so the commit handshake can wait
+    /// for reply alignment without polling.
+    private var drainCompletions: [CheckedContinuation<Void, Never>] = []
     private var began = false
     private var didAttemptMark = false
     private var marksSent = 0
@@ -206,9 +214,7 @@ actor InlinePreviewSession {
         // before this cancel — and the commit after it — can trust theirs.
         // `committing` stops new drains; waiting out the current one leaves the
         // stream aligned. A mark that fails in flight degrades and aborts here.
-        // (Real sleep, not the injected throttle sleep: this wait is part of the
-        // commit handshake, not the mark cadence.)
-        while draining { try? await Task.sleep(for: .milliseconds(2)) }
+        await awaitDrainCompletion()
         guard phase == .committing else { return false }
         do {
             let reply = try await transport.send("cancel")
@@ -281,11 +287,26 @@ actor InlinePreviewSession {
         Task { await self.drain() }
     }
 
+    /// Suspends until no drain is in flight. The `draining` check and the
+    /// continuation hand-off happen without an intervening suspension point, so a
+    /// drain finishing in between cannot be missed.
+    private func awaitDrainCompletion() async {
+        guard draining else { return }
+        await withCheckedContinuation { drainCompletions.append($0) }
+    }
+
+    private func finishDraining() {
+        draining = false
+        let waiters = drainCompletions
+        drainCompletions = []
+        for waiter in waiters { waiter.resume() }
+    }
+
     /// Sends the newest pending text, then holds the throttle interval open. Marks
     /// arriving during that window replace each other, so a burst of partials costs
     /// one write per interval and always shows the latest text.
     private func drain() async {
-        defer { draining = false }
+        defer { finishDraining() }
         while phase == .marking, let text = pendingMark {
             pendingMark = nil
             didAttemptMark = true
