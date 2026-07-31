@@ -361,6 +361,11 @@ public final class AppCoordinator: ObservableObject {
         currentRecordingID = recordingID
         RecordingLogContext.activate(recordingID)
         log.info("recording start")
+        // Feedback first, work second: the glow (or pill) and the start cue
+        // land before the synchronous AX baseline capture below, which can
+        // stall for hundreds of milliseconds on slow accessibility targets.
+        presentIndicatorForRecordingStart()
+        RecordingStartCue.play()
         let reliability = ReliabilityRecording(
             recordingID: recordingID,
             diagnostics: reliabilityDiagnostics
@@ -378,8 +383,6 @@ public final class AppCoordinator: ObservableObject {
         )
         startInlinePreview()
         transcriptTiming.start()
-        presentIndicatorForRecordingStart()
-        RecordingStartCue.play()
         let cleanFinalTranscript = makeFinalTranscriptCleaner()
         let contextualStrings = speechContextualStrings()
 
@@ -647,24 +650,26 @@ public final class AppCoordinator: ObservableObject {
         )
     }
 
-    /// With no preview session the pill shows immediately, exactly as it
-    /// always has. With one, the glow lights instantly at fn press — the
-    /// prewarmed panel makes this a fade, not a construction — and stays for
-    /// the whole dictation. If the preview channel never confirms within the
-    /// deadline, the glow retires and the pill takes over, so the user is
-    /// never left with a glow advertising a channel that is not streaming.
-    /// Internal so glow-lifetime tests can drive the presentation without a
-    /// live audio pipeline.
+    /// With the preview disabled the pill shows immediately, exactly as it
+    /// always has. Enabled, the glow lights instantly at fn press — before
+    /// the AX capture and the probe handshake, so the prewarmed panel makes
+    /// this a pure fade. If the preview channel never confirms within the
+    /// deadline (unidentifiable target, probe dead, begin refused), the glow
+    /// retires and the pill takes over, so the user is never left with a glow
+    /// advertising a channel that is not streaming. Internal so glow-lifetime
+    /// tests can drive the presentation without a live audio pipeline.
     func presentIndicatorForRecordingStart() {
-        guard inlinePreview != nil else {
+        guard inlinePreviewEnabled else {
             presentBottomCenterPill()
             return
         }
         showEdgeGlow()
-        let generation = inlinePreviewGeneration
+        // Keyed to the recording, not the preview generation: this runs
+        // before `startInlinePreview` bumps it.
+        let recordingID = currentRecordingID
         Task { [weak self] in
             try? await Task.sleep(for: Self.indicatorFallbackDelay)
-            guard let self, self.inlinePreviewGeneration == generation,
+            guard let self, self.currentRecordingID == recordingID,
                   self.state == .recording, !self.inlinePreviewMirroring else { return }
             self.hideEdgeGlow()
             self.presentBottomCenterPill()

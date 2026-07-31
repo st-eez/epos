@@ -33,6 +33,7 @@ final class RecordingEdgeGlowController {
         guard let frame = screen?.frame else { return }
         let panel = ensurePanel()
         visibilityGeneration += 1
+        model.shownAt = Date()
         panel.setFrame(frame, display: false)
         if !panel.isVisible { panel.alphaValue = 0 }
         panel.orderFrontRegardless()
@@ -86,10 +87,12 @@ final class RecordingEdgeGlowController {
     }
 }
 
-/// Live mic level feeding the glow's brightness.
+/// Live mic level feeding the glow's brightness, plus the show timestamp
+/// driving the ignition pulse.
 @MainActor
 final class RecordingEdgeGlowModel: ObservableObject {
     @Published var amplitude: Float = 0
+    @Published var shownAt: Date = .distantPast
 }
 
 /// The glow itself: two blurred strokes centered on the screen boundary (only
@@ -101,6 +104,10 @@ struct RecordingEdgeGlowView: View {
 
     /// One full breath — dimmest to brightest and back.
     private static let breathPeriod: TimeInterval = 3.4
+    /// The entrance pulse: full-bright at show, easing into the calm breath.
+    /// Without it the glow can enter at the trough of the breath cycle and be
+    /// nearly invisible for its first moments — read as start lag.
+    private static let ignitionDuration: TimeInterval = 0.9
 
     private static let gradient = AngularGradient(
         colors: [
@@ -119,7 +126,9 @@ struct RecordingEdgeGlowView: View {
             let breath = 0.5 + 0.16 * sin(phase)
             // Same perceptual mapping as the pill's meter bars.
             let level = pow(min(1, max(0, Double(model.amplitude) / 0.075)), 0.55)
-            let intensity = min(1, breath + 0.5 * level)
+            let sinceShow = context.date.timeIntervalSince(model.shownAt)
+            let ignition = max(0, 1 - sinceShow / Self.ignitionDuration)
+            let intensity = min(1, breath + 0.5 * level + 0.6 * ignition)
             ZStack {
                 glowStroke(lineWidth: 44, blur: 34, opacity: 0.45 * intensity)
                 glowStroke(lineWidth: 16, blur: 10, opacity: 0.6 * intensity)
