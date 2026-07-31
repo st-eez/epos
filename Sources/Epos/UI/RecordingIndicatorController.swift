@@ -79,8 +79,11 @@ public final class RecordingIndicatorController {
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 0
         } completionHandler: { [weak self] in
-            guard let self, self.visibilityGeneration == generation else { return }
-            panel.orderOut(nil)
+            // AppKit invokes animation completions on the main thread.
+            MainActor.assumeIsolated {
+                guard let self, self.visibilityGeneration == generation else { return }
+                panel.orderOut(nil)
+            }
         }
     }
 

@@ -22,7 +22,10 @@ public struct RecordingIndicator: View {
     }
 }
 
-/// Compact, non-interactive recording pill with a volatile transcript preview.
+/// Compact, non-interactive recording pill. Liquid Glass, content-hugging:
+/// a small capsule while it is only the "mic is hot" cue, widening to carry
+/// the transcript line when the pill is the sole transcript surface (preview
+/// disabled or degraded).
 struct RecordingIndicatorSurface: View {
     let state: CoordinatorState
     let finalizationPhase: FinalizationPhase
@@ -33,7 +36,6 @@ struct RecordingIndicatorSurface: View {
     let insertionUnavailable: Bool
     let transcriptPreview: String
 
-    private let panelColor = Color(red: 0.1, green: 0.12, blue: 0.14)
     private let teal = EposPalette.teal
     private let amber = EposPalette.amber
 
@@ -55,70 +57,57 @@ struct RecordingIndicatorSurface: View {
 
     var body: some View {
         content
-            .background(
-                .ultraThinMaterial,
-                in: RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            )
-            .background(
-                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(panelColor.opacity(0.9))
-            )
-            .overlay(surfaceStroke)
-            .shadow(color: .black.opacity(0.17), radius: 12, x: 0, y: 6)
             .animation(.easeOut(duration: 0.08), value: amplitude)
     }
 
-    private var content: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 8) {
-                statusDot
-                if state == .recording {
-                    amplitudeMeter
-                } else {
-                    activitySpinner
-                }
-                statusLabel
-            }
-            if state == .recording, !transcriptPreview.isEmpty {
+    /// The wide form exists only while the pill carries the transcript line;
+    /// its fixed width keeps the glass from resizing on every word.
+    @ViewBuilder private var content: some View {
+        if state == .recording, !transcriptPreview.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                statusRow
                 Text(transcriptPreview)
                     .font(.system(size: 11))
-                    .foregroundStyle(.white.opacity(0.72))
+                    .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.head)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .frame(width: 304, alignment: .leading)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .glassEffect(.regular, in: .rect(cornerRadius: 20))
+        } else {
+            statusRow
+                .padding(.horizontal, 14)
+                .padding(.vertical, 9)
+                .glassEffect(.regular, in: Capsule())
         }
-        .frame(width: 304, alignment: .leading)
-        .frame(minHeight: 36, alignment: .leading)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
+    }
+
+    private var statusRow: some View {
+        HStack(spacing: 8) {
+            statusDot
+            if state == .recording {
+                amplitudeMeter
+            } else {
+                activitySpinner
+            }
+            statusLabel
+        }
     }
 
     private var statusLabel: some View {
         Text(noticeText ?? Self.statusText(state: state, finalizationPhase: finalizationPhase))
             .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(.white.opacity(0.88))
+            .foregroundStyle(.primary)
             .lineLimit(1)
     }
-
-    private let cornerRadius: CGFloat = 18
 
     private var noticeText: String? {
         if insertionUnavailable { return "Not inserted" }
         if startUnavailable { return "Not ready" }
         return nil
-    }
-
-    private var surfaceStroke: some View {
-        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-            .strokeBorder(
-                LinearGradient(
-                    colors: [.white.opacity(0.18), .white.opacity(0.07), teal.opacity(0.1)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1
-            )
     }
 
     private var statusDot: some View {
@@ -152,7 +141,7 @@ struct RecordingIndicatorSurface: View {
         return switch state {
         case .recording: teal
         case .finalizing: amber
-        case .idle: .white.opacity(0.34)
+        case .idle: .secondary
         }
     }
 
