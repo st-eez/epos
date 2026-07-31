@@ -1,5 +1,13 @@
 # Inline preview feasibility (palette input method)
 
+**Status 2026-07-31: probe PASSED and promoted to product.** Preedit rendered
+and survived held fn in cmux and Ghostty (the pre-registered kill criterion)
+and the mechanism ran in daily dogfood under `EPOS_INLINE_PREVIEW=1` launches.
+Now shipped: gated by `Settings.inlinePreview` (default on), companion bundle
+built from `probes/inline-preview/` and installed by
+`scripts/install-signed-app.sh`; see `specs/baseline.md` "Shipped Since
+Baseline". The env var is gone. The rest of this file is the research record.
+
 2026-07-30 research record: can Epos show live provisional text inside the
 focused field, the way native dictation does, without weakening the
 one-guarded-write insertion contract? Verdict: **achievable with conditions —

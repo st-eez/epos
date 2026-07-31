@@ -28,4 +28,15 @@ final class SettingsTests: XCTestCase {
 
         XCTAssertTrue(Settings.load(from: defaults).saveCorrectionEvidence)
     }
+
+    func testInlinePreviewDefaultsOnAndPersistsAStoredOff() {
+        // Never-set reads as on; a stored false must be distinct from "never set".
+        XCTAssertTrue(Settings.load(from: defaults).inlinePreview)
+
+        var settings = Settings.load(from: defaults)
+        settings.inlinePreview = false
+        settings.save(to: defaults)
+
+        XCTAssertFalse(Settings.load(from: defaults).inlinePreview)
+    }
 }

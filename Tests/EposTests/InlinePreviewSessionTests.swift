@@ -542,12 +542,6 @@ final class InlinePreviewSessionTests: XCTestCase {
 
     // MARK: - Launch gate
 
-    func testPreviewIsOffUnlessTheEnvironmentOptsInExactly() {
-        XCTAssertFalse(InlinePreviewPolicy.load(from: [:]))
-        XCTAssertFalse(InlinePreviewPolicy.load(from: [InlinePreviewPolicy.environmentKey: "0"]))
-        XCTAssertTrue(InlinePreviewPolicy.load(from: [InlinePreviewPolicy.environmentKey: "1"]))
-    }
-
     @MainActor
     func testCoordinatorBuildsNoPreviewWhenDisabledOrTargetIsUnidentifiable() {
         let disabled = AppCoordinator(

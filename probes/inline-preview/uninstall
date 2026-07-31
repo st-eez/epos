@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Full purge of the probe input source. Exit 0 only when TIS no longer lists it.
+set -uo pipefail
+
+probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+bundle_name="EposProbe.app"
+installed_bundle="$HOME/Library/Input Methods/$bundle_name"
+staged_bundle="$probe_dir/.build/$bundle_name"
+source_id="com.steez.inputmethod.EposProbe"
+lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+
+tisctl() { /usr/bin/xcrun swift "$probe_dir/Tools/tisctl.swift" "$@"; }
+
+echo "== deselect and stop =="
+/usr/bin/xcrun swift -e '
+import Carbon
+import Foundation
+let identifier = "com.steez.inputmethod.EposProbe"
+let filter = [kTISPropertyInputSourceID as String: identifier] as CFDictionary
+if let sources = TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource],
+   let source = sources.first {
+    print("TISDeselectInputSource -> \(TISDeselectInputSource(source))")
+    print("TISDisableInputSource  -> \(TISDisableInputSource(source))")
+}
+' 2>/dev/null || true
+/usr/bin/pkill -x EposProbe >/dev/null 2>&1 || true
+
+echo "== delete bundles =="
+for path in "$installed_bundle" "$staged_bundle" "$HOME/.Trash/$bundle_name"; do
+  if [[ -e "$path" ]]; then
+    if find "$path" -depth -delete 2>/dev/null; then
+      echo "  deleted $path"
+    else
+      echo "  COULD NOT DELETE $path — remove it manually, then rerun" >&2
+    fi
+  fi
+done
+
+echo "== rebuild LaunchServices =="
+"$lsregister" -r -domain local -domain system -domain user >/dev/null 2>&1 || true
+
+echo "== restart input source agents =="
+/usr/bin/killall TextInputMenuAgent TextInputSwitcher lsd cfprefsd >/dev/null 2>&1 || true
+sleep 3
+
+echo "== verify =="
+for _ in $(seq 1 10); do
+  if ! tisctl find "$source_id" >/dev/null 2>&1; then
+    echo "purged — $source_id is absent from TISCreateInputSourceList"
+    exit 0
+  fi
+  sleep 2
+done
+
+echo "STILL PRESENT — $source_id remains in TISCreateInputSourceList" >&2
+tisctl find "$source_id" >&2
+exit 1

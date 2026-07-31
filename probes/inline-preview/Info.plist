@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>English</string>
+	<key>CFBundleDisplayName</key>
+	<string>EposProbe</string>
+	<key>CFBundleExecutable</key>
+	<string>EposProbe</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.steez.inputmethod.EposProbe</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>EposProbe</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>ComponentInvisibleInSystemUI</key>
+	<true/>
+	<key>InputMethodConnectionName</key>
+	<string>EposProbe_1_Connection</string>
+	<key>InputMethodServerControllerClass</key>
+	<string>EposProbeInputController</string>
+	<key>InputMethodType</key>
+	<string>palette</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>26.0</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsSuddenTermination</key>
+	<true/>
+	<key>NSUIElement</key>
+	<string>1</string>
+	<key>TISInputSourceID</key>
+	<string>com.steez.inputmethod.EposProbe</string>
+	<key>TISIntendedLanguage</key>
+	<string>en</string>
+</dict>
+</plist>

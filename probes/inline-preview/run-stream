@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Stream fake marked text into whatever field is focused right now.
+# Focus the target field FIRST, then run this from another terminal/pane.
+set -euo pipefail
+
+probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+driver="$probe_dir/.build/epos-probe-stream"
+
+if [[ ! -x "$driver" ]]; then
+  echo "building driver..." >&2
+  mkdir -p "$probe_dir/.build"
+  /usr/bin/xcrun swiftc \
+    -sdk "$(/usr/bin/xcrun --sdk macosx --show-sdk-path)" \
+    -target arm64-apple-macos26.0 \
+    -O \
+    -o "$driver" \
+    "$probe_dir/Driver/main.swift" \
+    "$probe_dir/Sources/ProbeSupport.swift" >&2
+fi
+
+exec "$driver" "$@"

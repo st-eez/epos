@@ -22,4 +22,12 @@ ditto "$built_app_path" "$install_app_path"
 
 codesign --verify --deep --strict "$install_app_path"
 
+# The inline preview streams into the field through the companion palette input
+# method; keep it in lockstep with the app. A registration that needs a logout
+# (first install on a machine) must not fail the app install — Epos degrades to
+# the pill HUD until the input method is live.
+if ! "$script_dir/../probes/inline-preview/install"; then
+  echo "warning: inline-preview input method not live yet; Epos falls back to the pill HUD" >&2
+fi
+
 printf '%s\n' "$install_app_path"

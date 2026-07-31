@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+# Build, sign, install and LIVE-register the throwaway palette input method.
+# Exit 0 = registered live. Exit 1 = logout/login required, then rerun --verify-only.
+set -euo pipefail
+
+probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+build_dir="$probe_dir/.build"
+bundle_name="EposProbe.app"
+staged_bundle="$build_dir/$bundle_name"
+installed_bundle="$HOME/Library/Input Methods/$bundle_name"
+source_id="com.steez.inputmethod.EposProbe"
+lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+verify_only=false
+
+[[ "${1:-}" == "--verify-only" ]] && verify_only=true
+
+tisctl() { /usr/bin/xcrun swift "$probe_dir/Tools/tisctl.swift" "$@"; }
+
+resolve_identity() {
+  # Same identity family as scripts/install-signed-app.sh: an Apple Development
+  # certificate. Falls back to ad-hoc only when none is present.
+  local line
+  line="$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 'Apple Development' || true)"
+  if [[ -n "$line" ]]; then
+    printf '%s' "$(awk '{print $2}' <<<"$line")"
+  else
+    printf '%s' "-"
+  fi
+}
+
+poll_registration() {
+  local deadline=$((SECONDS + ${1:-30}))
+  while (( SECONDS < deadline )); do
+    if tisctl find "$source_id" 2>/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+if [[ "$verify_only" == false ]]; then
+  echo "== build =="
+  mkdir -p "$build_dir"
+  sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+
+  /usr/bin/xcrun swiftc \
+    -sdk "$sdk_path" \
+    -target arm64-apple-macos26.0 \
+    -O \
+    -o "$build_dir/EposProbe" \
+    "$probe_dir/Sources/main.swift" \
+    "$probe_dir/Sources/ProbeSupport.swift" \
+    "$probe_dir/Sources/ProbeInputController.swift" \
+    "$probe_dir/Sources/ProbeCommandSocket.swift"
+
+  /usr/bin/xcrun swiftc \
+    -sdk "$sdk_path" \
+    -target arm64-apple-macos26.0 \
+    -O \
+    -o "$build_dir/epos-probe-stream" \
+    "$probe_dir/Driver/main.swift" \
+    "$probe_dir/Sources/ProbeSupport.swift"
+
+  echo "== assemble bundle =="
+  find "$staged_bundle" -depth -delete 2>/dev/null || true
+  mkdir -p "$staged_bundle/Contents/MacOS"
+  cp "$probe_dir/Info.plist" "$staged_bundle/Contents/Info.plist"
+  cp "$build_dir/EposProbe" "$staged_bundle/Contents/MacOS/EposProbe"
+  printf 'APPL????' > "$staged_bundle/Contents/PkgInfo"
+
+  identity="$(resolve_identity)"
+  if [[ "$identity" == "-" ]]; then
+    echo "warning: no Apple Development codesigning identity found; signing AD-HOC" >&2
+  fi
+  echo "signing identity: $identity"
+  codesign --force --sign "$identity" --timestamp=none "$staged_bundle"
+  codesign -dv --verbose=2 "$staged_bundle" 2>&1 | sed 's/^/  /'
+
+  echo "== install =="
+  mkdir -p "$HOME/Library/Input Methods"
+  /usr/bin/pkill -x EposProbe >/dev/null 2>&1 || true
+  find "$installed_bundle" -depth -delete 2>/dev/null || true
+  /usr/bin/ditto "$staged_bundle" "$installed_bundle"
+  codesign --verify --strict "$installed_bundle"
+  echo "installed at $installed_bundle"
+
+  echo "== live registration =="
+  "$lsregister" -f -R -trusted "$installed_bundle" || true
+  tisctl register "$installed_bundle" || echo "  TISRegisterInputSource reported failure (continuing)"
+  /usr/bin/killall TextInputMenuAgent TextInputSwitcher lsd cfprefsd >/dev/null 2>&1 || true
+fi
+
+# Read-only. TISEnableInputSource raises a macOS consent dialog every call, so
+# nothing here or in run-stream enables a source that is already enabled.
+echo "== verify =="
+if poll_registration 30; then
+  echo "registered live"
+  exit 0
+fi
+
+cat <<MSG
+not visible — logout/login required, then rerun with --verify-only
+
+  $probe_dir/install --verify-only
+MSG
+exit 1

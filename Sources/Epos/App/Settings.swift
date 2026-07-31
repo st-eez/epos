@@ -60,6 +60,9 @@ public struct Settings: Equatable, Sendable {
     public var localeIdentifier: String
     public var saveAudioSamples: Bool
     public var saveCorrectionEvidence: Bool
+    /// Streams volatile text into the fn-press field as marked text via the
+    /// companion input method; falls back to the pill HUD when unavailable.
+    public var inlinePreview: Bool
     public var edgeGlow: EdgeGlowSettings
 
     public init(
@@ -67,12 +70,14 @@ public struct Settings: Equatable, Sendable {
         localeIdentifier: String = "en-US",
         saveAudioSamples: Bool = false,
         saveCorrectionEvidence: Bool = false,
+        inlinePreview: Bool = true,
         edgeGlow: EdgeGlowSettings = EdgeGlowSettings()
     ) {
         self.launchAtLogin = launchAtLogin
         self.localeIdentifier = localeIdentifier
         self.saveAudioSamples = saveAudioSamples
         self.saveCorrectionEvidence = saveCorrectionEvidence
+        self.inlinePreview = inlinePreview
         self.edgeGlow = edgeGlow
     }
 
@@ -81,6 +86,7 @@ public struct Settings: Equatable, Sendable {
         static let localeIdentifier = "settings.localeIdentifier"
         static let saveAudioSamples = "settings.saveAudioSamples"
         static let saveCorrectionEvidence = "settings.saveCorrectionEvidence"
+        static let inlinePreview = "settings.inlinePreview"
         static let edgeGlowEnabled = "settings.edgeGlow.enabled"
         static let edgeGlowTheme = "settings.edgeGlow.theme"
         static let edgeGlowIntensity = "settings.edgeGlow.intensity"
@@ -97,6 +103,7 @@ public struct Settings: Equatable, Sendable {
             localeIdentifier: defaults.string(forKey: Key.localeIdentifier) ?? "en-US",
             saveAudioSamples: defaults.bool(forKey: Key.saveAudioSamples),
             saveCorrectionEvidence: defaults.bool(forKey: Key.saveCorrectionEvidence),
+            inlinePreview: defaults.object(forKey: Key.inlinePreview) as? Bool ?? true,
             edgeGlow: EdgeGlowSettings(
                 // `object(forKey:)` distinguishes "never set" (use defaults)
                 // from a stored false/0.
@@ -120,6 +127,7 @@ public struct Settings: Equatable, Sendable {
         defaults.set(localeIdentifier, forKey: Key.localeIdentifier)
         defaults.set(saveAudioSamples, forKey: Key.saveAudioSamples)
         defaults.set(saveCorrectionEvidence, forKey: Key.saveCorrectionEvidence)
+        defaults.set(inlinePreview, forKey: Key.inlinePreview)
         defaults.set(edgeGlow.enabled, forKey: Key.edgeGlowEnabled)
         defaults.set(edgeGlow.theme.rawValue, forKey: Key.edgeGlowTheme)
         defaults.set(edgeGlow.intensity, forKey: Key.edgeGlowIntensity)

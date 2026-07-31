@@ -1,18 +1,5 @@
 import Foundation
 
-/// Launch gate for the inline-preview dogfood spike. Read once, at coordinator
-/// init: with the variable unset, no preview object is ever built and the
-/// recording path does a single nil check.
-enum InlinePreviewPolicy {
-    static let environmentKey = "EPOS_INLINE_PREVIEW"
-
-    static func load(
-        from environment: [String: String] = ProcessInfo.processInfo.environment
-    ) -> Bool {
-        environment[environmentKey] == "1"
-    }
-}
-
 /// Privacy-safe outcome of one recording's preview attempt: counts and states
 /// only, never transcript text.
 struct InlinePreviewReport: Equatable, Sendable {

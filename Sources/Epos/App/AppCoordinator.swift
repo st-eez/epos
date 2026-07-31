@@ -100,10 +100,12 @@ public final class AppCoordinator: ObservableObject {
     private var observedEditCaptureWorkItems: [DispatchWorkItem] = []
     private var currentRecordingID: String?
     private var currentReliabilityRecording: ReliabilityRecording?
-    /// Dogfood spike (`EPOS_INLINE_PREVIEW=1`, default off): mirrors the volatile
-    /// transcript into the fn-press field as input-method marked text. Preview only —
-    /// it is always discarded before the one authoritative write.
-    let inlinePreviewEnabled: Bool
+    /// Mirrors the volatile transcript into the fn-press field as input-method
+    /// marked text (`Settings.inlinePreview`, default on). Preview only — it is
+    /// always discarded before the one authoritative write. Tests inject a fixed
+    /// value; the app follows the live setting per recording.
+    var inlinePreviewEnabled: Bool { inlinePreviewOverride ?? settings.inlinePreview }
+    private let inlinePreviewOverride: Bool?
     private var inlinePreview: InlinePreviewSession?
     private var inlinePreviewDiscard: Task<Void, Never>?
     /// Monotonic token so a stale session's marking-activity callback can never
@@ -161,7 +163,7 @@ public final class AppCoordinator: ObservableObject {
         }
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.injectLog = EposLogger(category: "inject", diagnostics: diagnostics)
-        self.inlinePreviewEnabled = inlinePreviewEnabled ?? InlinePreviewPolicy.load()
+        self.inlinePreviewOverride = inlinePreviewEnabled
         self.correctionEvidence = correctionEvidence
         self.recordingIDGenerator = recordingIDGenerator
         self.reliabilityDiagnostics = diagnostics
@@ -200,6 +202,14 @@ public final class AppCoordinator: ObservableObject {
     }
 
     public var saveCorrectionEvidence: Bool { settings.saveCorrectionEvidence }
+
+    public var inlinePreviewSetting: Bool { settings.inlinePreview }
+
+    public func setInlinePreview(_ enabled: Bool) {
+        guard settings.inlinePreview != enabled else { return }
+        settings.inlinePreview = enabled
+        settings.save(to: settingsDefaults)
+    }
 
     public func setSaveCorrectionEvidence(_ enabled: Bool) {
         guard settings.saveCorrectionEvidence != enabled else { return }
@@ -677,8 +687,8 @@ public final class AppCoordinator: ObservableObject {
         displayText = clean(finalText + partial)
     }
 
-    /// Mirror exactly what the HUD shows. Off unless the spike is enabled, where it
-    /// costs one nil check per recognizer event.
+    /// Mirror exactly what the HUD shows. Off unless the preview is enabled, where
+    /// it costs one nil check per recognizer event.
     private func mirrorInlinePreview() {
         guard let inlinePreview else { return }
         let text = displayText
@@ -759,8 +769,8 @@ public final class AppCoordinator: ObservableObject {
         )
     }
 
-    /// The glow lights instantly at fn press — before the AX capture and (under
-    /// the preview spike) the probe handshake, so the prewarmed panel makes this
+    /// The glow lights instantly at fn press — before the AX capture and (with
+    /// the preview on) the probe handshake, so the prewarmed panel makes this
     /// a pure fade. With the glow turned off in settings the pill shows instead,
     /// exactly as it always has. Internal so glow-lifetime tests can drive the
     /// presentation without a live audio pipeline.
@@ -776,7 +786,7 @@ public final class AppCoordinator: ObservableObject {
             presentBottomCenterPill()
             return
         }
-        // Under the spike the glow doubles as the channel's cue: if the preview
+        // With the preview on the glow doubles as the channel's cue: if the preview
         // never confirms within the deadline (unidentifiable target, probe dead,
         // begin refused), the glow retires and the pill takes over, so the user is
         // never left with a glow advertising a channel that is not streaming.
@@ -793,8 +803,8 @@ public final class AppCoordinator: ObservableObject {
     }
 
     /// Whether the glow — rather than the pill — is the right indicator for the
-    /// recording in progress. Under the preview spike the glow tracks the channel
-    /// it advertises; without it the glow owns every recording.
+    /// recording in progress. With the preview on the glow tracks the channel
+    /// it advertises; with it off the glow owns every recording.
     private var glowOwnsCurrentRecording: Bool {
         state == .recording && (!inlinePreviewEnabled || inlinePreviewMirroring)
     }
