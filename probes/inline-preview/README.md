@@ -27,7 +27,48 @@ costs a logout).
 | `install` / `uninstall` / `run-stream` | Operator commands |
 
 Log: `~/Library/Caches/EposProbe/probe.log` — records every `activateServer`,
-`deactivateServer`, mark, commit and cancel with the client bundle id.
+`deactivateServer`, mark, commit and cancel with the client bundle id, plus every
+connection and composition-teardown decision (`connection N accepted/ended`,
+`release connection=…`, `clear reason=…`).
+
+## Composition ownership and teardown
+
+The focused field must never be left holding marked text: hosts that commit on
+unmark turn a stranded composition into document text. So the probe tracks *which
+client currently holds marked text* as its own record — bundle id, owning session,
+and the command connection that put it there — separately from the per-pass focus
+lock, and every teardown path tries to remove it instead of refusing:
+
+- **`cancel`** goes to the recorded owner, not the lock. A lock that stopped
+  resolving mid-pass (hosts tear an IMK session down and build a new one
+  constantly) no longer means "refuse and leave it on screen". `ok` means no
+  marked text of ours remains; `err` means some may still be live and nothing
+  could reach it. If the owning session died, a live session for the same bundle
+  id is used instead (`viaOwner=false` in the log); zero-length marked text is a
+  no-op on a session that has no composition.
+- **Losing the command connection** is a teardown, not a pause. The peer that
+  dropped was the only process that could have asked us to un-mark, so its
+  composition is cleared and its focus lock released. `killall Epos` mid-recording
+  no longer strands a composition.
+- **`deactivateServer`** clears the composition when the session being torn down
+  is the one holding it — after the teardown it is no longer addressable.
+- **`commitComposition`** still never inserts, and is now scoped: only the session
+  that owns the composition acts on it, so a background app finalizing cannot wipe
+  a recording in progress.
+
+`commit` is the one path that inserts, and the only one that still refuses on an
+unresolvable lock — Epos treats an `err` reply as proof `insertText` did not run.
+`end` only releases the lock and never touches text.
+
+Exactly one client is legitimate, so **a new connection supersedes the current
+one**: the previous peer is shut down (which runs its teardown) and each
+connection is served on its own thread, so a stuck peer can never wedge the accept
+loop. The cost is that connecting a second client — running `run-stream` during a
+live Epos recording, say — drops the first one; it degrades that recording to
+HUD-only and is logged, but never writes text. Replies are written with
+`SO_NOSIGPIPE` + a process-wide `SIGPIPE` ignore and a bounded `SO_SNDTIMEO`, so a
+peer that departs before reading its reply costs one failed write instead of
+killing the input method.
 
 ## Install
 
