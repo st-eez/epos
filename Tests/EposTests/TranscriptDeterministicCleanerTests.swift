@@ -245,6 +245,49 @@ final class TranscriptDeterministicCleanerTests: XCTestCase {
         XCTAssertEqual(TranscriptDeterministicCleaner.collapseAdjacentDuplicates(raw), raw)
     }
 
+    func testKeepsDictatedTrailingCommaAndNewlineWhenAFillerDropsElsewhere() {
+        // Normalization repairs the seam an edit left; it is not licence to reformat the
+        // whole transcript. Text far from the edit must come out byte-identical whether or
+        // not a filler happened to appear somewhere else.
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("Hi, um, there,"),
+            "Hi, there,"
+        )
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("Hi, um, there,\nand welcome"),
+            "Hi, there,\nand welcome"
+        )
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("first line\nthe the second line\n"),
+            "first line\nthe second line\n"
+        )
+        // An ordinal replacement disturbs no whitespace at all, so it may not reformat either.
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("ship the 3rd build,\n"),
+            "ship the third build,\n"
+        )
+    }
+
+    func testSeamCleanupStillRunsAtTheEditSite() {
+        // Conversely, the text the removal actually disturbed is still repaired: no double
+        // space, no transplanted comma, no leading/trailing debris at the transcript edge.
+        XCTAssertEqual(TranscriptDeterministicCleaner.streamClean("I think uh we ship"), "I think we ship")
+        XCTAssertEqual(TranscriptDeterministicCleaner.streamClean("um, ship it"), "ship it")
+        XCTAssertEqual(TranscriptDeterministicCleaner.streamClean("ship it um,"), "ship it")
+        XCTAssertEqual(TranscriptDeterministicCleaner.streamClean("let's eat um, grandma"), "let's eat grandma")
+        // A filler alone on its own line leaves the line break, not a fused space.
+        XCTAssertEqual(
+            TranscriptDeterministicCleaner.streamClean("ship it\num\ntomorrow"),
+            "ship it\ntomorrow"
+        )
+    }
+
+    func testReturnsInputVerbatimWhenNoPassEdits() {
+        for raw in ["Hi, there,", "Hi, there,\n", "  leading and trailing  ", "one\n\ntwo"] {
+            XCTAssertEqual(TranscriptDeterministicCleaner.streamClean(raw), raw)
+        }
+    }
+
     func testLiveFillerStripAndDedupCompose() {
         // The live insertion path runs both passes: hard fillers go, then the stutter the
         // filler removal exposed collapses — exactly the AppCoordinator canonicalize closure.

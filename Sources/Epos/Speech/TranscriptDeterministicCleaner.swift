@@ -104,43 +104,77 @@ public enum TranscriptDeterministicCleaner {
         "we", "it", "they", "i",
     ]
 
-    /// Drops `removed` segments and substitutes `replacements`, then renormalizes
-    /// whitespace and commas. When `dropTrailingCommaAfterRemoved` is true (the filler
-    /// passes) a comma directly trailing a removed segment is dropped too — it punctuated
-    /// the disfluency, not the kept word. The dedup pass passes false: there the removed
-    /// segment is the SECOND copy of a real, kept word, so a comma after it is the user's
-    /// punctuation on that word ("the the, report" → "the, report", not "the report").
+    /// Drops `removed` segments and substitutes `replacements`, then repairs the seam each
+    /// removal left. When `dropTrailingCommaAfterRemoved` is true (the filler passes) a comma
+    /// directly trailing a removed segment is dropped too — it punctuated the disfluency, not
+    /// the kept word. The dedup pass passes false: there the removed segment is the SECOND
+    /// copy of a real, kept word, so a comma after it is the user's punctuation on that word
+    /// ("the the, report" → "the, report", not "the report").
+    ///
+    /// Repair is deliberately scoped to the seams: every segment outside them is emitted
+    /// byte-for-byte. A dictated trailing comma or line break must not live or die on whether
+    /// an "um" appeared elsewhere in the transcript.
     private static func apply(
         removed: Set<Int>,
         replacements: [Int: String],
         to segments: [Segment],
         dropTrailingCommaAfterRemoved: Bool = true
     ) -> String {
+        var pieces = segments.map(\.text)
         // A comma directly trailing a removed filler punctuated the disfluency, not
         // the preceding kept word — drop it with the filler. Leaving it would let
-        // whitespace normalization transplant it onto the kept word ("let's eat um,
+        // the seam repair transplant it onto the kept word ("let's eat um,
         // grandma" → "let's eat, grandma"), inventing a pause the user never spoke.
         // A comma BEFORE the filler belongs to the kept word and stays
         // ("I want, um, apples" → "I want, apples").
-        var gapReplacements: [Int: String] = [:]
         if dropTrailingCommaAfterRemoved {
             for index in removed {
                 let gapIndex = segments.index(after: index)
                 guard gapIndex < segments.endIndex, !segments[gapIndex].isWord else { continue }
-                let gapText = gapReplacements[gapIndex] ?? segments[gapIndex].text
-                if let comma = gapText.firstIndex(of: ",") {
-                    gapReplacements[gapIndex] = String(gapText[..<comma]) + String(gapText[gapText.index(after: comma)...])
+                if let comma = pieces[gapIndex].firstIndex(of: ",") {
+                    pieces[gapIndex].remove(at: comma)
                 }
             }
         }
-        let stripped = segments
-            .enumerated()
-            .map { index, segment in
-                if removed.contains(index) { return "" }
-                return gapReplacements[index] ?? replacements[index] ?? segment.text
+        for (index, replacement) in replacements { pieces[index] = replacement }
+        for index in removed { pieces[index] = "" }
+
+        let seams = Dictionary(
+            uniqueKeysWithValues: seamRanges(around: removed, in: segments).map { ($0.lowerBound, $0) }
+        )
+        var output = ""
+        var index = pieces.startIndex
+        while index < pieces.endIndex {
+            guard let seam = seams[index] else {
+                output += pieces[index]
+                index = pieces.index(after: index)
+                continue
             }
-            .joined()
-        return normalizeWhitespaceAndCommas(stripped)
+            output += repairSeam(
+                pieces[seam].joined(),
+                atStart: seam.lowerBound == pieces.startIndex,
+                atEnd: seam.upperBound == pieces.index(before: pieces.endIndex)
+            )
+            index = seam.upperBound + 1
+        }
+        return output
+    }
+
+    /// The stretch of text each removal disturbed: the removed segment plus the one segment
+    /// on either side, which `segments(from:)` guarantees is the whitespace/punctuation gap.
+    /// Overlapping stretches merge so a run of removals is repaired once.
+    private static func seamRanges(around removed: Set<Int>, in segments: [Segment]) -> [ClosedRange<Int>] {
+        var ranges: [ClosedRange<Int>] = []
+        for index in removed.sorted() {
+            let lower = max(index - 1, segments.startIndex)
+            let upper = min(index + 1, segments.index(before: segments.endIndex))
+            if let last = ranges.last, lower <= last.upperBound {
+                ranges[ranges.index(before: ranges.endIndex)] = last.lowerBound...max(last.upperBound, upper)
+            } else {
+                ranges.append(lower...upper)
+            }
+        }
+        return ranges
     }
 
     private struct Segment {
@@ -189,12 +223,35 @@ public enum TranscriptDeterministicCleaner {
         return segments
     }
 
-    private static func normalizeWhitespaceAndCommas(_ text: String) -> String {
-        text
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+    /// Repairs the joined text of one seam: collapses the whitespace the removal doubled up,
+    /// pulls punctuation back onto the kept word, and folds a comma run. A whitespace run that
+    /// contained a line break collapses back to a line break, so a filler dictated on its own
+    /// line does not fuse the lines around it. Leading/trailing whitespace and commas are only
+    /// trimmed when the seam actually reaches a transcript edge — an interior seam must keep
+    /// its separator, or the words on either side would run together.
+    private static func repairSeam(_ text: String, atStart: Bool, atEnd: Bool) -> String {
+        let collapsed = text
+            .replacingOccurrences(of: #"[^\S\n]*\n\s*"#, with: "\n", options: .regularExpression)
+            .replacingOccurrences(of: #"[^\S\n]+"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: #"\s+([,.;:?!])"#, with: "$1", options: .regularExpression)
             .replacingOccurrences(of: #"(,\s*){2,}"#, with: ", ", options: .regularExpression)
-            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(CharacterSet(charactersIn: ",")))
+        var trimmed = Substring(collapsed)
+        if atStart {
+            trimmed = trimmed.drop(while: isSeamEdgeCharacter)
+        }
+        if atEnd {
+            while let last = trimmed.last, isSeamEdgeCharacter(last) {
+                trimmed = trimmed.dropLast()
+            }
+        }
+        return String(trimmed)
+    }
+
+    private static let seamEdgeCharacters = CharacterSet.whitespacesAndNewlines
+        .union(CharacterSet(charactersIn: ","))
+
+    private static func isSeamEdgeCharacter(_ character: Character) -> Bool {
+        character.unicodeScalars.allSatisfy(seamEdgeCharacters.contains)
     }
 
     private static func normalizeToken(_ raw: String) -> String {
