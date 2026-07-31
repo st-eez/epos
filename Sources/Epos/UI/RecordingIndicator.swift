@@ -9,62 +9,16 @@ public struct RecordingIndicator: View {
     }
 
     public var body: some View {
-        if coordinator.indicatorBadge {
-            RecordingCaretBadgeSurface(amplitude: coordinator.amplitude)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            RecordingIndicatorSurface(
-                state: coordinator.state,
-                finalizationPhase: coordinator.finalizationPhase,
-                amplitude: coordinator.amplitude,
-                startUnavailable: coordinator.startUnavailable,
-                insertionUnavailable: coordinator.insertionUnavailable,
-                transcriptPreview: coordinator.hudTranscriptPreview
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-            .padding(.bottom, 20)
-        }
-    }
-}
-
-/// The caret indicator shown while dictation is live but no text is streaming
-/// (pre-first-word and during silences): a Liquid Glass orb holding a live
-/// teal amplitude meter, so it reads "mic is hot and hearing you" in Epos's
-/// own glass + teal language rather than native dictation's blue bubble.
-struct RecordingCaretBadgeSurface: View {
-    let amplitude: Float
-
-    /// Deep gemstone teal (#00897B): fully saturated so it never reads
-    /// pastel, dark enough to look rich over any backdrop, but still light
-    /// enough that the black meter bars keep ~5:1 contrast inside it —
-    /// deeper than this and the bars would have to flip to white.
-    private let orbTeal = Color(red: 0, green: 0.537, blue: 0.482)
-
-    var body: some View {
-        // Inverted from the pill's palette on purpose: a solid-teal glass orb
-        // with grey-white bars is findable in peripheral vision, where a clear
-        // orb with teal bars vanished unless you knew where to look.
-        HStack(spacing: 2.5) {
-            ForEach(0..<3, id: \.self) { index in
-                Capsule()
-                    .fill(Color.black.opacity(
-                        RecordingIndicatorSurface.barOpacity(index, amplitude: amplitude)
-                    ))
-                    .frame(
-                        width: 2.5,
-                        height: RecordingIndicatorSurface.barHeight(index, amplitude: amplitude) * 0.7
-                    )
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        // Fully opaque fill, not glass tint: Glass composites its tint against
-        // the sampled backdrop (grey over dark windows), and partial opacity
-        // read as washed out. The rim highlight alone carries the depth.
-        .background(Circle().fill(orbTeal))
-        .overlay(Circle().strokeBorder(.white.opacity(0.28), lineWidth: 1))
-        .shadow(color: .black.opacity(0.25), radius: 3, y: 1)
-        .padding(RecordingCaretBadgePolicy.badgeInset)
-        .animation(.easeOut(duration: 0.08), value: amplitude)
+        RecordingIndicatorSurface(
+            state: coordinator.state,
+            finalizationPhase: coordinator.finalizationPhase,
+            amplitude: coordinator.amplitude,
+            startUnavailable: coordinator.startUnavailable,
+            insertionUnavailable: coordinator.insertionUnavailable,
+            transcriptPreview: coordinator.hudTranscriptPreview
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+        .padding(.bottom, 20)
     }
 }
 

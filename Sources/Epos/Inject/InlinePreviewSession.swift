@@ -87,21 +87,8 @@ actor InlinePreviewSession {
     /// coordinator hides the recording pill on it: from here the in-field text
     /// itself shows that dictation is flowing.
     private let onFirstMarkRendered: @Sendable () -> Void
-    /// When set, fired with the caret-line rectangle at the composition END
-    /// (nil when unavailable): once riding the begin round-trip (the caret
-    /// exists before any text does), then refreshed at most every
-    /// `caretRectRefreshInterval` — always riding along after a mark ack,
-    /// never on its own timer, so wire request/reply pairing stays aligned.
-    /// The coordinator anchors the silence badge to the last reported rect.
-    private let onCaretRect: (@Sendable (CGRect?) -> Void)?
-    /// Injectable clock for the refresh gate, so tests can pin the cadence.
-    private let now: @Sendable () -> TimeInterval
-
-    /// Minimum spacing between caret-rect refreshes while text keeps growing.
-    static let caretRectRefreshInterval: TimeInterval = 0.4
 
     private var phase: Phase = .pending
-    private var lastCaretRectQueryTime: TimeInterval?
     private var pendingMark: String?
     private var lastSentMark: String?
     private var draining = false
@@ -119,9 +106,7 @@ actor InlinePreviewSession {
         throttle: Duration = .milliseconds(100),
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
-        onFirstMarkRendered: @escaping @Sendable () -> Void = {},
-        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil,
-        now: @escaping @Sendable () -> TimeInterval = { Date().timeIntervalSinceReferenceDate }
+        onFirstMarkRendered: @escaping @Sendable () -> Void = {}
     ) {
         self.transport = transport
         self.bundleIdentifier = bundleIdentifier
@@ -129,8 +114,6 @@ actor InlinePreviewSession {
         self.sleep = sleep
         self.onMarkingActivityChange = onMarkingActivityChange
         self.onFirstMarkRendered = onFirstMarkRendered
-        self.onCaretRect = onCaretRect
-        self.now = now
     }
 
     /// Text the line protocol can carry verbatim. A transcript that would need
@@ -155,10 +138,6 @@ actor InlinePreviewSession {
             }
             began = true
             transition(to: .marking)
-            // The caret exists before any text does (the probe falls back to
-            // the current selection when there is no composition), so the
-            // badge's anchor is known within the begin round-trip.
-            await queryCaretRect()
             startDrainIfNeeded()
         } catch {
             degrade("connectFailed")
@@ -317,46 +296,11 @@ actor InlinePreviewSession {
                 marksSent += 1
                 lastSentMark = text
                 if marksSent == 1 { onFirstMarkRendered() }
-                await queryCaretRectIfDue()
             } catch {
                 return degrade("markFailed")
             }
             await sleep(throttle)
         }
-    }
-
-    /// Bounded caret-rect query after a mark ack, gated to at most one per
-    /// `caretRectRefreshInterval`.
-    private func queryCaretRectIfDue() async {
-        guard onCaretRect != nil else { return }
-        let time = now()
-        if let lastCaretRectQueryTime,
-           time - lastCaretRectQueryTime < Self.caretRectRefreshInterval {
-            return
-        }
-        await queryCaretRect()
-    }
-
-    /// One bounded round-trip. Any failure reports nil and never degrades the
-    /// channel: the rect only anchors the badge, it is no part of the
-    /// preview/commit contract.
-    private func queryCaretRect() async {
-        guard let onCaretRect else { return }
-        lastCaretRectQueryTime = now()
-        let reply = try? await transport.send("rect")
-        onCaretRect(reply.flatMap(Self.parseCaretRect))
-    }
-
-    /// Reply format: "ok rect <x> <y> <width> <height>", Cocoa screen
-    /// coordinates (verified against TextEdit; see the badge policy).
-    nonisolated static func parseCaretRect(_ reply: String) -> CGRect? {
-        let parts = reply.split(separator: " ")
-        guard parts.count == 6, parts[0] == "ok", parts[1] == "rect",
-              let x = Double(parts[2]), let y = Double(parts[3]),
-              let width = Double(parts[4]), let height = Double(parts[5]) else {
-            return nil
-        }
-        return CGRect(x: x, y: y, width: width, height: height)
     }
 
     private func degrade(_ reason: String) {

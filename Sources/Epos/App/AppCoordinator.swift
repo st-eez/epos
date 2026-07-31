@@ -48,36 +48,25 @@ public final class AppCoordinator: ObservableObject {
     /// restores today's HUD line exactly.
     public var hudTranscriptPreview: String { inlinePreviewMirroring ? "" : displayText }
 
-    /// True while the indicator panel renders as the caret mic badge (the
-    /// native-dictation-style bubble at the insertion point) instead of the
-    /// bottom-center pill. Only ever true while the inline preview is
-    /// mirroring and a usable caret rect exists.
-    @Published public private(set) var indicatorBadge = false
-    /// True while the badge is actually on screen. Distinct from
-    /// `indicatorBadge` (the SwiftUI variant), which deliberately keeps its
-    /// value through a hide fade so the panel never repaints as a clipped
-    /// pill mid-fade. Internal so tests can pin the show/hide rhythm.
-    private(set) var indicatorBadgeVisible = false
-    /// True once this recording's indicator (badge or pill) has been shown.
-    /// With a preview session the presentation waits for the caret answer;
-    /// this flag keeps the deadline fallback from double-showing.
+    /// True while the screen-edge glow is on screen (dictation live, no text
+    /// streaming). Internal so tests can pin the show/hide rhythm.
+    private(set) var edgeGlowVisible = false
+    /// True once this recording's indicator (glow or pill) has been shown.
+    /// With a preview session the presentation waits for the begin ack; this
+    /// flag keeps the deadline fallback from double-showing.
     private var indicatorPresented = false
-    /// Last caret rect the preview session reported (Cocoa screen coords).
-    /// The silence badge anchors here; text cannot move the caret during a
-    /// silence, so the last mark-ack rect is current whenever the badge shows.
-    private var latestCaretRect: CGRect?
-    /// Pending "silence long enough, bring the badge back" timer.
-    private var quietBadgeTask: Task<Void, Never>?
+    /// Pending "silence long enough, bring the glow back" timer.
+    private var quietGlowTask: Task<Void, Never>?
     /// How long a recording may go with no indicator at all before the pill
     /// presents anyway (probe dead, connect failure, begin refused — paths
-    /// that produce no caret callback). The healthy path answers within the
+    /// that never activate mirroring). The healthy path activates within the
     /// begin round-trip, a few milliseconds.
     static let indicatorFallbackDelay: Duration = .milliseconds(200)
-    /// Silence before the caret badge returns. The recognizer emits partials
+    /// Silence before the edge glow returns. The recognizer emits partials
     /// at ~1s cadence while speech continues (transcript timing logs), so
     /// anything at or under that flickers between partials; 1.6s means "the
     /// stream actually paused".
-    static let badgeQuietDelay: Duration = .milliseconds(1600)
+    static let glowQuietDelay: Duration = .milliseconds(1600)
     /// Distributed-notification tokens for the debug dictation trigger.
     private var debugTriggerObservers: [NSObjectProtocol] = []
 
@@ -136,6 +125,7 @@ public final class AppCoordinator: ObservableObject {
         controller.attach(content: RecordingIndicator(coordinator: self))
         return controller
     }()
+    private lazy var edgeGlow = RecordingEdgeGlowController()
 
     public init(
         hotkey: FnHotkey = FnHotkey(),
@@ -297,7 +287,6 @@ public final class AppCoordinator: ObservableObject {
     /// start had to be dropped because bootstrap finished without a capture format.
     private func flashStartUnavailableNotice() {
         startUnavailable = true
-        indicatorBadge = false
         indicator.show()
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -309,7 +298,6 @@ public final class AppCoordinator: ObservableObject {
 
     private func flashInsertionUnavailableNotice() {
         insertionUnavailable = true
-        indicatorBadge = false
         indicator.show()
         Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_500_000_000)
@@ -415,14 +403,11 @@ public final class AppCoordinator: ObservableObject {
         currentReliabilityRecording?.markReleased()
         state = .finalizing
         finalizationPhase = .finalizingSpeech
-        // The badge rhythm ends at release: a badge up during a silence hides
+        // The glow rhythm ends at release: a glow up during a silence fades
         // now (the committed text is the feedback). The non-mirroring pill
         // stays, showing "Finishing"/"Updating" as it always has.
-        quietBadgeTask?.cancel()
-        if indicatorBadgeVisible {
-            indicatorBadgeVisible = false
-            indicator.hide()
-        }
+        quietGlowTask?.cancel()
+        hideEdgeGlow()
         // A preview that is actively marking at release stays alive through
         // recognizer finalization: the provisional text remains visible (no blank
         // gap) and the final-commit router owns the lifecycle from here (acked
@@ -590,14 +575,14 @@ public final class AppCoordinator: ObservableObject {
 
     func handlePartialTranscript(_ text: String) {
         partial = text
-        noteTranscriptActivityForBadge()
+        noteTranscriptActivityForGlow()
         mirrorInlinePreview()
     }
 
     func handleFinalTranscriptSegment(_ text: String) {
         finalText += text
         partial = ""
-        noteTranscriptActivityForBadge()
+        noteTranscriptActivityForGlow()
         mirrorInlinePreview()
     }
 
@@ -647,12 +632,19 @@ public final class AppCoordinator: ObservableObject {
                     self.inlinePreviewMirroring = active
                     // A mid-recording degrade makes the HUD the only feedback
                     // again, so the pill comes back (with its transcript line,
-                    // in the same update) and the badge rhythm stops. At
+                    // in the same update) and the glow rhythm stops. At
                     // finalize `finishInlinePreview` clears the flag with
-                    // state != .recording, skipping this.
-                    if !active, self.state == .recording {
-                        self.quietBadgeTask?.cancel()
-                        self.presentBottomCenterPill()
+                    // state != .recording, skipping this. The activation
+                    // (begin acked, ms after start) shows the glow as the
+                    // recording's first indicator.
+                    if self.state == .recording {
+                        self.quietGlowTask?.cancel()
+                        if active {
+                            self.showEdgeGlow()
+                        } else {
+                            self.hideEdgeGlow()
+                            self.presentBottomCenterPill()
+                        }
                     }
                 }
             },
@@ -661,35 +653,26 @@ public final class AppCoordinator: ObservableObject {
                     guard let self, self.inlinePreviewGeneration == generation else { return }
                     // The first letter just landed in the field: from here the
                     // in-field provisional text IS the recording indicator,
-                    // exactly like native dictation. The badge only returns
+                    // exactly like native dictation. The glow only returns
                     // during a silence, the pill only for a degrade (above)
                     // or a failure notice flash.
                     guard self.state == .recording, self.inlinePreviewMirroring else { return }
-                    self.indicatorBadgeVisible = false
+                    self.hideEdgeGlow()
                     self.indicator.hide()
-                }
-            },
-            onCaretRect: { [weak self] rect in
-                Task { @MainActor in
-                    guard let self, self.inlinePreviewGeneration == generation else { return }
-                    self.handleCaretRect(rect)
                 }
             }
         )
     }
 
     /// With no preview session the pill shows immediately, exactly as it
-    /// always has. With one, nothing is shown yet: the caret answer rides the
-    /// begin round-trip (milliseconds), and the mic badge at the caret is the
-    /// first indicator on screen — native parity, no pill cameo. The bounded
-    /// fallback presents the pill anyway when no caret answer arrived in time,
-    /// so the user is never without an indicator past the deadline.
+    /// always has. With one, nothing is shown yet: mirroring activates within
+    /// the begin round-trip (milliseconds) and the screen-edge glow is the
+    /// recording's first indicator — no pill cameo. The bounded fallback
+    /// presents the pill anyway when mirroring never activated in time, so
+    /// the user is never without an indicator past the deadline.
     private func presentIndicatorForRecordingStart() {
         indicatorPresented = false
-        indicatorBadge = false
-        indicatorBadgeVisible = false
-        latestCaretRect = nil
-        quietBadgeTask?.cancel()
+        quietGlowTask?.cancel()
         guard inlinePreview != nil else {
             presentBottomCenterPill()
             return
@@ -705,52 +688,34 @@ public final class AppCoordinator: ObservableObject {
 
     private func presentBottomCenterPill() {
         indicatorPresented = true
-        indicatorBadge = false
-        indicatorBadgeVisible = false
         indicator.show()
     }
 
-    /// Shows the mic badge at the last known caret rect; false means no
-    /// usable anchor and the caller decides the fallback.
-    private func presentCaretBadgeIfPossible() -> Bool {
-        indicatorBadge = true
-        if indicator.showBadge(caretRect: latestCaretRect) {
-            indicatorPresented = true
-            indicatorBadgeVisible = true
-            return true
-        }
-        indicatorBadge = false
-        return false
+    private func showEdgeGlow() {
+        indicatorPresented = true
+        edgeGlowVisible = true
+        edgeGlow.show()
     }
 
-    /// First callback rides the begin ack, before any text exists: it decides
-    /// the recording's opening presentation (badge at the caret, pill when the
-    /// rect is unusable). Later callbacks ride mark acks and only refresh the
-    /// stored anchor for the next silence badge.
-    private func handleCaretRect(_ rect: CGRect?) {
-        guard state == .recording, inlinePreviewMirroring else { return }
-        latestCaretRect = rect
-        if !indicatorPresented, !presentCaretBadgeIfPossible() {
-            presentBottomCenterPill()
-        }
+    private func hideEdgeGlow() {
+        guard edgeGlowVisible else { return }
+        edgeGlowVisible = false
+        edgeGlow.hide()
     }
 
     /// The native dictation rhythm: the indicator is visible exactly when
     /// dictation is live but no text is streaming. Every transcript event
-    /// hides the badge and re-arms the quiet timer; when the stream pauses
-    /// long enough, the badge returns at the caret.
-    private func noteTranscriptActivityForBadge() {
+    /// fades the glow and re-arms the quiet timer; when the stream pauses
+    /// long enough, the glow breathes back in.
+    private func noteTranscriptActivityForGlow() {
         guard state == .recording, inlinePreviewMirroring else { return }
-        quietBadgeTask?.cancel()
-        if indicatorBadgeVisible {
-            indicatorBadgeVisible = false
-            indicator.hide()
-        }
-        quietBadgeTask = Task { [weak self] in
-            try? await Task.sleep(for: Self.badgeQuietDelay)
+        quietGlowTask?.cancel()
+        hideEdgeGlow()
+        quietGlowTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.glowQuietDelay)
             guard let self, !Task.isCancelled else { return }
             guard self.state == .recording, self.inlinePreviewMirroring else { return }
-            _ = self.presentCaretBadgeIfPossible()
+            self.showEdgeGlow()
         }
     }
 
@@ -1020,7 +985,7 @@ public final class AppCoordinator: ObservableObject {
         audio.onAmplitude = nil
         audio.onRawBuffer = nil
         await transcriber.finish()
-        quietBadgeTask?.cancel()
+        quietGlowTask?.cancel()
         if !insertionUnavailable { indicator.hide() }
         amplitude = 0
         partial = ""

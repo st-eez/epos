@@ -22,7 +22,6 @@ final class InlinePreviewSessionTests: XCTestCase {
         private let failMarksAfter: Int?
         private let commitReply: String
         private let commitError: InlinePreviewTransportError?
-        private let rectReply: String
 
         private(set) var lines: [String] = []
         private(set) var openCount = 0
@@ -36,8 +35,7 @@ final class InlinePreviewSessionTests: XCTestCase {
             markThrows: Bool = false,
             failMarksAfter: Int? = nil,
             commitReply: String = "ok committed 1",
-            commitError: InlinePreviewTransportError? = nil,
-            rectReply: String = "ok rect 100.0 200.0 1.0 18.0"
+            commitError: InlinePreviewTransportError? = nil
         ) {
             self.openThrows = openThrows
             self.beginReply = beginReply
@@ -45,7 +43,6 @@ final class InlinePreviewSessionTests: XCTestCase {
             self.failMarksAfter = failMarksAfter
             self.commitReply = commitReply
             self.commitError = commitError
-            self.rectReply = rectReply
         }
 
         func open() async throws {
@@ -66,7 +63,6 @@ final class InlinePreviewSessionTests: XCTestCase {
                 if let commitError { throw commitError }
                 return commitReply
             }
-            if line == "rect" { return rectReply }
             return "ok"
         }
 
@@ -102,35 +98,6 @@ final class InlinePreviewSessionTests: XCTestCase {
         }
 
         var snapshot: Int { lock.withLock { count } }
-    }
-
-    /// Monotonic fake clock: each read advances by `step`, so consecutive
-    /// queries always see a full refresh interval elapsed.
-    private final class TickingClock: @unchecked Sendable {
-        private let lock = NSLock()
-        private let step: TimeInterval
-        private var time: TimeInterval = 0
-
-        init(step: TimeInterval) { self.step = step }
-
-        func tick() -> TimeInterval {
-            lock.withLock {
-                time += step
-                return time
-            }
-        }
-    }
-
-    /// Thread-safe recorder for the session's caret-rect callback.
-    private final class CaretRectRecorder: @unchecked Sendable {
-        private let lock = NSLock()
-        private var values: [CGRect?] = []
-
-        func record(_ value: CGRect?) {
-            lock.withLock { values.append(value) }
-        }
-
-        var snapshot: [CGRect?] { lock.withLock { values } }
     }
 
     private final class SilentInsertionSession: TextInsertionSession {
@@ -201,15 +168,11 @@ final class InlinePreviewSessionTests: XCTestCase {
         }
     }
 
-    /// `now` defaults to a frozen clock so the caret-rect refresh gate stays
-    /// closed after the first query, keeping wire sequences deterministic.
     private func makeSession(
         transport: FakeInlinePreviewTransport,
         gate: Gate,
         onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
-        onFirstMarkRendered: @escaping @Sendable () -> Void = {},
-        onCaretRect: (@Sendable (CGRect?) -> Void)? = nil,
-        now: @escaping @Sendable () -> TimeInterval = { 0 }
+        onFirstMarkRendered: @escaping @Sendable () -> Void = {}
     ) -> InlinePreviewSession {
         InlinePreviewSession(
             transport: transport,
@@ -217,9 +180,7 @@ final class InlinePreviewSessionTests: XCTestCase {
             throttle: .milliseconds(100),
             sleep: { _ in await gate.wait() },
             onMarkingActivityChange: onMarkingActivityChange,
-            onFirstMarkRendered: onFirstMarkRendered,
-            onCaretRect: onCaretRect,
-            now: now
+            onFirstMarkRendered: onFirstMarkRendered
         )
     }
 
@@ -329,95 +290,6 @@ final class InlinePreviewSessionTests: XCTestCase {
         // The probe never acknowledged rendering anything, so the pill must
         // never have been told to hide.
         XCTAssertEqual(recorder.snapshot, 0)
-    }
-
-    // MARK: - Caret rect query
-
-    func testCaretRectRidesBeginAndIsNotRequeriedWithinTheRefreshInterval() async {
-        let transport = FakeInlinePreviewTransport(rectReply: "ok rect 875.0 -160.0 1.0 16.0")
-        let gate = Gate()
-        let recorder = CaretRectRecorder()
-        let session = makeSession(transport: transport, gate: gate, onCaretRect: { recorder.record($0) })
-
-        await session.begin()
-        await Self.waitForLines([Self.begin, "rect"], from: transport)
-        await Self.waitUntil { recorder.snapshot.count == 1 }
-
-        await session.mark("one")
-        await Self.waitForLines([Self.begin, "rect", "mark one"], from: transport)
-        XCTAssertEqual(recorder.snapshot, [CGRect(x: 875, y: -160, width: 1, height: 16)])
-        await gate.open()
-    }
-
-    func testCaretRectRefreshesAfterTheIntervalElapses() async {
-        let transport = FakeInlinePreviewTransport(rectReply: "ok rect 875.0 -160.0 1.0 16.0")
-        let gate = Gate()
-        let recorder = CaretRectRecorder()
-        // Strictly beyond the interval: an exact-step clock lands on the FP
-        // boundary (accumulated 0.4s doubles make some gaps 0.399999...),
-        // which is not the behavior under test.
-        let clock = TickingClock(step: InlinePreviewSession.caretRectRefreshInterval + 0.01)
-        let session = makeSession(
-            transport: transport,
-            gate: gate,
-            onCaretRect: { recorder.record($0) },
-            now: { clock.tick() }
-        )
-
-        await session.begin()
-        await session.mark("one")
-        await Self.waitForLines([Self.begin, "rect", "mark one", "rect"], from: transport)
-
-        await session.mark("one two")
-        await gate.open()
-        await Self.waitForLines(
-            [Self.begin, "rect", "mark one", "rect", "mark one two", "rect"],
-            from: transport
-        )
-        // The callback lands just after the reply crosses the wire.
-        await Self.waitUntil { recorder.snapshot.count == 3 }
-        await gate.open()
-    }
-
-    func testCaretRectFailureReportsNilAndDoesNotDegradeTheChannel() async {
-        let transport = FakeInlinePreviewTransport(rectReply: "err rect unavailable")
-        let gate = Gate()
-        let recorder = CaretRectRecorder()
-        let session = makeSession(transport: transport, gate: gate, onCaretRect: { recorder.record($0) })
-
-        await session.begin()
-        await Self.waitUntil { recorder.snapshot.count == 1 }
-        XCTAssertEqual(recorder.snapshot, [nil])
-
-        // The channel stays healthy: marks still flow.
-        await session.mark("one")
-        await Self.waitForLines([Self.begin, "rect", "mark one"], from: transport)
-        let report = await session.report()
-        XCTAssertNil(report.failure)
-        XCTAssertEqual(report.marksSent, 1)
-        await gate.open()
-    }
-
-    func testNoCaretRectConsumerMeansNoRectQuery() async {
-        let transport = FakeInlinePreviewTransport()
-        let gate = Gate()
-        let session = makeSession(transport: transport, gate: gate)
-
-        await session.begin()
-        await session.mark("one")
-        await Self.waitForLines([Self.begin, "mark one"], from: transport)
-        await gate.open()
-    }
-
-    func testParseCaretRectAcceptsTheProbeReplyShape() {
-        XCTAssertEqual(
-            InlinePreviewSession.parseCaretRect("ok rect 875.0 -160.0 1.0 16.0"),
-            CGRect(x: 875, y: -160, width: 1, height: 16)
-        )
-        XCTAssertNil(InlinePreviewSession.parseCaretRect("err rect unavailable"))
-        XCTAssertNil(InlinePreviewSession.parseCaretRect("ok rect 1.0 2.0 3.0"))
-        XCTAssertNil(InlinePreviewSession.parseCaretRect("ok marked 5 styled=true"))
-        XCTAssertNil(InlinePreviewSession.parseCaretRect("ok rect a b c d"))
     }
 
     // MARK: - Discard ordering
@@ -765,20 +637,19 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertEqual(coordinator.hudTranscriptPreview, "hello")
     }
 
-    // MARK: - Caret badge rhythm
+    // MARK: - Edge glow rhythm
 
-    /// Native dictation's rhythm: badge at the caret before any text, hidden
-    /// the moment the transcript stream is active, back after a real pause,
-    /// gone at release.
+    /// Native dictation's rhythm on the glow: edges lit before any text,
+    /// faded the moment the transcript stream is active, back after a real
+    /// pause, gone at release.
     @MainActor
-    func testCaretBadgeShowsBeforeTextHidesOnActivityAndReturnsAfterSilence() async {
+    func testEdgeGlowShowsBeforeTextHidesOnActivityAndReturnsAfterSilence() async {
         let coordinator = AppCoordinator(
             textInsertion: SilentInsertionBackend(),
             settings: Settings(),
             inlinePreviewEnabled: true,
             autoStart: false
         )
-        // Default rect reply (100, 200) lies on any connected primary screen.
         let transport = FakeInlinePreviewTransport()
         guard let session = coordinator.makeInlinePreviewSession(
             bundleIdentifier: Self.target,
@@ -789,22 +660,21 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         await session.begin()
         await waitForMirroring(true, on: coordinator)
-        // The caret answer rides the begin ack: the badge is the recording's
+        // Mirroring activation (begin ack) lights the glow as the recording's
         // first indicator, before any text or pill.
-        await Self.waitUntil { await MainActor.run { coordinator.indicatorBadgeVisible } }
-        XCTAssertTrue(coordinator.indicatorBadge)
+        await Self.waitUntil { await MainActor.run { coordinator.edgeGlowVisible } }
 
-        // The stream turns active: the badge hides while text flows.
+        // The stream turns active: the glow fades while text flows.
         coordinator.handlePartialTranscript("hello")
-        XCTAssertFalse(coordinator.indicatorBadgeVisible)
+        XCTAssertFalse(coordinator.edgeGlowVisible)
 
-        // A real pause (badgeQuietDelay with no transcript events): the badge
-        // returns at the last known caret.
-        await Self.waitUntil { await MainActor.run { coordinator.indicatorBadgeVisible } }
+        // A real pause (glowQuietDelay with no transcript events): the glow
+        // breathes back in.
+        await Self.waitUntil { await MainActor.run { coordinator.edgeGlowVisible } }
 
         // Release ends the rhythm.
         coordinator.finishRecording()
-        XCTAssertFalse(coordinator.indicatorBadgeVisible)
+        XCTAssertFalse(coordinator.edgeGlowVisible)
     }
 
     // MARK: - Release ordering (discard vs final IME commit)
@@ -853,7 +723,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertEqual(backend.inserted, [])
         XCTAssertEqual(insertion.insertedTranscript, "Hello there.")
         await Self.waitForLines(
-            [Self.begin, "rect", "mark hello there", "cancel", "commit Hello there.", "end"],
+            [Self.begin, "mark hello there", "cancel", "commit Hello there.", "end"],
             from: transport
         )
     }
@@ -883,7 +753,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         coordinator.state = .recording
         coordinator.finishRecording()
 
-        await Self.waitForLines([Self.begin, "rect", "mark hello", "cancel", "end"], from: transport)
+        await Self.waitForLines([Self.begin, "mark hello", "cancel", "end"], from: transport)
     }
 
     /// Reviewer scenario (c): degradation between fn release and the router must
