@@ -6,7 +6,11 @@ and the mechanism ran in daily dogfood under `EPOS_INLINE_PREVIEW=1` launches.
 Now shipped: gated by `Settings.inlinePreview` (default on), companion bundle
 built from `probes/inline-preview/` and installed by
 `scripts/install-signed-app.sh`; see `specs/baseline.md` "Shipped Since
-Baseline". The env var is gone. The rest of this file is the research record.
+Baseline". The env var is gone. One accepted cost below never materialized:
+live registration worked without a logout every time (contradicting DevForums
+775526 — the install script's `lsregister -trusted` + `TISRegisterInputSource`
++ agent-restart dance is sufficient), so the logout is a fallback, not a cost.
+The rest of this file is the research record.
 
 2026-07-30 research record: can Epos show live provisional text inside the
 focused field, the way native dictation does, without weakening the
