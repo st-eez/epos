@@ -62,7 +62,14 @@ public struct Settings: Equatable, Sendable {
     public var saveCorrectionEvidence: Bool
     /// Runs the mic through Apple's voice-processing IO so audio the machine is
     /// playing out (music, a call, a video) is subtracted from what the recognizer
-    /// hears. Default on; off restores the untouched hardware input.
+    /// hears.
+    ///
+    /// Default OFF. It works — three of four measured holds rejected the speaker
+    /// audio completely — but macOS voice processing always ducks other audio while
+    /// it runs, and the dip is audible at `.min`, the lowest level the platform
+    /// offers. Quieting audio the user chose to play is a worse failure than
+    /// occasionally transcribing it, so this stays opt-in until the cancellation can
+    /// be done without touching the output.
     public var echoCancellation: Bool
     /// Streams volatile text into the fn-press field as marked text via the
     /// companion input method; falls back to the pill HUD when unavailable.
@@ -74,7 +81,7 @@ public struct Settings: Equatable, Sendable {
         localeIdentifier: String = "en-US",
         saveAudioSamples: Bool = false,
         saveCorrectionEvidence: Bool = false,
-        echoCancellation: Bool = true,
+        echoCancellation: Bool = false,
         inlinePreview: Bool = true,
         edgeGlow: EdgeGlowSettings = EdgeGlowSettings()
     ) {
@@ -110,7 +117,7 @@ public struct Settings: Equatable, Sendable {
             localeIdentifier: defaults.string(forKey: Key.localeIdentifier) ?? "en-US",
             saveAudioSamples: defaults.bool(forKey: Key.saveAudioSamples),
             saveCorrectionEvidence: defaults.bool(forKey: Key.saveCorrectionEvidence),
-            echoCancellation: defaults.object(forKey: Key.echoCancellation) as? Bool ?? true,
+            echoCancellation: defaults.object(forKey: Key.echoCancellation) as? Bool ?? false,
             inlinePreview: defaults.object(forKey: Key.inlinePreview) as? Bool ?? true,
             edgeGlow: EdgeGlowSettings(
                 // `object(forKey:)` distinguishes "never set" (use defaults)
