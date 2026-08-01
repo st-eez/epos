@@ -40,8 +40,11 @@ enum FinalTranscriptCommitRouter {
         }
         guard await preview.cancelCompositionForFinalCommit() else { return nil }
         // The probe acknowledged issuing the un-mark, not the host having drawn
-        // it; the same settle the keystroke path uses after its discard.
+        // it; the same settle the keystroke path uses after its discard. The
+        // baseline settle then covers Chromium hosts, which reflect the removal
+        // into their AX value asynchronously past any fixed delay.
         await settle()
+        await insertion.settleReadableBaseline()
 
         switch insertion.authorizeFinalWrite(transcript) {
         case .refused(let result):

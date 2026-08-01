@@ -115,6 +115,44 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.operations, [])
     }
 
+    func testBaselineSettleWaitsOutStaleCompositionBeforeTheGuardReads() async {
+        let backend = FinalRecordingBackend()
+        // A Chromium host still showing cancelled marked text for the first two
+        // reads, then reflecting the un-mark into its AX value.
+        let observer = SequencedFinalTargetObserver(
+            values: ["abc draft", "abc draft", "abc", "abc"],
+            range: .init(location: 3, length: 0),
+            context: .init(prefix: "abc", suffix: "")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            target: observer,
+            isAccessibilityTrusted: { true }
+        )
+
+        await session.settleReadableBaseline(retryDelaysNanoseconds: [0, 1_000_000, 1_000_000])
+        XCTAssertEqual(session.insertFinalResult("final"), .accepted)
+        XCTAssertEqual(backend.operations, [.insert("final")])
+    }
+
+    func testBaselineSettleGivesUpOnAGenuinelyEditedTarget() async {
+        let backend = FinalRecordingBackend()
+        let observer = SequencedFinalTargetObserver(
+            values: ["abc user edit", "abc user edit", "abc user edit", "abc user edit"],
+            range: .init(location: 3, length: 0),
+            context: .init(prefix: "abc", suffix: "")
+        )
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            target: observer,
+            isAccessibilityTrusted: { true }
+        )
+
+        await session.settleReadableBaseline(retryDelaysNanoseconds: [0, 1_000_000, 1_000_000])
+        XCTAssertEqual(session.insertFinalResult("must not land"), .targetRefused)
+        XCTAssertEqual(backend.operations, [])
+    }
+
     func testFinalSessionAllowsOpaqueStableTarget() {
         let backend = FinalRecordingBackend()
         let observer = FinalTargetObserver()

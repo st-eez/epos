@@ -120,6 +120,9 @@ public final class AppCoordinator: ObservableObject {
     private lazy var cues = RecordingCuePresenter { [unowned self] in
         RecordingIndicator(coordinator: self)
     }
+    /// Keeps Electron apps' accessibility trees awake so the fn-press capture can
+    /// see their focused element.
+    private let electronAccessibilityWaker = ElectronAccessibilityWaker()
     /// One recording's inline-preview session.
     private lazy var preview = InlinePreviewCoordinator(
         isEnabled: { [weak self] in self?.inlinePreviewEnabled ?? false },
@@ -320,6 +323,12 @@ public final class AppCoordinator: ObservableObject {
         guard !didBootstrap else { return }
         didBootstrap = true
         log.info("bootstrap begin")
+        if IndicatorWindowPolicy.canPresentWindows {
+            // Same suppression as the cue windows: under the test runner the
+            // waker must not write AX attributes into whatever app is frontmost
+            // on the developer's machine.
+            electronAccessibilityWaker.start()
+        }
         apply(await readinessProbe.resolveAtLaunch())
         if settings.edgeGlow.enabled {
             cues.applyEdgeGlowStyle(settings.edgeGlow)
@@ -1183,8 +1192,11 @@ public final class AppCoordinator: ObservableObject {
             return route
         }
         // Ordering is load-bearing: the marked text must be gone before the one
-        // guarded write, or the field shows the utterance twice.
+        // guarded write, or the field shows the utterance twice. The baseline
+        // settle gives a Chromium host's asynchronous un-mark a bounded window
+        // to leave the AX value before the guard reads it.
         await finishInlinePreview()
+        await textInsertionSession?.settleReadableBaseline()
         return .completed(insertFinalTranscriptResult(transcript), viaIME: false)
     }
 

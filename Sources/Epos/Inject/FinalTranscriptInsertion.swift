@@ -28,10 +28,11 @@ public enum FinalWriteAuthorization: Equatable, Sendable {
 
 /// Captures the insertion target at fn press and performs at most one write.
 ///
-/// This type is unchecked-Sendable only for its post-write readback. The
-/// coordinator never changes `insertedTranscript` or the captured observer after
-/// accepting a write; `finish()` may close only the independent backend while the
-/// detached AX read is in flight.
+/// This type is unchecked-Sendable only for its detached AX reads: the pre-write
+/// baseline settle (whose caller is suspended awaiting it) and the post-write
+/// readback. The coordinator never changes `insertedTranscript` or the captured
+/// observer after accepting a write; `finish()` may close only the independent
+/// backend while the detached AX read is in flight.
 public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     private let insertionSession: any TextInsertionSession
     private let target: any InsertionTargetObserver
@@ -127,6 +128,54 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         )
     }
 
+    /// Bounded wait for the fn-press text context to be readable again before
+    /// the final authorization runs.
+    ///
+    /// A Chromium/Electron host applies a composition teardown asynchronously:
+    /// the preview's cancel ack proves the un-mark was issued, not that the
+    /// host reflected it into its AX value, so an immediate guard read can see
+    /// the stale marked text and refuse it as a user edit. The wait polls the
+    /// same comparison the guard will make and returns the moment it matches;
+    /// a target the user genuinely edited never matches and simply spends the
+    /// ladder before the guard refuses it as before. Opaque targets have no
+    /// readable context to poll and return immediately.
+    public func settleReadableBaseline(
+        retryDelaysNanoseconds: [UInt64] = [0, 20_000_000, 60_000_000, 120_000_000]
+    ) async {
+        guard !didClose, insertedTranscript == nil,
+              target.baselineInsertionContext() != nil else { return }
+        var reads = 0
+        for delay in retryDelaysNanoseconds {
+            if delay > 0 {
+                try? await Task.sleep(nanoseconds: delay)
+            }
+            reads += 1
+            let restored = await Task.detached(priority: .userInitiated) { [self] in
+                guard let context = target.baselineInsertionContext(),
+                      let value = target.observedValue(),
+                      let selectedRange = target.observedSelectedRange() else {
+                    return false
+                }
+                return context.matchesBaseline(value: value, selectedRange: selectedRange)
+            }.value
+            if restored {
+                if reads > 1 {
+                    // The composition-teardown race, caught in the act: evidence
+                    // that a slow host needed the wait, and how much of it.
+                    log.info(
+                        "final insertion baseline restored after \(reads) reads",
+                        recordingID: recordingID
+                    )
+                }
+                return
+            }
+        }
+        log.info(
+            "final insertion baseline not restored after \(reads) reads; the guard decides",
+            recordingID: recordingID
+        )
+    }
+
     /// Gives posted keystrokes a bounded opportunity to reach an AX-readable
     /// field, then compares the exact inserted span. AX reads run off the main
     /// actor and each live read is independently bounded by the observer.
@@ -207,18 +256,52 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     }
 
     private func targetIsUnchanged() -> Bool {
-        guard target.hasCapturedTarget(),
-              !target.focusChangedSinceStart() else {
+        guard target.hasCapturedTarget() else {
+            // Failure A of the Electron dormant-tree bug: nothing was focusable
+            // at fn press, so there is no target to verify, and "target changed"
+            // alone would misname it.
+            log.info(
+                "insertion guard: no fn-press target was captured",
+                recordingID: recordingID
+            )
+            return false
+        }
+        guard !target.focusChangedSinceStart() else {
+            // The observer names which focus check failed.
             return false
         }
         guard let context = target.baselineInsertionContext() else {
             return !target.requiresTextContextValidation()
         }
-        guard let value = target.observedValue(),
-              let selectedRange = target.observedSelectedRange() else {
+        guard let value = target.observedValue() else {
+            log.info(
+                "insertion guard: target value unreadable before final write",
+                recordingID: recordingID
+            )
             return false
         }
-        return context.matchesBaseline(value: value, selectedRange: selectedRange)
+        guard let selectedRange = target.observedSelectedRange() else {
+            log.info(
+                "insertion guard: target selection unreadable before final write",
+                recordingID: recordingID
+            )
+            return false
+        }
+        guard context.matchesBaseline(value: value, selectedRange: selectedRange) else {
+            // Lengths and ranges only: this is a divergence shape, and the field
+            // value is the user's content, not the transcript under test.
+            let baselineUTF16 = context.prefix.utf16.count
+                + context.selectedText.utf16.count + context.suffix.utf16.count
+            log.info(
+                "insertion guard: text context diverged from baseline "
+                    + "(value utf16 \(baselineUTF16) -> \(value.utf16.count), selection "
+                    + "\(context.selectedRange.location),\(context.selectedRange.length) -> "
+                    + "\(selectedRange.location),\(selectedRange.length))",
+                recordingID: recordingID
+            )
+            return false
+        }
+        return true
     }
 
     /// Classifies a run of readbacks in which no attempt ever equalled the
