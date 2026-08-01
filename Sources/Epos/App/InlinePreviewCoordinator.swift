@@ -106,12 +106,18 @@ final class InlinePreviewCoordinator {
     ///
     /// Callers guard on `isActive` first: with no session there is nothing to
     /// finish and no HUD suppression to lift.
-    func finish() async {
-        guard let session else { return }
+    ///
+    /// Returns true when a mark was attempted and never committed — the one
+    /// case where marked text may still be drawn over the field at return time,
+    /// and the only recording whose final write needs a baseline settle.
+    @discardableResult
+    func finish() async -> Bool {
+        guard let session else { return false }
         startDiscard()
         await discard?.value
         let report = await session.report()
-        if report.didAttemptMark, !report.committed {
+        let compositionMayLinger = report.didAttemptMark && !report.committed
+        if compositionMayLinger {
             // Keyed to the attempt, not the ack: a mark whose reply timed out
             // leaves marksSent at zero and may still be drawn in the field, and
             // that is exactly the case keystrokes must not land on top of.
@@ -122,5 +128,6 @@ final class InlinePreviewCoordinator {
         log.info(report.logLine)
         self.session = nil
         discard = nil
+        return compositionMayLinger
     }
 }

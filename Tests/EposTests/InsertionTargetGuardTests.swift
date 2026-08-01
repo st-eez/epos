@@ -153,6 +153,28 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(backend.operations, [])
     }
 
+    func testBaselineSettleExitsWithoutValueReadsOnceFocusRefusalIsCertain() async {
+        let backend = FinalRecordingBackend()
+        let observer = SequencedFinalTargetObserver(
+            values: ["abc", "abc", "abc"],
+            range: .init(location: 3, length: 0),
+            context: .init(prefix: "abc", suffix: "")
+        )
+        observer.focusChanged = true
+        let session = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(),
+            target: observer,
+            isAccessibilityTrusted: { true }
+        )
+
+        await session.settleReadableBaseline(retryDelaysNanoseconds: [0, 1_000_000, 1_000_000])
+        // The settle never sampled the (possibly wrong-field) value, and never
+        // delayed the refusal the focus guard already owns.
+        XCTAssertEqual(observer.valueReads, 0)
+        XCTAssertEqual(session.insertFinalResult("must not land"), .targetRefused)
+        XCTAssertEqual(backend.operations, [])
+    }
+
     func testFinalSessionAllowsOpaqueStableTarget() {
         let backend = FinalRecordingBackend()
         let observer = FinalTargetObserver()
@@ -524,6 +546,8 @@ private final class SequencedFinalTargetObserver: InsertionTargetObserver {
     private var valueIndex = 0
     private let range: InsertionTargetTextRange
     private let context: InsertionTargetContext
+    var focusChanged = false
+    private(set) var valueReads = 0
 
     init(
         values: [String?],
@@ -537,8 +561,9 @@ private final class SequencedFinalTargetObserver: InsertionTargetObserver {
 
     func captureBaseline() {}
     func hasCapturedTarget() -> Bool { true }
-    func focusChangedSinceStart() -> Bool { false }
+    func focusChangedSinceStart() -> Bool { focusChanged }
     func observedValue() -> String? {
+        valueReads += 1
         guard valueIndex < values.count else { return nil }
         defer { valueIndex += 1 }
         return values[valueIndex]

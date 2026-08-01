@@ -572,6 +572,12 @@ public final class AppCoordinator: ObservableObject {
         currentRecordingID = recordingID
         RecordingLogContext.activate(recordingID)
         log.info("recording start")
+        // Re-assert the Electron wake for the app about to be captured: a tree
+        // that re-slept during a long single-app session, or a grant that
+        // arrived without an app switch, heals here instead of on the next
+        // app activation. Asynchronous — a fully cold tree still misses this
+        // capture, but the very next press finds it awake.
+        electronAccessibilityWaker.wakeFrontmostApplication()
         // Feedback first, work second: the glow (or pill) lands before the
         // synchronous AX baseline capture below, which can stall for hundreds of
         // milliseconds on slow accessibility targets.
@@ -1082,10 +1088,14 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
-    private func finishInlinePreview() async {
-        guard preview.isActive else { return }
-        await preview.finish()
+    /// Returns true when marked text may still be drawn over the field — the
+    /// only case the final write must settle for.
+    @discardableResult
+    private func finishInlinePreview() async -> Bool {
+        guard preview.isActive else { return false }
+        let compositionMayLinger = await preview.finish()
         inlinePreviewMirroring = false
+        return compositionMayLinger
     }
 
     // MARK: - Final write
@@ -1192,11 +1202,15 @@ public final class AppCoordinator: ObservableObject {
             return route
         }
         // Ordering is load-bearing: the marked text must be gone before the one
-        // guarded write, or the field shows the utterance twice. The baseline
-        // settle gives a Chromium host's asynchronous un-mark a bounded window
-        // to leave the AX value before the guard reads it.
-        await finishInlinePreview()
-        await textInsertionSession?.settleReadableBaseline()
+        // guarded write, or the field shows the utterance twice. Only a
+        // composition that may still be drawn needs the baseline settle — it
+        // gives a Chromium host's asynchronous un-mark a bounded window to
+        // leave the AX value before the guard reads it; a recording that never
+        // marked has nothing to wait for, and its refusals stay instant.
+        let compositionMayLinger = await finishInlinePreview()
+        if compositionMayLinger {
+            await textInsertionSession?.settleReadableBaseline()
+        }
         return .completed(insertFinalTranscriptResult(transcript), viaIME: false)
     }
 

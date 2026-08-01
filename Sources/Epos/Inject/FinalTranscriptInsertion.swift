@@ -128,37 +128,52 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         )
     }
 
+    /// One poll of the readable baseline. `unverifiable` means the focus guard
+    /// already has a deterministic refusal — waiting longer cannot change it.
+    private enum BaselinePoll: Sendable {
+        case restored
+        case diverged
+        case unverifiable
+    }
+
     /// Bounded wait for the fn-press text context to be readable again before
     /// the final authorization runs.
     ///
     /// A Chromium/Electron host applies a composition teardown asynchronously:
     /// the preview's cancel ack proves the un-mark was issued, not that the
     /// host reflected it into its AX value, so an immediate guard read can see
-    /// the stale marked text and refuse it as a user edit. The wait polls the
-    /// same comparison the guard will make and returns the moment it matches;
-    /// a target the user genuinely edited never matches and simply spends the
-    /// ladder before the guard refuses it as before. Opaque targets have no
-    /// readable context to poll and return immediately.
+    /// the stale marked text and refuse it as a user edit. Each poll runs the
+    /// guard's own checks — the focus guard first, then the shared readable
+    /// comparison — returning the moment the baseline is back or the focus
+    /// guard's refusal is already certain; a target the user genuinely edited
+    /// never matches and spends the ladder before the guard refuses it as
+    /// before.
+    ///
+    /// Returns false when there is no readable baseline to poll (opaque or
+    /// uncaptured target, or a closed session) so the caller can apply the
+    /// fixed composition settle instead.
+    @discardableResult
     public func settleReadableBaseline(
         retryDelaysNanoseconds: [UInt64] = [0, 20_000_000, 60_000_000, 120_000_000]
-    ) async {
+    ) async -> Bool {
         guard !didClose, insertedTranscript == nil,
-              target.baselineInsertionContext() != nil else { return }
+              target.hasCapturedTarget(),
+              target.baselineInsertionContext() != nil else { return false }
         var reads = 0
         for delay in retryDelaysNanoseconds {
             if delay > 0 {
                 try? await Task.sleep(nanoseconds: delay)
             }
             reads += 1
-            let restored = await Task.detached(priority: .userInitiated) { [self] in
-                guard let context = target.baselineInsertionContext(),
-                      let value = target.observedValue(),
-                      let selectedRange = target.observedSelectedRange() else {
-                    return false
+            let poll = await Task.detached(priority: .userInitiated) { [self] () -> BaselinePoll in
+                guard !target.focusChangedSinceStart(),
+                      let context = target.baselineInsertionContext() else {
+                    return .unverifiable
                 }
-                return context.matchesBaseline(value: value, selectedRange: selectedRange)
+                return observeReadableContext(against: context).matches ? .restored : .diverged
             }.value
-            if restored {
+            switch poll {
+            case .restored:
                 if reads > 1 {
                     // The composition-teardown race, caught in the act: evidence
                     // that a slow host needed the wait, and how much of it.
@@ -167,13 +182,18 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
                         recordingID: recordingID
                     )
                 }
-                return
+                return true
+            case .unverifiable:
+                return true
+            case .diverged:
+                continue
             }
         }
         log.info(
             "final insertion baseline not restored after \(reads) reads; the guard decides",
             recordingID: recordingID
         )
+        return true
     }
 
     /// Gives posted keystrokes a bounded opportunity to reach an AX-readable
@@ -273,35 +293,54 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         guard let context = target.baselineInsertionContext() else {
             return !target.requiresTextContextValidation()
         }
-        guard let value = target.observedValue() else {
+        let observation = observeReadableContext(against: context)
+        guard !observation.matches else { return true }
+        guard let value = observation.value else {
             log.info(
                 "insertion guard: target value unreadable before final write",
                 recordingID: recordingID
             )
             return false
         }
-        guard let selectedRange = target.observedSelectedRange() else {
+        guard let selectedRange = observation.selectedRange else {
             log.info(
                 "insertion guard: target selection unreadable before final write",
                 recordingID: recordingID
             )
             return false
         }
-        guard context.matchesBaseline(value: value, selectedRange: selectedRange) else {
-            // Lengths and ranges only: this is a divergence shape, and the field
-            // value is the user's content, not the transcript under test.
-            let baselineUTF16 = context.prefix.utf16.count
-                + context.selectedText.utf16.count + context.suffix.utf16.count
-            log.info(
-                "insertion guard: text context diverged from baseline "
-                    + "(value utf16 \(baselineUTF16) -> \(value.utf16.count), selection "
-                    + "\(context.selectedRange.location),\(context.selectedRange.length) -> "
-                    + "\(selectedRange.location),\(selectedRange.length))",
-                recordingID: recordingID
-            )
-            return false
+        // Lengths and ranges only: this is a divergence shape, and the field
+        // value is the user's content, not the transcript under test.
+        let baselineUTF16 = context.prefix.utf16.count
+            + context.selectedText.utf16.count + context.suffix.utf16.count
+        log.info(
+            "insertion guard: text context diverged from baseline "
+                + "(value utf16 \(baselineUTF16) -> \(value.utf16.count), selection "
+                + "\(context.selectedRange.location),\(context.selectedRange.length) -> "
+                + "\(selectedRange.location),\(selectedRange.length))",
+            recordingID: recordingID
+        )
+        return false
+    }
+
+    /// The one readable-context comparison, shared verbatim by the pre-write
+    /// settle and the final guard so the two can never drift apart. The raw
+    /// observations come back with the verdict because the guard's refusal
+    /// logging needs to name which read failed and by how much.
+    private func observeReadableContext(
+        against context: InsertionTargetContext
+    ) -> (matches: Bool, value: String?, selectedRange: InsertionTargetTextRange?) {
+        guard let value = target.observedValue() else {
+            return (false, nil, nil)
         }
-        return true
+        guard let selectedRange = target.observedSelectedRange() else {
+            return (false, value, nil)
+        }
+        return (
+            context.matchesBaseline(value: value, selectedRange: selectedRange),
+            value,
+            selectedRange
+        )
     }
 
     /// Classifies a run of readbacks in which no attempt ever equalled the

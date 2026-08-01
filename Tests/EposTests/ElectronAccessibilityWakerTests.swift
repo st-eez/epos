@@ -13,7 +13,7 @@ final class ElectronAccessibilityWakerTests: XCTestCase {
             wake: { pid in
                 XCTAssertEqual(pid, expectedPid)
                 woken.fulfill()
-                return true
+                return .woke
             }
         )
         waker.start()
@@ -29,7 +29,7 @@ final class ElectronAccessibilityWakerTests: XCTestCase {
             frontmostApplication: { nil },
             wake: { _ in
                 woken.fulfill()
-                return true
+                return .woke
             }
         )
         waker.start()
@@ -50,12 +50,31 @@ final class ElectronAccessibilityWakerTests: XCTestCase {
             frontmostApplication: { nil },
             wake: { _ in
                 XCTFail("no application to wake")
-                return false
+                return .unsupported
             }
         )
         waker.start()
         center.post(name: NSWorkspace.didActivateApplicationNotification, object: nil)
         // Give a wrongly-spawned wake task room to run before the assertion window closes.
         try? await Task.sleep(for: .milliseconds(50))
+    }
+
+    func testPressTimeReassertWakesTheFrontmostApplicationOnlyOnceStarted() async {
+        let woken = expectation(description: "frontmost app poked at press time")
+        // One from start(), one from the press-time re-assert.
+        woken.expectedFulfillmentCount = 2
+        let waker = ElectronAccessibilityWaker(
+            notificationCenter: NotificationCenter(),
+            frontmostApplication: { .current },
+            wake: { _ in
+                woken.fulfill()
+                return .woke
+            }
+        )
+        // Not started (the test-runner state): a press must stay off the machine.
+        waker.wakeFrontmostApplication()
+        waker.start()
+        waker.wakeFrontmostApplication()
+        await fulfillment(of: [woken], timeout: 2)
     }
 }
