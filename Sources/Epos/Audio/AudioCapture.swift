@@ -105,14 +105,21 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         do {
             try inputNode.setVoiceProcessingEnabled(enabled)
             if enabled {
-                // Max ducking, not the gentler levels, because the echo canceller alone
-                // does not finish the job on a push-to-talk hold: it is adaptive and each
-                // fn press starts it unconverged. Measured against speech played from the
-                // speakers during a hold — raw mic 84 transcribed chars, cancellation at
-                // .min 55, at .mid 84, at .max 0 across three runs. The dip lasts only as
-                // long as the hold, which is what Siri does for the same reason.
+                // The least ducking the platform offers. This feature exists to clean up
+                // the MIC signal; turning down what the user is deliberately listening to
+                // is not a tool it gets to reach for. Ducking cannot be switched off on
+                // macOS — the level enum has no "off", and the AudioUnit property that
+                // could (`kAUVoiceIOProperty_DuckNonVoiceAudio`) is iOS-only and
+                // deprecated — so `.min` is the floor.
+                //
+                // The tradeoff this accepts: cancellation alone leaks. Measured against
+                // speech played from the speakers during a hold, raw mic transcribed 84
+                // chars and `.min` still let 55 through (`.max` reached 0, at the cost of
+                // flattening the user's audio, which is not a trade this app makes). The
+                // canceller is adaptive and every fn press starts it unconverged, which is
+                // the real limit here — not the ducking level.
                 var ducking = inputNode.voiceProcessingOtherAudioDuckingConfiguration
-                ducking.duckingLevel = .max
+                ducking.duckingLevel = .min
                 inputNode.voiceProcessingOtherAudioDuckingConfiguration = ducking
             }
             Self.log.info("voice processing \(enabled ? "enabled" : "disabled")")
@@ -134,6 +141,12 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         engine.stop()                          // synchronous; quiesces the HAL IO thread
         engine.inputNode.removeTap(onBus: 0)   // safe only after the engine has stopped
         converter = nil
+        // Leave voice processing off between recordings. The engine is long-lived and
+        // never released, so a voice-processing unit left enabled here stays alive for
+        // the whole run of the app — and its ducking is not gated on speech, so every
+        // other sound on the machine stays attenuated long after the hold ends. Stopping
+        // the engine is not enough to release it; the mode has to be turned off.
+        applyVoiceProcessing(enabled: false)
         Self.log.info("capture stopped")
     }
 
