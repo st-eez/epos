@@ -29,6 +29,16 @@ extension AppCoordinator {
         log.info("correction evidence capture \(enabled ? "enabled" : "disabled")")
     }
 
+    public var echoCancellation: Bool { settings.echoCancellation }
+
+    /// Takes effect on the next fn press: the mode can only be changed while the
+    /// audio engine is stopped, so the capture reads it at each start.
+    public func setEchoCancellation(_ enabled: Bool) {
+        guard settings.echoCancellation != enabled else { return }
+        updateSettings { $0.echoCancellation = enabled }
+        log.info("echo cancellation \(enabled ? "enabled" : "disabled")")
+    }
+
     public var inlinePreviewSetting: Bool { settings.inlinePreview }
 
     public func setInlinePreview(_ enabled: Bool) {

@@ -60,6 +60,10 @@ public struct Settings: Equatable, Sendable {
     public var localeIdentifier: String
     public var saveAudioSamples: Bool
     public var saveCorrectionEvidence: Bool
+    /// Runs the mic through Apple's voice-processing IO so audio the machine is
+    /// playing out (music, a call, a video) is subtracted from what the recognizer
+    /// hears. Default on; off restores the untouched hardware input.
+    public var echoCancellation: Bool
     /// Streams volatile text into the fn-press field as marked text via the
     /// companion input method; falls back to the pill HUD when unavailable.
     public var inlinePreview: Bool
@@ -70,6 +74,7 @@ public struct Settings: Equatable, Sendable {
         localeIdentifier: String = "en-US",
         saveAudioSamples: Bool = false,
         saveCorrectionEvidence: Bool = false,
+        echoCancellation: Bool = true,
         inlinePreview: Bool = true,
         edgeGlow: EdgeGlowSettings = EdgeGlowSettings()
     ) {
@@ -77,6 +82,7 @@ public struct Settings: Equatable, Sendable {
         self.localeIdentifier = localeIdentifier
         self.saveAudioSamples = saveAudioSamples
         self.saveCorrectionEvidence = saveCorrectionEvidence
+        self.echoCancellation = echoCancellation
         self.inlinePreview = inlinePreview
         self.edgeGlow = edgeGlow
     }
@@ -86,6 +92,7 @@ public struct Settings: Equatable, Sendable {
         static let localeIdentifier = "settings.localeIdentifier"
         static let saveAudioSamples = "settings.saveAudioSamples"
         static let saveCorrectionEvidence = "settings.saveCorrectionEvidence"
+        static let echoCancellation = "settings.echoCancellation"
         static let inlinePreview = "settings.inlinePreview"
         static let edgeGlowEnabled = "settings.edgeGlow.enabled"
         static let edgeGlowTheme = "settings.edgeGlow.theme"
@@ -103,6 +110,7 @@ public struct Settings: Equatable, Sendable {
             localeIdentifier: defaults.string(forKey: Key.localeIdentifier) ?? "en-US",
             saveAudioSamples: defaults.bool(forKey: Key.saveAudioSamples),
             saveCorrectionEvidence: defaults.bool(forKey: Key.saveCorrectionEvidence),
+            echoCancellation: defaults.object(forKey: Key.echoCancellation) as? Bool ?? true,
             inlinePreview: defaults.object(forKey: Key.inlinePreview) as? Bool ?? true,
             edgeGlow: EdgeGlowSettings(
                 // `object(forKey:)` distinguishes "never set" (use defaults)
@@ -127,6 +135,7 @@ public struct Settings: Equatable, Sendable {
         defaults.set(localeIdentifier, forKey: Key.localeIdentifier)
         defaults.set(saveAudioSamples, forKey: Key.saveAudioSamples)
         defaults.set(saveCorrectionEvidence, forKey: Key.saveCorrectionEvidence)
+        defaults.set(echoCancellation, forKey: Key.echoCancellation)
         defaults.set(inlinePreview, forKey: Key.inlinePreview)
         defaults.set(edgeGlow.enabled, forKey: Key.edgeGlowEnabled)
         defaults.set(edgeGlow.theme.rawValue, forKey: Key.edgeGlowTheme)

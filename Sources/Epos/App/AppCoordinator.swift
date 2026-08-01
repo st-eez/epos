@@ -664,7 +664,7 @@ public final class AppCoordinator: ObservableObject {
         audio.onCaptureFailure = { [weak self] error in
             self?.endRecordingAfterCaptureFailure(error)
         }
-        try audio.start(targetFormat: format)
+        try audio.start(targetFormat: format, echoCancellation: settings.echoCancellation)
     }
 
     /// The mic never opened, so the recording that was just announced has to be

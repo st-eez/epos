@@ -14,13 +14,14 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
 
     private func makeCoordinator(
         audio: FakeMicrophoneCapture,
-        events: RecordingStartEventLog? = nil
+        events: RecordingStartEventLog? = nil,
+        settings: Settings = Settings()
     ) -> AppCoordinator {
         let coordinator = AppCoordinator(
             audio: audio,
             textInsertion: NoOpInsertionBackend(),
             insertionTargetObserverFactory: { LoggingInsertionTargetObserver(events: events) },
-            settings: Settings(),
+            settings: settings,
             permissions: .stub(),
             inlinePreviewEnabled: false,
             autoStart: false
@@ -59,6 +60,24 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
         XCTAssertNotNil(audio.onAmplitude)
         XCTAssertNotNil(audio.onCaptureFailure)
         coordinator.finishRecording()
+    }
+
+    /// Voice processing can only be switched while the audio engine is stopped, so
+    /// the setting is read at each fn press rather than latched at launch. A stale
+    /// read here is invisible in the UI and only shows up as the user's music being
+    /// transcribed, so pin that the live setting is what reaches the capture.
+    func testEchoCancellationSettingIsPassedToTheCaptureAtPress() {
+        let on = FakeMicrophoneCapture()
+        let onCoordinator = makeCoordinator(audio: on, settings: Settings(echoCancellation: true))
+        onCoordinator.startRecording()
+        XCTAssertEqual(on.lastEchoCancellation, true)
+        onCoordinator.finishRecording()
+
+        let off = FakeMicrophoneCapture()
+        let offCoordinator = makeCoordinator(audio: off, settings: Settings(echoCancellation: false))
+        offCoordinator.startRecording()
+        XCTAssertEqual(off.lastEchoCancellation, false)
+        offCoordinator.finishRecording()
     }
 
     /// A mic that will not open must take the announced recording back rather than

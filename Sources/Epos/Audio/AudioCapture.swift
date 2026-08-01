@@ -15,7 +15,10 @@ public protocol MicrophoneCapture: AnyObject {
     /// actor so the coordinator can end the recording instead of leaving the glow
     /// advertising a mic that stopped producing buffers.
     var onCaptureFailure: ((Error) -> Void)? { get set }
-    func start(targetFormat: AVAudioFormat) throws
+    /// `echoCancellation` runs the input through Apple's voice-processing IO, which
+    /// subtracts what the machine is playing out of the mic signal. Read per session
+    /// because the mode can only be changed while the engine is stopped.
+    func start(targetFormat: AVAudioFormat, echoCancellation: Bool) throws
     func stop()
 }
 
@@ -76,10 +79,49 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     /// Begin capture. Converts the input node's native format to `targetFormat` via
     /// `AVAudioConverter` and emits converted buffers on `onBuffer`. RMS amplitude is
     /// computed off the pre-conversion buffer and reported via `onAmplitude`.
-    public func start(targetFormat: AVAudioFormat) throws {
+    public func start(targetFormat: AVAudioFormat, echoCancellation: Bool) throws {
+        // Before reading the input format: voice processing changes the input node's
+        // output format, and it can only be toggled while the engine is stopped —
+        // which it is here, on a first start and after every `stop()`.
+        applyVoiceProcessing(enabled: echoCancellation)
         try openInputPath(targetFormat: targetFormat)
         activeTargetFormat = targetFormat
         isRunning = true
+    }
+
+    /// Put the input node into (or out of) Apple's voice-processing mode — the same
+    /// AUVoiceProcessingIO path Siri and FaceTime use. Its echo canceller references
+    /// what the *device* is rendering, not just what this app renders, so music or a
+    /// video playing through the speakers is subtracted from the mic signal instead of
+    /// being transcribed alongside the user. It also brings noise suppression and AGC.
+    ///
+    /// A device that refuses the mode is not a reason to lose the dictation the user is
+    /// already speaking: log it and capture raw. The recording still happens, and the
+    /// log names which mode it ran in, so a "why did it hear my music" report is
+    /// answerable after the fact.
+    private func applyVoiceProcessing(enabled: Bool) {
+        let inputNode = engine.inputNode
+        guard inputNode.isVoiceProcessingEnabled != enabled else { return }
+        do {
+            try inputNode.setVoiceProcessingEnabled(enabled)
+            if enabled {
+                // Max ducking, not the gentler levels, because the echo canceller alone
+                // does not finish the job on a push-to-talk hold: it is adaptive and each
+                // fn press starts it unconverged. Measured against speech played from the
+                // speakers during a hold — raw mic 84 transcribed chars, cancellation at
+                // .min 55, at .mid 84, at .max 0 across three runs. The dip lasts only as
+                // long as the hold, which is what Siri does for the same reason.
+                var ducking = inputNode.voiceProcessingOtherAudioDuckingConfiguration
+                ducking.duckingLevel = .max
+                inputNode.voiceProcessingOtherAudioDuckingConfiguration = ducking
+            }
+            Self.log.info("voice processing \(enabled ? "enabled" : "disabled")")
+        } catch {
+            Self.log.error(
+                "voice processing \(enabled ? "enable" : "disable") failed; "
+                    + "capturing raw input: \(String(describing: error))"
+            )
+        }
     }
 
     /// Stop capture: halt the engine and remove the tap, keeping the engine allocated
@@ -105,12 +147,9 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         guard inputFormat.sampleRate > 0 else {
             throw AudioCaptureError.zeroSampleRate
         }
-        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+        guard let converter = Self.makeConverter(from: inputFormat, to: targetFormat) else {
             throw AudioCaptureError.converterUnavailable
         }
-        // Per Apple docs and swift-scribe pattern: skip filter priming so converter state
-        // persists cleanly across per-buffer calls; first samples may be lower quality.
-        converter.primeMethod = .none
 
         let rateRatio = targetFormat.sampleRate / inputFormat.sampleRate
 
@@ -175,7 +214,7 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         }
 
         self.converter = converter
-        Self.log.info("capture started: input \(inputFormat.sampleRate)Hz/\(inputFormat.channelCount)ch -> target \(targetFormat.sampleRate)Hz/\(targetFormat.channelCount)ch")
+        Self.log.info("capture started: input \(inputFormat.sampleRate)Hz/\(inputFormat.channelCount)ch -> target \(targetFormat.sampleRate)Hz/\(targetFormat.channelCount)ch voiceProcessing=\(inputNode.isVoiceProcessingEnabled)")
     }
 
     /// Recover the in-flight capture after the input hardware changed underneath it.
@@ -204,6 +243,31 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
             )
             onCaptureFailure?(error)
         }
+    }
+
+    /// The mic-to-recognizer converter, configured identically wherever it is built.
+    ///
+    /// `channelMap` is the load-bearing line. Voice processing replaces the 1-channel
+    /// hardware input with a 9-channel stream tagged `DiscreteInOrder`, carrying nine
+    /// copies of the same processed mono signal. `AVAudioConverter`'s implicit N→1 mix
+    /// for that layout emits digital silence — measured 0.000x gain against a real
+    /// capture — which would turn every dictation into an empty transcript with no
+    /// error anywhere. Selecting channel 0 explicitly is lossless (0.963x, which is
+    /// the 48 kHz → 16 kHz low-pass, not attenuation).
+    static func makeConverter(
+        from inputFormat: AVAudioFormat,
+        to targetFormat: AVAudioFormat
+    ) -> AVAudioConverter? {
+        guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
+            return nil
+        }
+        // Per Apple docs and swift-scribe pattern: skip filter priming so converter state
+        // persists cleanly across per-buffer calls; first samples may be lower quality.
+        converter.primeMethod = .none
+        if targetFormat.channelCount == 1, inputFormat.channelCount > 1 {
+            converter.channelMap = [0]
+        }
+        return converter
     }
 
     /// RMS amplitude across the first channel, clamped to 0...1. Float32 buffers only.

@@ -27,13 +27,16 @@ final class FakeMicrophoneCapture: MicrophoneCapture {
     private(set) var startCount = 0
     private(set) var stopCount = 0
     private(set) var isCapturing = false
+    /// `echoCancellation` as requested by the most recent `start`.
+    private(set) var lastEchoCancellation: Bool?
 
-    func start(targetFormat: AVAudioFormat) throws {
+    func start(targetFormat: AVAudioFormat, echoCancellation: Bool) throws {
         if let startError {
             throw startError
         }
         startCount += 1
         isCapturing = true
+        lastEchoCancellation = echoCancellation
         events?.append("mic-open")
     }
 

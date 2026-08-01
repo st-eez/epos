@@ -145,6 +145,18 @@ public struct MenuBarView: View {
                     }
             }
             Divider().overlay(.white.opacity(0.08))
+            metaRow("Ignore speaker audio") {
+                Toggle("", isOn: Binding(
+                    get: { coordinator.echoCancellation },
+                    set: { coordinator.setEchoCancellation($0) }
+                ))
+                .labelsHidden()
+                .toggleStyle(.switch)
+                .tint(teal)
+                .scaleEffect(0.74)
+                .frame(width: 42, height: 22)
+            }
+            Divider().overlay(.white.opacity(0.08))
             metaRow("Stream into field") {
                 Toggle("", isOn: Binding(
                     get: { coordinator.inlinePreviewSetting },
