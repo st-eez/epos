@@ -1,6 +1,38 @@
 import AppKit
 import ApplicationServices
 import Foundation
+import Synchronization
+
+/// Serial off-actor runner for the blocking `AXManualAccessibility` set, with
+/// per-pid coalescing.
+///
+/// The set is synchronous IPC into the target app; a wedged host burns the full
+/// messaging timeout. Running one per app activation on the Swift cooperative
+/// pool let a handful of wedged targets occupy every cooperative thread, after
+/// which unrelated `Task {}` work elsewhere in the app (one per system-wide
+/// modifier keypress, among others) queued behind it. A dedicated serial queue
+/// bounds the blocking to exactly one thread that is not the pool's.
+///
+/// Coalescing falls out of the same seam: while a wake for a pid is queued and
+/// not yet running, further requests for that pid are dropped, so an app-switch
+/// storm collapses instead of stacking. A pid is un-pended when its work item
+/// starts, not when it finishes, so an activation that arrives during a wake
+/// still re-asserts afterwards — at most one running plus one queued per pid.
+final class AccessibilityWakeQueue: Sendable {
+    private let queue = DispatchQueue(label: "com.steez.Epos.accessibility-wake", qos: .utility)
+    private let pending = Mutex<Set<pid_t>>([])
+
+    /// Runs `work` on the serial queue unless a wake for `processIdentifier` is
+    /// already queued and waiting.
+    func enqueue(processIdentifier: pid_t, work: @escaping @Sendable () -> Void) {
+        let enqueued = pending.withLock { $0.insert(processIdentifier).inserted }
+        guard enqueued else { return }
+        queue.async {
+            self.pending.withLock { _ = $0.remove(processIdentifier) }
+            work()
+        }
+    }
+}
 
 /// Wakes the dormant accessibility tree of Chromium-based (Electron) apps so the
 /// fn-press target capture can see their focused element.
@@ -22,6 +54,9 @@ import Foundation
 /// - Every activation re-asserts the attribute. The set is idempotent, and
 ///   re-asserting self-heals Chromium's disable-after-idle behavior, which put
 ///   Claude.app's tree back to sleep mid-session when the flag was cleared.
+///   Activations that pile up on a pid whose wake has not run yet coalesce into
+///   that one pending wake (see `AccessibilityWakeQueue`); the assert still
+///   lands, it just doesn't land once per redundant switch.
 /// - The attribute is never unset. Clearing it is what re-broke the first live
 ///   repro, and it would also yank the tree from any other assistive client.
 /// - Hosts that don't support the attribute (every native app) fail the set with
@@ -53,6 +88,7 @@ public final class ElectronAccessibilityWaker {
     private let wake: @Sendable (pid_t) -> WakeAttempt
     private var activationObserver: NSObjectProtocol?
     private let log = EposLogger(category: "inject")
+    private let wakeQueue = AccessibilityWakeQueue()
 
     public init(
         notificationCenter: NotificationCenter = NSWorkspace.shared.notificationCenter,
@@ -78,12 +114,13 @@ public final class ElectronAccessibilityWaker {
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: nil
-        ) { [wake, log] notification in
+        ) { [wake, log, wakeQueue] notification in
             guard let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey]
                 as? NSRunningApplication else { return }
-            Self.wakeDetached(
+            Self.enqueueWake(
                 processIdentifier: application.processIdentifier,
                 bundleIdentifier: application.bundleIdentifier,
+                on: wakeQueue,
                 wake: wake,
                 log: log
             )
@@ -103,23 +140,27 @@ public final class ElectronAccessibilityWaker {
 
     private func wakeFrontmostApplicationNow() {
         guard let frontmost = frontmostApplication() else { return }
-        Self.wakeDetached(
+        Self.enqueueWake(
             processIdentifier: frontmost.processIdentifier,
             bundleIdentifier: frontmost.bundleIdentifier,
+            on: wakeQueue,
             wake: wake,
             log: log
         )
     }
 
     /// The AX set is synchronous IPC into the target app, bounded by a messaging
-    /// timeout but still nothing the main actor should wait on per app switch.
-    private nonisolated static func wakeDetached(
+    /// timeout but still nothing the main actor — or the shared cooperative
+    /// thread pool — should wait on per app switch. `AccessibilityWakeQueue`
+    /// owns both the off-pool thread and the per-pid coalescing.
+    private nonisolated static func enqueueWake(
         processIdentifier: pid_t,
         bundleIdentifier: String?,
+        on wakeQueue: AccessibilityWakeQueue,
         wake: @escaping @Sendable (pid_t) -> WakeAttempt,
         log: EposLogger
     ) {
-        Task.detached(priority: .utility) {
+        wakeQueue.enqueue(processIdentifier: processIdentifier) {
             let host = bundleIdentifier ?? "pid \(processIdentifier)"
             switch wake(processIdentifier) {
             case .woke:
