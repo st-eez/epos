@@ -44,6 +44,59 @@ final class CapturePreRollTests: XCTestCase {
         XCTAssertEqual(sink.frames, [1, 2])
     }
 
+    /// A start that never settles must not retain mic buffers forever: past the
+    /// cap the queue keeps the newest audio, so what reaches the analyzer runs
+    /// unbroken into the live feed instead of splicing a hole into the middle.
+    func testQueueIsCappedAndKeepsTheNewestAudio() {
+        let preRoll = CapturePreRoll()
+        let sink = Sink()
+        let secondOfAudio = AVAudioFrameCount(Self.format.sampleRate)
+        let halfSecondOfAudio = secondOfAudio / 2
+        for _ in 0 ..< 9 {
+            preRoll.accept(makeBuffer(frames: secondOfAudio))
+        }
+        // A last buffer of a different length, so the hand-over shows which end of
+        // the 9.5s of audio survived.
+        preRoll.accept(makeBuffer(frames: halfSecondOfAudio))
+
+        let handedOver = preRoll.attach { sink.frames.append($0.frameLength) }
+
+        XCTAssertEqual(handedOver, 3)
+        XCTAssertEqual(sink.frames, [secondOfAudio, secondOfAudio, halfSecondOfAudio])
+    }
+
+    /// The cap is on retained audio, not buffer count: many short buffers below
+    /// the cap are all still the opening of the utterance and must survive.
+    func testShortBuffersUnderTheCapAreAllKept() {
+        let preRoll = CapturePreRoll()
+        let sink = Sink()
+        // 100 × 10ms = 1s, well under the cap.
+        for _ in 0 ..< 100 {
+            preRoll.accept(makeBuffer(frames: AVAudioFrameCount(Self.format.sampleRate / 100)))
+        }
+
+        let handedOver = preRoll.attach { sink.frames.append($0.frameLength) }
+
+        XCTAssertEqual(handedOver, 100)
+    }
+
+    /// Eviction is bookkeeping too: a capped queue that is drained must not leave
+    /// the next pre-roll thinking it is already full.
+    func testCapAccountingResetsAfterAttach() {
+        let preRoll = CapturePreRoll()
+        let sink = Sink()
+        let secondOfAudio = AVAudioFrameCount(Self.format.sampleRate)
+        for _ in 0 ..< 10 {
+            preRoll.accept(makeBuffer(frames: secondOfAudio))
+        }
+        preRoll.attach { sink.frames.append($0.frameLength) }
+        sink.frames = []
+
+        preRoll.accept(makeBuffer(frames: secondOfAudio))
+
+        XCTAssertEqual(sink.frames, [secondOfAudio])
+    }
+
     /// The queue is handed over exactly once; a later live buffer must not replay
     /// the pre-roll behind it.
     func testPreRollIsNotReplayed() {
