@@ -344,10 +344,79 @@ final class SmokeTests: XCTestCase {
         XCTAssertFalse(result, "a hung operation must time out, not win the race")
     }
 
+    /// The input stream used to use the default `.unlimited` policy, so an analyzer
+    /// that stopped draining retained every mic buffer of the recording, indefinitely.
+    /// The bound has to hold the opening of the utterance and refuse the overflow
+    /// rather than evicting already-captured audio.
+    func testInputStreamBoundsQueuedAudioBuffers() async {
+        let (stream, continuation) = Transcriber.makeInputStream()
+
+        var dropped = 0
+        for _ in 0..<(Transcriber.maxQueuedInputBuffers + 8) {
+            if case .dropped = continuation.yield(makeAnalyzerInput()) { dropped += 1 }
+        }
+        continuation.finish()
+
+        XCTAssertEqual(dropped, 8, "everything past the bound must be refused, not buffered")
+        var buffered = 0
+        for await _ in stream { buffered += 1 }
+        XCTAssertEqual(
+            buffered,
+            Transcriber.maxQueuedInputBuffers,
+            "the bound must keep the opening of the utterance, not evict it for newer audio"
+        )
+    }
+
+    /// Hitting the bound is a wedged analyzer, not a talkative user: the session must
+    /// stop retaining audio and report the recognizer failure the coordinator already
+    /// handles, instead of dropping audio silently mid-dictation.
+    func testInputOverflowClosesInputAndReportsRecognizerFailure() async {
+        let module = Transcriber.makeTranscriber(locale: Locale(identifier: "en-US"))
+        let (input, inputContinuation) = Transcriber.makeInputStream()
+        let (events, eventContinuation) = AsyncStream<TranscriptEvent>.makeStream()
+        let idle = Task<Void, Error> {}
+        let drain = Task<Void, Never> {}
+
+        Transcriber.reportInputOverflow(
+            Transcriber.Session(
+                analyzer: SpeechAnalyzer(modules: [module]),
+                inputContinuation: inputContinuation,
+                eventContinuation: eventContinuation,
+                drainTask: drain,
+                startTask: idle,
+                hasReceivedBuffer: true
+            )
+        )
+        eventContinuation.finish()
+
+        guard case .terminated = inputContinuation.yield(makeAnalyzerInput()) else {
+            return XCTFail("the input stream must be closed so no further audio is retained")
+        }
+        var retained = 0
+        for await _ in input { retained += 1 }
+        XCTAssertEqual(retained, 0, "audio yielded after the failure must not be retained")
+
+        var failures: [String] = []
+        for await event in events {
+            if case .failed(let message) = event { failures.append(message) }
+        }
+        XCTAssertEqual(failures.count, 1, "the wedged analyzer must be reported as a recognizer failure")
+    }
+
     func testCompletedWithinReturnsTrueWhenOperationFinishesInTime() async {
         let result = await Transcriber.completed(within: .seconds(5)) {}
         XCTAssertTrue(result, "a completed operation must win the race")
     }
+}
+
+/// One capture-shaped buffer wrapped as analyzer input. `AnalyzerInput.init(buffer:)`
+/// traps on float32 buffers, so this uses the interleaved 16 kHz int16 shape
+/// `SpeechAnalyzer.bestAvailableAudioFormat` hands `AudioCapture` to convert into.
+private func makeAnalyzerInput() -> AnalyzerInput {
+    let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
+    let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128)!
+    buffer.frameLength = 128
+    return AnalyzerInput(buffer: buffer)
 }
 
 private func makeTemporaryDirectory() throws -> URL {

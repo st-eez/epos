@@ -45,6 +45,16 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
     /// generous escape hatch for an Apple-framework hang, not a tuning knob.
     static let finishTimeout: Duration = .seconds(10)
 
+    /// Bound on how many un-analyzed audio buffers the input stream may hold.
+    /// `AudioCapture` taps 4096 frames at 48 kHz and converts each one, so a buffer is
+    /// ~85 ms of audio however it is resampled: 512 queued buffers is ~44 s the analyzer
+    /// has not consumed — far past any real push-to-talk hold plus the pre-roll burst.
+    /// Under the default `.unlimited` policy an analyzer that stopped draining retained
+    /// every buffer of the recording forever. Reaching this bound therefore means the
+    /// analyzer is wedged, not that the user talked a long time, and the session is
+    /// failed rather than grown without limit.
+    static let maxQueuedInputBuffers = 512
+
     private let lock = NSLock()
     private var session: Session?
 
@@ -59,6 +69,9 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
         let drainTask: Task<Void, Never>
         let startTask: Task<Void, Error>
         var hasReceivedBuffer: Bool
+        /// Latches once the input bound is hit so the failure is reported exactly
+        /// once, not on every buffer the wedged analyzer refuses.
+        var didOverflowInput: Bool = false
     }
 
     public init(locale: Locale = Locale(identifier: "en-US")) {
@@ -89,7 +102,11 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
         let transcriber = Self.makeTranscriber(locale: locale)
         let analysisContext = Self.analysisContext(contextualStrings: contextualStrings)
 
-        let (inputStream, inputCont) = AsyncStream<AnalyzerInput>.makeStream()
+        let (inputStream, inputCont) = Self.makeInputStream()
+        // The event stream stays unbounded on purpose: it carries small strings at
+        // roughly one per second for the length of one hold, and its only consumer
+        // (`AppCoordinator.runSession`) drains it in a `for await`. There is no
+        // volume here to bound.
         let (eventStream, eventCont) = AsyncStream<TranscriptEvent>.makeStream()
 
         let analyzer = SpeechAnalyzer(modules: [transcriber])
@@ -161,6 +178,14 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
         return eventStream
     }
 
+    /// The audio input stream, bounded at `maxQueuedInputBuffers`. `.bufferingOldest`
+    /// keeps the contiguous opening of the utterance and reports the buffer it refused
+    /// as `.dropped`, which is what `accept(_:)` turns into an honest session failure.
+    /// Internal so a test can pin the bound without a live analyzer.
+    static func makeInputStream() -> (AsyncStream<AnalyzerInput>, AsyncStream<AnalyzerInput>.Continuation) {
+        AsyncStream<AnalyzerInput>.makeStream(bufferingPolicy: .bufferingOldest(maxQueuedInputBuffers))
+    }
+
     static func makeTranscriber(locale: Locale) -> SpeechTranscriber {
         SpeechTranscriber(locale: locale, preset: speechPreset)
     }
@@ -185,11 +210,36 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
     }
 
     /// Feed a captured audio buffer into the active session. Thread-safe.
+    /// A buffer refused by the bounded input stream means the analyzer stopped
+    /// draining; that fails the session instead of silently dropping audio.
     public func accept(_ buffer: AVAudioPCMBuffer) {
-        lock.withLock {
-            session?.hasReceivedBuffer = true
-            session?.inputContinuation.yield(AnalyzerInput(buffer: buffer))
+        let overflowedSession = lock.withLock { () -> Session? in
+            guard var current = session else { return nil }
+            current.hasReceivedBuffer = true
+            let yielded = current.inputContinuation.yield(AnalyzerInput(buffer: buffer))
+            var overflowed = false
+            if case .dropped = yielded, !current.didOverflowInput {
+                current.didOverflowInput = true
+                overflowed = true
+            }
+            session = current
+            return overflowed ? current : nil
         }
+        guard let overflowedSession else { return }
+        Self.reportInputOverflow(overflowedSession)
+    }
+
+    /// The analyzer stopped consuming audio. Close the input so nothing further is
+    /// retained and report a recognizer failure on the event stream — the same signal
+    /// the coordinator already handles for a results stream that dies mid-hold, so the
+    /// recording ends as `.recognizerFailed` instead of a clean but truncated finalize.
+    /// Teardown itself stays with the coordinator's normal `finish()`.
+    /// Static and internal so a test can drive it with a constructed session.
+    static func reportInputOverflow(_ session: Session) {
+        let message = "audio input backlog exceeded \(maxQueuedInputBuffers) buffers; analyzer stopped draining"
+        log.error("\(message)")
+        session.inputContinuation.finish()
+        session.eventContinuation.yield(.failed(message))
     }
 
     /// End the session. Idempotent — repeat calls after the first are no-ops.
