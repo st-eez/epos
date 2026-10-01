@@ -1,8 +1,9 @@
-# Epos agent instructions
+# Epos shared agent instructions
 
-Start with [docs/readme.md](docs/readme.md). It indexes every shipped feature,
-its implementation, tests, and design records. Read the relevant feature page
-before changing code. Read [docs/development.md](docs/development.md) for build,
+Start feature work at [docs/readme.md](docs/readme.md), then read the relevant
+feature page and its linked source, tests, and design records.
+
+Read [docs/development.md](docs/development.md) for build,
 signing, verification, logging, and project generation rules.
 
 [specs/baseline.md](specs/baseline.md) governs product scope. Re-read it before
