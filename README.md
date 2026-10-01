@@ -1,109 +1,39 @@
 # Epos
 
-Minimal macOS dictation app built on Apple's `SpeechTranscriber`. Hold fn, speak, stable words stream into the focused app, and release commits the remaining final text.
+Epos is an on-device dictation app for Apple Silicon Macs running macOS 26 or
+later. Hold fn to record, see volatile text in the field or recording HUD, and
+release to insert the cleaned final transcript once into the captured field.
+Apple SpeechTranscriber handles recognition. Deterministic correction rules
+handle personal vocabulary and spoken developer symbols.
 
-Source of truth: `specs/baseline.md`.
+Start at [docs/readme.md](docs/readme.md) for every shipped feature, its source,
+tests, defaults, and design records. [AGENTS.md](AGENTS.md) contains contributor
+rules, and [specs/baseline.md](specs/baseline.md) governs scope and backlog.
 
-## Requirements
+## Install from source
 
-- macOS 26.0 or later (uses `SpeechAnalyzer` + `SpeechTranscriber`, introduced in macOS 26).
-- Apple Silicon.
-- Xcode 17+ (for Swift 6.0 toolchain).
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen) for generating the Xcode project: `brew install xcodegen`.
-
-## Fresh Clone Setup
-
-For a teammate or agent starting from GitHub:
+Install Xcode with the macOS 26 or newer SDK and XcodeGen. A free Apple ID can
+provide an Apple Development certificate through Xcode.
 
 ```sh
-git clone https://github.com/st-eez/epos.git
-cd epos
 brew install xcodegen
-scripts/install-local-app.sh
-open /Applications/Epos.app
-```
-
-Then complete the first-run setup below. The local install path builds from
-source on the user's Mac, signs the app locally, and installs it into
-`/Applications`.
-
-## Build
-
-```sh
-# Library target via SwiftPM
-swift build
-
-# Build a signed .app bundle. The script infers DEVELOPMENT_TEAM when one
-# Apple Development team is available; otherwise set it in your local shell.
-scripts/build-signed-app.sh
-
-# Install the signed app to /Applications for the stable runtime/TCC target.
 scripts/install-signed-app.sh
-```
-
-## Free Local Install
-
-This path does not require a paid Apple Developer Program account. It builds
-the app from source on the user's Mac, signs it locally, and installs it into
-`/Applications`.
-
-```sh
-brew install xcodegen
-scripts/install-local-app.sh
 open /Applications/Epos.app
 ```
 
-`scripts/build-local-app.sh` prefers an Apple Development certificate when one
-is available. That certificate can be created with a free Apple ID in Xcode. If
-none is available, the script falls back to an ad-hoc local signature.
+Grant Microphone, Speech Recognition, and Accessibility permissions. The app
+prepares the locale asset on first launch. Disable the macOS Dictation fn
+shortcut in System Settings, Keyboard, Dictation.
 
-For Homebrew tap distribution, use the source-build formula template in
-`packaging/homebrew/`.
-
-## Contributor Workflow
-
-The build and install commands stay the same when editing normal app code under
-`Sources/`, `Tests/`, or `Resources/`.
-
-```sh
-swift build -Xswiftc -warnings-as-errors
-swift test
-swiftlint --quiet
-scripts/install-local-app.sh
-```
-
-Update the build or distribution instructions only when changing build
-infrastructure: `Package.swift`, `project.yml`, app entitlements, required
-tools, deployment target, signing behavior, install scripts, or Homebrew
-packaging.
-
-## First-Run Setup
-
-1. Launch only `/Applications/Epos.app`, not a DerivedData copy.
-2. Grant Microphone, Speech Recognition, and Accessibility permissions when prompted.
-3. The app downloads the SpeechTranscriber locale asset on first launch (one-time).
-4. **Disable macOS system dictation** so the fn key doesn't trigger two listeners at once: System Settings → Keyboard → Dictation → Shortcut → "Off".
-
-## Architecture
-
-See `specs/baseline.md` for the full spec. The app is organized by workflow
-boundary:
-
-```
-Sources/Epos/
-  App/{EposApp,AppCoordinator,Settings}.swift
-  Permissions/PermissionsGate.swift
-  Speech/{AssetManager,Transcriber,TranscriptCanonicalizer,CorrectionStore}.swift
-  Audio/{AudioCapture,DogfoodTap}.swift
-  Hotkey/FnHotkey.swift
-  UI/{MenuBarView,RecordingIndicator,CorrectionsEditorView,...}.swift
-  Inject/TextInsertionBackend.swift
-  Diagnostics/EposLogger.swift
-```
+For a local install with an ad-hoc signing fallback, use
+`scripts/install-local-app.sh`. See [development.md](docs/development.md) for
+the signing and companion differences, build commands, and runtime checks.
 
 ## Status
 
-Source-buildable macOS app with the baseline push-to-talk flow, local signing
-scripts, first-run permissions, session-aware progressive insertion, diagnostic
-logging, and correction-rule editing in place. See `specs/baseline.md` for
-scope, non-goals, and backlog items.
+The repository contains dictation, guarded final delivery, inline preview,
+corrections, conservative cleanup, recording cues, and local diagnostic and
+evaluation tools. Source and unit tests establish implementation behavior.
+Replacing an existing dictation app also requires current signed-app verification
+in the apps you use. See the [feature index](docs/readme.md) for evidence and
+known limitations.
