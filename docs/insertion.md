@@ -98,6 +98,7 @@ Tests cover [target guards](../Tests/EposTests/InsertionTargetGuardTests.swift),
 [focus signatures](../Tests/EposTests/InsertionTargetFocusSignatureTests.swift),
 [preview lifecycle](../Tests/EposTests/InlinePreviewSessionTests.swift),
 [preview callback isolation](../Tests/EposTests/InlinePreviewCoordinatorTests.swift),
+[final preview safety](../Tests/EposTests/InlinePreviewFinalSafetyTests.swift),
 [socket failures](../Tests/EposTests/InlinePreviewTransportTests.swift), and
 [commit routing](../Tests/EposTests/FinalTranscriptCommitRouterTests.swift).
 The [feasibility spec](../specs/inline-preview-feasibility.md) and
