@@ -14,8 +14,8 @@ import Foundation
 ///   as a user edit; the guard itself runs unchanged, before any commit.
 /// - An acked commit records the transcript on the insertion session and is the
 ///   only write; no keystrokes follow.
-/// - A probe refusal or send-side failure proves the commit did not execute, so
-///   the keystroke fallback (which re-runs the guard) is safe.
+/// - A probe refusal or send-side failure proves the commit did not execute.
+///   Fallback re-runs the guard, and explicit target safety refusals block it.
 /// - An unacknowledged commit after a complete send is ambiguous: the write may
 ///   have landed, so the insertion session is closed without claiming or
 ///   attempting anything, and the caller reports the recording honestly rather
@@ -38,7 +38,13 @@ enum FinalTranscriptCommitRouter {
         guard let insertion, InlinePreviewSession.isCommittableText(transcript) else {
             return nil
         }
-        guard await preview.cancelCompositionForFinalCommit() else { return nil }
+        guard await preview.cancelCompositionForFinalCommit() else {
+            if await preview.hasUnsafeTarget() {
+                insertion.cancel()
+                return .completed(.targetRefused, viaIME: false)
+            }
+            return nil
+        }
         // The probe acknowledged issuing the un-mark, not the host having drawn
         // it. A readable target is polled until the fn-press baseline is back —
         // the guard's own comparison, which subsumes any fixed delay and covers
@@ -58,6 +64,9 @@ enum FinalTranscriptCommitRouter {
         }
 
         switch await preview.commitFinalTranscript(transcript) {
+        case .targetUnsafe:
+            insertion.cancel()
+            return .completed(.targetRefused, viaIME: false)
         case .committed:
             insertion.recordExternalCommit(transcript)
             return .completed(.accepted, viaIME: true)

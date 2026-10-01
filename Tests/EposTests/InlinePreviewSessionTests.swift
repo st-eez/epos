@@ -17,7 +17,13 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         private let openThrows: Bool
         private let beginReply: String
+        private let beginError: InlinePreviewTransportError?
         private let markThrows: Bool
+        private let markReply: String
+        private let markError: InlinePreviewTransportError?
+        private let markReplyAfterFirst: String?
+        private let cancelReply: String
+        private let cancelError: InlinePreviewTransportError?
         /// Marks beyond this count throw, for degradation mid- or post-recording.
         private let failMarksAfter: Int?
         private let commitReply: String
@@ -32,14 +38,26 @@ final class InlinePreviewSessionTests: XCTestCase {
         init(
             openThrows: Bool = false,
             beginReply: String = "ok locked",
+            beginError: InlinePreviewTransportError? = nil,
             markThrows: Bool = false,
+            markReply: String = "ok marked",
+            markError: InlinePreviewTransportError? = nil,
+            markReplyAfterFirst: String? = nil,
+            cancelReply: String = "ok",
+            cancelError: InlinePreviewTransportError? = nil,
             failMarksAfter: Int? = nil,
             commitReply: String = "ok committed 1",
             commitError: InlinePreviewTransportError? = nil
         ) {
             self.openThrows = openThrows
             self.beginReply = beginReply
+            self.beginError = beginError
             self.markThrows = markThrows
+            self.markReply = markReply
+            self.markError = markError
+            self.markReplyAfterFirst = markReplyAfterFirst
+            self.cancelReply = cancelReply
+            self.cancelError = cancelError
             self.failMarksAfter = failMarksAfter
             self.commitReply = commitReply
             self.commitError = commitError
@@ -52,12 +70,21 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         func send(_ line: String) async throws -> String {
             lines.append(line)
-            if line.hasPrefix("begin") { return beginReply }
+            if line.hasPrefix("begin") {
+                if let beginError { throw beginError }
+                return beginReply
+            }
+            if line == "cancel" {
+                if let cancelError { throw cancelError }
+                return cancelReply
+            }
             if line.hasPrefix("mark") {
                 marksSeen += 1
+                if let markError { throw markError }
                 if markThrows { throw Failure.denied }
                 if let failMarksAfter, marksSeen > failMarksAfter { throw Failure.denied }
-                return "ok marked"
+                if marksSeen > 1, let markReplyAfterFirst { return markReplyAfterFirst }
+                return markReply
             }
             if line.hasPrefix("commit") {
                 if let commitError { throw commitError }
@@ -822,6 +849,138 @@ final class InlinePreviewSessionTests: XCTestCase {
     }
 
     // MARK: - Release ordering (discard vs final IME commit)
+
+    @MainActor
+    func testUnsafeBeginRefusalBlocksOrdinaryKeystrokeDelivery() async {
+        await refusesUnsafeFinalTarget(
+            transport: FakeInlinePreviewTransport(beginReply: "err unsafe composition owner is gone"),
+            transcript: "Hello there.",
+            expectedFailure: "unsafeTarget"
+        )
+    }
+
+    @MainActor
+    func testUnsafeMarkRefusalBlocksOrdinaryKeystrokeDelivery() async {
+        await refusesUnsafeFinalTarget(
+            transport: FakeInlinePreviewTransport(markReply: "err unsafe composition"),
+            transcript: "Hello there.",
+            expectedFailure: "unsafeTarget"
+        )
+    }
+
+    @MainActor
+    func testUnsafeDiscardBlocksMultilineKeystrokeDelivery() async {
+        await refusesUnsafeFinalTarget(
+            transport: FakeInlinePreviewTransport(cancelReply: "err unsafe composition"),
+            transcript: "Hello\nthere."
+        )
+    }
+
+    @MainActor
+    func testUnknownBeginRepliesBlockFinalDelivery() async {
+        for error in [InlinePreviewTransportError.replyTimedOut, .replyPeerClosed, .replyMalformed] {
+            await refusesUnsafeFinalTarget(
+                transport: FakeInlinePreviewTransport(beginError: error),
+                transcript: "Hello there.", expectedFailure: "connectFailed"
+            )
+        }
+    }
+
+    @MainActor
+    func testUnknownMarkRepliesBlockFinalDelivery() async {
+        for error in [InlinePreviewTransportError.replyTimedOut, .replyPeerClosed, .replyMalformed] {
+            await refusesUnsafeFinalTarget(
+                transport: FakeInlinePreviewTransport(markError: error),
+                transcript: "Hello there.", expectedFailure: "markFailed"
+            )
+        }
+    }
+
+    @MainActor
+    func testUnconfirmedDiscardBlocksMultilineDelivery() async {
+        await refusesUnsafeFinalTarget(
+            transport: FakeInlinePreviewTransport(cancelReply: "err locked session gone"),
+            transcript: "Hello\nthere."
+        )
+        await refusesUnsafeFinalTarget(
+            transport: FakeInlinePreviewTransport(cancelError: .closed),
+            transcript: "Hello\nthere."
+        )
+    }
+
+    @MainActor
+    func testGenericRefusalAfterAcceptedPreviewBlocksFinalDelivery() async {
+        await refusesUnsafeFinalTarget(
+            transport: FakeInlinePreviewTransport(markReplyAfterFirst: "err preview requires an empty selection"),
+            transcript: "Hello there.", laterMark: "hello there again"
+        )
+    }
+
+    @MainActor
+    func testFirstConclusiveMarkRefusalPreservesGuardedFinalDelivery() async {
+        let transport = FakeInlinePreviewTransport(markReply: "err preview requires an empty selection")
+        let backend = RecordingInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: backend, settings: Settings(), inlinePreviewEnabled: true, autoStart: false
+        )
+        guard let preview = coordinator.makeInlinePreviewSession(
+            bundleIdentifier: Self.target, transport: transport
+        ) else { return XCTFail("expected a preview session") }
+        let insertion = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(), target: StableOpaqueObserver()
+        )
+        coordinator.stageFinalizationSessions(inlinePreview: preview, insertion: insertion)
+        await preview.begin()
+        await preview.mark("hello there")
+        await Self.waitUntil { await preview.report().failure == "markRefused" }
+
+        let route = await coordinator.commitFinalTranscript("Hello there.")
+        XCTAssertEqual(route, .completed(.accepted, viaIME: false))
+        XCTAssertEqual(backend.inserted, ["Hello there."])
+        let lines = await transport.lines
+        XCTAssertFalse(lines.contains("cancel"), "no Epos mark exists to cancel")
+    }
+
+    @MainActor
+    private func refusesUnsafeFinalTarget(
+        transport: FakeInlinePreviewTransport,
+        transcript: String,
+        expectedFailure: String? = nil,
+        laterMark: String? = nil
+    ) async {
+        let backend = RecordingInsertionBackend()
+        let coordinator = AppCoordinator(
+            textInsertion: backend,
+            settings: Settings(),
+            inlinePreviewEnabled: true,
+            autoStart: false
+        )
+        guard let preview = coordinator.makeInlinePreviewSession(
+            bundleIdentifier: Self.target, transport: transport
+        ) else { return XCTFail("expected a preview session") }
+        let insertion = FinalTranscriptInsertionSession(
+            insertionSession: backend.startInsertionSession(), target: StableOpaqueObserver()
+        )
+        coordinator.stageFinalizationSessions(inlinePreview: preview, insertion: insertion)
+        await preview.begin()
+        await preview.mark("hello there")
+        if let expectedFailure {
+            await Self.waitUntil { await preview.report().failure == expectedFailure }
+        } else {
+            await Self.waitUntil { await preview.report().marksSent == 1 }
+        }
+        if let laterMark {
+            await preview.mark(laterMark)
+            await Self.waitUntil { await preview.report().failure == "unsafeTarget" }
+        }
+
+        let route = await coordinator.commitFinalTranscript(transcript)
+        XCTAssertEqual(route, .completed(.targetRefused, viaIME: false))
+        XCTAssertEqual(backend.inserted, [])
+        XCTAssertNil(insertion.insertedTranscript)
+        XCTAssertEqual(insertion.insertFinalResult(transcript), .backendRefused)
+        XCTAssertEqual(backend.inserted, [])
+    }
 
     /// Reviewer scenario (a): a preview actively marking at fn release must NOT
     /// be discarded there — the router must still find it eligible and finish

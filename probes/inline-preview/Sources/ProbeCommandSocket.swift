@@ -22,6 +22,7 @@ final class ProbeCommandSocket {
     /// superseding connection can never signal a descriptor number that has
     /// already been closed and recycled.
     private let connectionLock = NSLock()
+    private let ownership = ProbeConnectionOwnership()
     private var currentConnection: Int32 = -1
     private var nextConnectionID: UInt64 = 1
 
@@ -109,6 +110,7 @@ final class ProbeCommandSocket {
         if superseded >= 0 {
             shutdown(superseded, SHUT_RDWR)
         }
+        ownership.adopt(identifier)
         currentConnection = descriptor
         connectionLock.unlock()
 
@@ -120,7 +122,7 @@ final class ProbeCommandSocket {
 
         Thread.detachNewThread {
             ProbeCommandSocket.serve(descriptor, connection: identifier)
-            ProbeCommandSocket.shared.retire(descriptor)
+            ProbeCommandSocket.shared.retire(descriptor, connection: identifier)
             ProbeCommandSocket.onMain {
                 EposProbeInputController.releaseConnection(identifier, reason: "peer disconnected")
             }
@@ -129,8 +131,9 @@ final class ProbeCommandSocket {
 
     /// Clears the slot and closes under the same lock a superseding `shutdown`
     /// takes, so the descriptor number cannot be recycled mid-signal.
-    private func retire(_ descriptor: Int32) {
+    private func retire(_ descriptor: Int32, connection: UInt64) {
         connectionLock.lock()
+        ownership.retire(connection)
         if currentConnection == descriptor {
             currentConnection = -1
         }
@@ -184,32 +187,36 @@ final class ProbeCommandSocket {
         let trimmed = line.trimmingCharacters(in: CharacterSet(charactersIn: "\r"))
         let (verb, argument) = split(trimmed)
 
+        return runOnMain {
+            shared.ownership.perform(connection) {
+                dispatch(verb, argument: argument, connection: connection)
+            }
+        }
+    }
+
+    private static func dispatch(_ verb: String, argument: String, connection: UInt64) -> String {
         switch verb {
         case "ping":
             return "pong"
         case "status":
-            return runOnMain { EposProbeInputController.status() }
+            return EposProbeInputController.status()
         case "begin":
-            return runOnMain {
-                EposProbeInputController.begin(
-                    expected: argument.isEmpty ? "any" : argument,
-                    connection: connection
-                )
-            }
+            return EposProbeInputController.begin(
+                expected: argument.isEmpty ? "any" : argument,
+                connection: connection
+            )
         case "end":
-            return runOnMain { EposProbeInputController.end() }
+            return EposProbeInputController.end(connection: connection)
         case "mark":
-            return runOnMain { EposProbeInputController.mark(argument, styled: true, connection: connection) }
+            return EposProbeInputController.mark(argument, styled: true, connection: connection)
         case "markplain":
-            return runOnMain { EposProbeInputController.mark(argument, styled: false, connection: connection) }
+            return EposProbeInputController.mark(argument, styled: false, connection: connection)
         case "commit":
-            return runOnMain {
-                EposProbeInputController.commit(argument.isEmpty ? nil : argument, connection: connection)
-            }
+            return EposProbeInputController.commit(argument.isEmpty ? nil : argument, connection: connection)
         case "cancel":
-            return runOnMain { EposProbeInputController.cancel() }
+            return EposProbeInputController.cancel(connection: connection)
         case "rect":
-            return runOnMain { EposProbeInputController.rect() }
+            return EposProbeInputController.rect(connection: connection)
         case "quit":
             DispatchQueue.main.async { NSApp.terminate(nil) }
             return "ok quitting"

@@ -11,11 +11,10 @@ import Foundation
 /// `attach(_:)` drains the queue and the relay forwards straight through for the
 /// rest of the recording.
 ///
-/// Normally that window is well under a second, but nothing on the start path
-/// times out: an analyzer start that never settles would leave the mic running
-/// into this queue at ~192 KB/s for as long as the fn key is held. So the queue
-/// is capped at `capSeconds` of audio and evicts the OLDEST buffers to stay under
-/// it.
+/// Normally that window is well under a second, but the analyzer's startup bound
+/// exceeds this queue's budget. A stalled start can feed it at ~192 KB/s until
+/// the startup deadline. The queue is capped at `capSeconds` of audio and evicts
+/// the OLDEST buffers to stay under it.
 ///
 /// Dropping oldest rather than newest is a transcript-correctness choice. Both
 /// policies lose audio once the cap is hit; the difference is where the seam

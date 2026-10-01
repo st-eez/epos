@@ -21,6 +21,8 @@ costs a logout).
 | `Sources/ProbeInputController.swift` | `setMarkedText` / `insertText` / discard, plus the per-pass focus lock |
 | `Sources/ProbeCommandSocket.swift` | AF_UNIX line protocol: `ping status begin end mark markplain commit cancel quit` |
 | `Sources/ProbeSupport.swift` | Socket path (`confstr(_CS_DARWIN_USER_TEMP_DIR)`) and log path |
+| `Sources/ProbePreviewSafety.swift` | Selection/composition checks and connection ownership |
+| `verify` / `Tests/PreviewSafetyTests.swift` | Full companion compilation and native safety checks |
 | `Driver/main.swift` | `run-stream` driver: TIS enable/select, streams words, commits or cancels |
 | `Tools/tisctl.swift` | TIS query/register helper used by `install` / `uninstall` |
 | `Info.plist` | `InputMethodType = palette`, `ComponentInvisibleInSystemUI = true` |
@@ -37,28 +39,35 @@ The focused field must never be left holding marked text: hosts that commit on
 unmark turn a stranded composition into document text. So the probe tracks *which
 client currently holds marked text* as its own record — bundle id, owning session,
 and the command connection that put it there — separately from the per-pass focus
-lock, and every teardown path tries to remove it instead of refusing:
+lock. Each pass pins a concrete client and command connection. A nonempty or
+unreadable selection refuses marked text, including updates after a host changed
+its selection. Ambiguous client sets also refuse the pass. The recorded client,
+document range, and exact text must match the live marked composition before an
+update or cancellation. The companion reads the live span through
+`IMKTextInput.markedRange` and `attributedSubstringFromRange`, as declared in the
+active SDK's `IMKInputSession.h`.
 
-- **`cancel`** goes to the recorded owner, not the lock. A lock that stopped
-  resolving mid-pass (hosts tear an IMK session down and build a new one
-  constantly) no longer means "refuse and leave it on screen". `ok` means no
-  marked text of ours remains; `err` means some may still be live and nothing
-  could reach it. If the owning session died, a live session for the same bundle
-  id is used instead (`viaOwner=false` in the log); zero-length marked text is a
-  no-op on a session that has no composition.
+- **`cancel`** uses the captured concrete client and clears only the live Epos
+  range and text. It preserves foreign or unreadable compositions and reports
+  an unsafe refusal. If the host already ended Epos's mark, it drops the stale
+  record without writing and also reports an unsafe refusal. Another session
+  from the same bundle cannot substitute for the captured client.
 - **Losing the command connection** is a teardown, not a pause. The peer that
   dropped was the only process that could have asked us to un-mark, so its
-  composition is cleared and its focus lock released. `killall Epos` mid-recording
-  no longer strands a composition.
+  verified composition is cleared and its focus lock released. Unverifiable or
+  foreign compositions remain untouched.
 - **`deactivateServer`** clears the composition when the session being torn down
   is the one holding it — after the teardown it is no longer addressable.
 - **`commitComposition`** still never inserts, and is now scoped: only the session
   that owns the composition acts on it, so a background app finalizing cannot wipe
   a recording in progress.
 
-`commit` is the one path that inserts, and the only one that still refuses on an
-unresolvable lock — Epos treats an `err` reply as proof `insertText` did not run.
-`end` only releases the lock and never touches text.
+`commit` checks the live composition and selection before inserting. An
+`err unsafe ` response from a mark, cancellation, or commit tells Epos to refuse
+the final write, including keystroke fallback. A confirmed foreign composition
+refuses delivery even on the first preview attempt. Initial nonempty or unreadable
+selections without an Epos composition degrade to the HUD and retain guarded
+final delivery. `end` only releases the lock and never touches text.
 
 Exactly one client is legitimate, so **a new connection supersedes the current
 one**: the previous peer is shut down (which runs its teardown) and each
@@ -68,7 +77,13 @@ live Epos recording, say — drops the first one; it degrades that recording to
 HUD-only and is logged, but never writes text. Replies are written with
 `SO_NOSIGPIPE` + a process-wide `SIGPIPE` ignore and a bounded `SO_SNDTIMEO`, so a
 peer that departs before reading its reply costs one failed write instead of
-killing the input method.
+killing the input method. Commands already queued on main are checked against
+the current connection before executing. Old `begin`, `mark`, `commit`, `cancel`,
+and `end` commands cannot take over or modify a newer pass.
+
+Run `probes/inline-preview/verify` for compilation and native selection and
+ownership regression checks. Actual host integration requires the installed
+companion and the per-app matrix below.
 
 ## Install
 
@@ -125,34 +140,32 @@ Record for each target:
 ## Driving it from real dictation (preferred over the manual matrix)
 
 Epos itself can act as the driver, so organic usage answers the per-app rendering
-question instead of a scripted test pass. Behind `EPOS_INLINE_PREVIEW=1` the
-coordinator mirrors its volatile transcript into the fn-press field as marked
+question instead of a scripted test pass. With Stream into field enabled in the
+menu, the coordinator mirrors its volatile transcript into the fn-press field as marked
 text and discards it before the authoritative write:
 
 ```sh
-# 1. the installed app must contain the spike
-scripts/build-signed-app.sh && scripts/install-signed-app.sh
+# Install the current signed app and companion after quitting Epos.
+scripts/install-signed-app.sh
 
 # 2. the probe must be running (it usually already is; the system launches it)
 pgrep -x EposProbe || open ~/Library/Input\ Methods/EposProbe.app
 
-# 3. relaunch Epos with the spike on
-killall Epos 2>/dev/null
-open -a /Applications/Epos.app --env EPOS_INLINE_PREVIEW=1
+# Launch the installed app and enable Stream into field in its menu.
+open /Applications/Epos.app
 ```
 
-`--env` is required: a plain `open` does not pass the caller's environment, and
-launching the bundle through `open` (not the inner binary) is what keeps the
-installed app's TCC grants.
+The saved setting defaults on. Launch the installed bundle so runtime checks
+use its stable app identity.
 
 Then dictate normally into whatever app you are already using. One
 `inline preview target=… began=… marks=… cancelAck=… failure=…` line per recording
 lands in `~/Library/Caches/Epos/logs/` (category `inject`); the probe's own view
 of the same pass is in `~/Library/Caches/EposProbe/probe.log`.
 
-Without the variable Epos never opens the socket. Any failure — probe not
-running, no session for the target bundle id, timeout — degrades to today's
-HUD-only behavior for the rest of that recording.
+Disabling Stream into field prevents opening the socket. An absent probe,
+ambiguous or missing client session, unreadable selection, or timeout degrades
+to the recording HUD for the rest of that recording.
 
 ## Kill criterion (pre-registered)
 

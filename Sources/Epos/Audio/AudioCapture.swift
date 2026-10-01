@@ -84,7 +84,12 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         // output format, and it can only be toggled while the engine is stopped —
         // which it is here, on a first start and after every `stop()`.
         applyVoiceProcessing(enabled: echoCancellation)
-        try openInputPath(targetFormat: targetFormat)
+        do {
+            try openInputPath(targetFormat: targetFormat)
+        } catch {
+            closeInputPath()
+            throw error
+        }
         activeTargetFormat = targetFormat
         isRunning = true
     }
@@ -135,9 +140,16 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     /// (see the `engine` property note). Idempotent. The next `start` reinstalls.
     public func stop() {
         guard isRunning else { return }
+        Self.log.info("capture stopping")
+        closeInputPath()
+        Self.log.info("capture stopped")
+    }
+
+    /// Shared unwind for a finished capture and a failed open or recovery. An open
+    /// can enable voice processing before it throws, without reaching isRunning.
+    private func closeInputPath() {
         isRunning = false
         activeTargetFormat = nil
-        Self.log.info("capture stopping")
         engine.stop()                          // synchronous; quiesces the HAL IO thread
         engine.inputNode.removeTap(onBus: 0)   // safe only after the engine has stopped
         converter = nil
@@ -147,7 +159,6 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         // other sound on the machine stays attenuated long after the hold ends. Stopping
         // the engine is not enough to release it; the mode has to be turned off.
         applyVoiceProcessing(enabled: false)
-        Self.log.info("capture stopped")
     }
 
     /// Build the converter, install the tap, and start the engine. Shared by `start`
@@ -221,7 +232,6 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
             engine.prepare()
             try engine.start()
         } catch {
-            inputNode.removeTap(onBus: 0)
             Self.log.error("engine start failed: \(String(describing: error))")
             throw AudioCaptureError.engineFailed(error)
         }
@@ -248,9 +258,7 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
             try openInputPath(targetFormat: targetFormat)
             Self.log.info("capture resumed on the reconfigured input")
         } catch {
-            isRunning = false
-            activeTargetFormat = nil
-            converter = nil
+            closeInputPath()
             Self.log.error(
                 "capture restart failed after input configuration change: \(String(describing: error))"
             )

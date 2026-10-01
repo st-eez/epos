@@ -15,18 +15,25 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
     private actor ScriptedTransport: InlinePreviewTransport {
         private let commitReply: String
         private let commitError: InlinePreviewTransportError?
+        private let cancelReply: String
 
         private(set) var lines: [String] = []
 
-        init(commitReply: String = "ok committed 12", commitError: InlinePreviewTransportError? = nil) {
+        init(
+            commitReply: String = "ok committed 12",
+            commitError: InlinePreviewTransportError? = nil,
+            cancelReply: String = "ok"
+        ) {
             self.commitReply = commitReply
             self.commitError = commitError
+            self.cancelReply = cancelReply
         }
 
         func open() async throws {}
 
         func send(_ line: String) async throws -> String {
             lines.append(line)
+            if line == "cancel" { return cancelReply }
             if line.hasPrefix("commit") {
                 if let commitError { throw commitError }
                 return commitReply
@@ -107,6 +114,34 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
     }
 
     // MARK: - Tests
+
+    func testForeignCompositionDuringCancelBlocksBothDeliveryBackends() async {
+        let transport = ScriptedTransport(cancelReply: "err unsafe composition")
+        await refusesUnsafeTarget(transport: transport)
+        let lines = await transport.lines
+        XCTAssertFalse(lines.contains { $0.hasPrefix("commit ") })
+    }
+
+    func testForeignCompositionBeforeCommitBlocksKeystrokeFallback() async {
+        let transport = ScriptedTransport(commitReply: "err unsafe composition")
+        await refusesUnsafeTarget(transport: transport)
+        let lines = await transport.lines
+        XCTAssertTrue(lines.contains("commit \(Self.transcript)"))
+    }
+
+    private func refusesUnsafeTarget(transport: ScriptedTransport) async {
+        let preview = await makeHealthyPreview(transport: transport)
+        let backend = RecordingBackend()
+        let insertion = makeInsertion(backend: backend)
+        let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+            transcript: Self.transcript, preview: preview, insertion: insertion, settle: {}
+        )
+        XCTAssertEqual(route, .completed(.targetRefused, viaIME: false))
+        XCTAssertEqual(backend.inserted, [])
+        XCTAssertNil(insertion.insertedTranscript)
+        XCTAssertEqual(insertion.insertFinalResult(Self.transcript), .backendRefused)
+        XCTAssertEqual(backend.inserted, [])
+    }
 
     func testUnhealthyChannelReturnsNilWithoutTouchingAnything() async {
         let transport = ScriptedTransport()
@@ -229,7 +264,7 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
     /// what happened, but the routing must not follow that distinction: after a
     /// complete send both mean the commit may have executed.
     func testMissingAckAndDeadPeerRouteIdenticallyAfterAFullSend() async {
-        for commitError in [InlinePreviewTransportError.replyTimedOut, .replyPeerClosed] {
+        for commitError in [InlinePreviewTransportError.replyTimedOut, .replyPeerClosed, .replyMalformed] {
             let transport = ScriptedTransport(commitError: commitError)
             let preview = await makeHealthyPreview(transport: transport)
             let backend = RecordingBackend()

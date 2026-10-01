@@ -14,12 +14,17 @@ swift build -Xswiftc -warnings-as-errors
 swift test
 swiftlint lint --quiet --no-cache
 scripts/audit --self-test
+probes/inline-preview/verify
 ```
 
 The Swift suite includes behavior tests and opt-in evaluation harnesses. The
 `EPOS_RUN_*` harnesses can skip when their fixtures or permissions are absent.
 Record skipped checks separately from successful runtime verification. Tests
 disable diagnostic file logging and real indicator windows.
+
+The companion verification command builds that separate target with warnings as
+errors and runs native text-view safety checks. The corpus, confirmation,
+labeling, and migration CLIs expose deterministic checks through `--test`.
 
 ## Installed app
 

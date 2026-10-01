@@ -20,6 +20,7 @@ final class EposProbeInputController: IMKInputController {
     /// resolves its controller by bundle id out of this table instead.
     nonisolated(unsafe) private static let controllers = NSHashTable<EposProbeInputController>.weakObjects()
     nonisolated(unsafe) private static weak var lockedController: EposProbeInputController?
+    nonisolated(unsafe) private static weak var lockedInputClient: (IMKTextInput & NSObjectProtocol)?
     nonisolated(unsafe) private static var lockedBundleID: String?
     nonisolated(unsafe) private static var lockedConnection: UInt64?
 
@@ -31,8 +32,10 @@ final class EposProbeInputController: IMKInputController {
     /// survive into document text on commit-on-unmark hosts.
     private struct Composition {
         weak var controller: EposProbeInputController?
+        weak var client: (IMKTextInput & NSObjectProtocol)?
         let bundleID: String
         let connection: UInt64
+        let range: NSRange
         var text: String
     }
 
@@ -97,12 +100,23 @@ final class EposProbeInputController: IMKInputController {
         if expected == "any" {
             controller = activeController
         } else {
-            controller = controllers.allObjects.first { $0.client()?.bundleIdentifier() == expected }
+            let matches = controllers.allObjects.filter { $0.client()?.bundleIdentifier() == expected }
+            guard matches.count == 1 else {
+                return "err expected one client session for \(expected), found \(matches.count)"
+            }
+            controller = matches[0]
         }
         guard let controller, let client = controller.client() else {
             return "err no client session for \(expected); live sessions: \(status())"
         }
+        if let current = composition,
+           current.connection != connection || current.controller !== controller {
+            if case .unreachable(let reason) = clearComposition(reason: "new preview pass") {
+                return "err \(reason)"
+            }
+        }
         lockedController = controller
+        lockedInputClient = client
         lockedBundleID = client.bundleIdentifier() ?? ""
         lockedConnection = connection
         ProbeLog.write("begin locked=\(lockedBundleID ?? "?") connection=\(connection)")
@@ -112,9 +126,11 @@ final class EposProbeInputController: IMKInputController {
     /// Releases the focus lock only. It must never touch text: Epos sends `end`
     /// after an ambiguous final commit, where any further composition traffic
     /// could disturb text the host has already accepted.
-    static func end() -> String {
+    static func end(connection: UInt64) -> String {
+        guard lockedConnection == connection else { return "err preview pass is not owned by this connection" }
         let previous = lockedBundleID ?? "-"
         lockedController = nil
+        lockedInputClient = nil
         lockedBundleID = nil
         lockedConnection = nil
         ProbeLog.write("end unlocked=\(previous)")
@@ -131,6 +147,7 @@ final class EposProbeInputController: IMKInputController {
         if lockedConnection == connection {
             ProbeLog.write("release connection=\(connection) unlocked=\(lockedBundleID ?? "-") reason=\(reason)")
             lockedController = nil
+            lockedInputClient = nil
             lockedBundleID = nil
             lockedConnection = nil
         }
@@ -141,9 +158,13 @@ final class EposProbeInputController: IMKInputController {
         case refused(String)
     }
 
-    private static func lockedClient() -> LockedClient {
+    private static func lockedClient(connection: UInt64) -> LockedClient {
+        guard lockedConnection == connection else {
+            return .refused("preview pass is not owned by this connection")
+        }
         if let locked = lockedBundleID {
-            guard let controller = lockedController, let client = controller.client() else {
+            guard let controller = lockedController, let client = lockedInputClient,
+                  let currentClient = controller.client(), currentClient === client else {
                 return .refused("locked session \(locked) is gone")
             }
             let current = client.bundleIdentifier() ?? ""
@@ -152,10 +173,7 @@ final class EposProbeInputController: IMKInputController {
             }
             return .ready(controller: controller, client: client)
         }
-        guard let controller = activeController, let client = controller.client() else {
-            return .refused("no active client session")
-        }
-        return .ready(controller: controller, client: client)
+        return .refused("no locked client session")
     }
 
     /// `styled` sends the underlined attributed run Apple's own input methods
@@ -164,8 +182,9 @@ final class EposProbeInputController: IMKInputController {
     static func mark(_ text: String, styled: Bool, connection: UInt64) -> String {
         let controller: EposProbeInputController
         let client: IMKTextInput & NSObjectProtocol
-        switch lockedClient() {
-        case .refused(let reason): return "err \(reason)"
+        switch lockedClient(connection: connection) {
+        case .refused(let reason):
+            return composition?.connection == connection ? "err unsafe \(reason)" : "err \(reason)"
         case .ready(let resolved, let resolvedClient):
             controller = resolved
             client = resolvedClient
@@ -174,12 +193,32 @@ final class EposProbeInputController: IMKInputController {
         // Marking a second client would strand the first composition with nobody
         // left to address it.
         if let current = composition, current.controller !== controller {
-            clearComposition(reason: "mark moved to \(bundleID)")
+            if case .unreachable(let reason) = clearComposition(reason: "mark moved to \(bundleID)") {
+                return "err \(reason)"
+            }
         }
+        let selectedRange = client.selectedRange()
+        let liveState = liveCompositionState(of: client, expected: composition)
+        if liveState == .foreign {
+            return "err unsafe composition before preview"
+        }
+        guard ProbePreviewSafety.canWrite(
+            selectedRange: selectedRange,
+            compositionState: liveState,
+            continuingComposition: composition != nil
+        ) else {
+            return composition == nil
+                ? "err preview requires a readable empty selection and no existing composition"
+                : "err unsafe selection or composition before preview"
+        }
+        let start = composition?.range.location ?? selectedRange.location
         let selection = NSRange(location: (text as NSString).length, length: 0)
         let payload: Any = styled ? underlinedMarkedText(text) : text
         client.setMarkedText(payload, selectionRange: selection, replacementRange: replacementRange)
-        composition = Composition(controller: controller, bundleID: bundleID, connection: connection, text: text)
+        composition = Composition(
+            controller: controller, client: client, bundleID: bundleID, connection: connection,
+            range: NSRange(location: start, length: (text as NSString).length), text: text
+        )
         ProbeLog.write("mark len=\(text.count) styled=\(styled) connection=\(connection) client=\(describe(client))")
         return "ok marked \(text.count) styled=\(styled) client=\(describe(client))"
     }
@@ -199,8 +238,9 @@ final class EposProbeInputController: IMKInputController {
     static func commit(_ replacement: String?, connection: UInt64) -> String {
         let controller: EposProbeInputController
         let client: IMKTextInput & NSObjectProtocol
-        switch lockedClient() {
-        case .refused(let reason): return "err \(reason)"
+        switch lockedClient(connection: connection) {
+        case .refused(let reason):
+            return composition?.connection == connection ? "err unsafe \(reason)" : "err \(reason)"
         case .ready(let resolved, let resolvedClient):
             controller = resolved
             client = resolvedClient
@@ -208,7 +248,14 @@ final class EposProbeInputController: IMKInputController {
         let text = replacement ?? composition?.text ?? ""
         guard !text.isEmpty else { return "err nothing to commit" }
         if let current = composition, current.controller !== controller {
-            clearComposition(reason: "commit targets \(describe(client))")
+            return "err unsafe composition belongs to another client"
+        }
+        guard ProbePreviewSafety.canWrite(
+            selectedRange: client.selectedRange(),
+            compositionState: liveCompositionState(of: client, expected: composition),
+            continuingComposition: composition != nil
+        ) else {
+            return "err unsafe selection or composition before commit"
         }
         client.insertText(text, replacementRange: replacementRange)
         // insertText consumed the composition in this client; drop the record
@@ -226,9 +273,9 @@ final class EposProbeInputController: IMKInputController {
     /// so the end index is probed first (`rect index=N` in the log shows which
     /// one won). Falls back to `firstRectForCharacterRange:` over the tail of
     /// the marked range. Zero/garbage rects reply unavailable.
-    static func rect() -> String {
+    static func rect(connection: UInt64) -> String {
         let client: IMKTextInput & NSObjectProtocol
-        switch lockedClient() {
+        switch lockedClient(connection: connection) {
         case .refused(let reason): return "err \(reason)"
         case .ready(_, let resolved): client = resolved
         }
@@ -270,15 +317,23 @@ final class EposProbeInputController: IMKInputController {
             && rect.size.height > 1
     }
 
-    /// Never refuses to try: it goes to the recorded composition owner, not the
-    /// focus lock, so a lock that stopped resolving mid-pass no longer leaves
-    /// marked text on screen. `ok` means no marked text of ours remains; `err`
-    /// means some may still be live and nothing could reach it.
-    static func cancel() -> String {
+    /// Goes to the concrete owner and clears only a live range/text match.
+    /// Foreign or unreadable marked text is preserved and reported as unsafe.
+    static func cancel(connection: UInt64) -> String {
+        guard lockedConnection == connection else { return "err preview pass is not owned by this connection" }
         switch clearComposition(reason: "cancel") {
         case .nothingMarked:
-            ProbeLog.write("cancel nothing marked")
-            return "ok cancelled nothing marked"
+            let client: IMKTextInput & NSObjectProtocol
+            switch lockedClient(connection: connection) {
+            case .refused(let reason): return "err unsafe \(reason)"
+            case .ready(_, let resolved): client = resolved
+            }
+            let reply = ProbePreviewSafety.cancellationReplyWithoutComposition(
+                selectedRange: client.selectedRange(),
+                compositionState: liveCompositionState(of: client, expected: nil)
+            )
+            ProbeLog.write("cancel without composition reply=\(reply)")
+            return reply
         case .cleared(let unmarked, let viaOwner):
             return "ok cancelled unmarkText=\(unmarked) viaOwner=\(viaOwner)"
         case .unreachable(let reason):
@@ -292,12 +347,19 @@ final class EposProbeInputController: IMKInputController {
     private static func clearComposition(reason: String) -> ClearOutcome {
         guard let current = composition else { return .nothingMarked }
         guard let target = compositionTarget(current) else {
-            // Keep the record: hosts rebuild sessions constantly, so the owner
-            // (or a same-bundle replacement) may be reachable on the next
-            // cancel/deactivate retry. Forgetting here turned that retry into
-            // "ok cancelled nothing marked" while the text stayed on screen.
+            // A different session in the same app may address a different field.
+            // Keep the record for an owner retry without mutating another client.
             ProbeLog.write("clear reason=\(reason) UNREACHABLE owner=\(current.bundleID) len=\(current.text.count)")
-            return .unreachable("composition owner \(current.bundleID) is gone")
+            return .unreachable("unsafe composition owner \(current.bundleID) is gone")
+        }
+        switch liveCompositionState(of: target.client, expected: current) {
+        case .owned:
+            break
+        case .absent:
+            composition = nil
+            return .unreachable("unsafe Epos preview ended before cancellation")
+        case .foreign, .unreadable:
+            return .unreachable("unsafe composition no longer matches the Epos preview")
         }
         composition = nil
         // Zero-length marked text is the reliable discard on hosts whose
@@ -324,19 +386,25 @@ final class EposProbeInputController: IMKInputController {
     private static func compositionTarget(
         _ current: Composition
     ) -> (client: IMKTextInput & NSObjectProtocol, isOwner: Bool)? {
-        if let client = current.controller?.client(), (client.bundleIdentifier() ?? "") == current.bundleID {
+        if let client = current.client, (client.bundleIdentifier() ?? "") == current.bundleID {
             return (client, true)
         }
-        // The owning session died and the host built a new one for the same app —
-        // observed constantly mid-recording. A live session for that bundle is the
-        // last address for text that may still be on screen, and zero-length
-        // marked text is a no-op on a session that has no composition.
-        for controller in controllers.allObjects {
-            if let client = controller.client(), (client.bundleIdentifier() ?? "") == current.bundleID {
-                return (client, false)
-            }
-        }
         return nil
+    }
+
+    private static func liveCompositionState(
+        of client: IMKTextInput & NSObjectProtocol,
+        expected current: Composition?
+    ) -> ProbePreviewSafety.CompositionState {
+        let expected: (range: NSRange, text: String)?
+        if let current, current.client === client {
+            expected = (current.range, current.text)
+        } else {
+            expected = nil
+        }
+        return ProbePreviewSafety.compositionState(markedRange: client.markedRange(), expected: expected) {
+            client.attributedSubstring(from: $0)?.string
+        }
     }
 
     // MARK: - Helpers

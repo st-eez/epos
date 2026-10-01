@@ -19,10 +19,19 @@ source consent. A missing companion, unidentified target, refused focus lock, or
 failed channel restores the recording pill and its transcript for that hold.
 The menu toggle can disable inline preview.
 
-The companion owns teardown of its composition when the command connection ends
-or the client session deactivates. Provisional text is discarded before either
-final delivery path authorizes a write. Marked text must be verified in each
-target app because its rendering and teardown are host dependent.
+Preview is skipped when the fn-press target has selected text. Before every mark,
+the companion also requires a readable empty selection and checks composition
+ownership against the recorded marked range and text. Unknown selections and
+ambiguous sets of client sessions use the HUD.
+This prevents cancellation from deleting a selection that marked text replaced.
+
+Each pass pins its concrete input client and command connection. Superseded
+commands cannot mutate a newer pass, and cleanup addresses only the recorded
+client. A stale record cannot authorize changing another input method's live
+mark. An unreachable owner is refused instead of redirecting cleanup into a
+different field in the same application. Provisional text is discarded before
+either final delivery path authorizes a write. Marked text still requires
+verification in each target app because rendering and teardown are host dependent.
 
 ## Final delivery
 
@@ -36,9 +45,14 @@ final transcript through a single IME `insertText`. Epos first cancels the marke
 composition, waits for the readable baseline to settle, and runs the same target
 guard as the keystroke path. Text containing a newline uses the keystroke path.
 
-If the companion explicitly refuses the commit or the command could not be sent
-completely, Epos can fall back to guarded keystrokes. If the complete command was
-sent and its acknowledgment is lost, delivery is ambiguous. Epos suppresses a
+A foreign composition or a changed selection detected after preview blocks both
+final delivery paths and shows `Not inserted`. Unconfirmed preview cleanup also
+blocks delivery, because an opaque target cannot prove the composition is gone.
+Other conclusive commit refusals or commands that could not be sent completely
+can fall back to guarded keystrokes. If the complete command was
+sent and its acknowledgment is lost or malformed, delivery is ambiguous.
+The transport closes a connection after any reply failure, so a late reply cannot
+become the acknowledgement for the next command. Epos suppresses a
 second write to avoid duplicated text. The current implementation records this
 as `ime-commit-unacknowledged` without a user-facing refusal notice.
 
@@ -50,13 +64,12 @@ include long text and complex Unicode.
 
 ## Delivery evidence
 
-The current review reproduced a selection-loss bug in the companion path:
-placing marked text over an existing selection and then cancelling it can delete
-the original selection. Cleanup can also address a different field in the same
-application after the original client session changes. These are open review
-findings; the target guard on final delivery does not restore text already
-changed by preview. Verify their fixes before using inline preview for daily
-work.
+The October 1 review reproduced selection deletion using native NSTextView and
+added selection, ownership, and superseded-connection safeguards. Run
+`probes/inline-preview/verify` to compile the companion and exercise its native
+safety checks. Those checks do not establish behavior in Electron, terminals,
+or a live InputMethodKit session. Verify the current installed companion before
+using inline preview for daily work.
 
 Changed targets show `Not inserted`; missing Accessibility trust shows `No
 access`. A successful backend call proves acceptance of the write operation.
@@ -84,6 +97,7 @@ attempts to expose Electron's focused accessibility tree.
 Tests cover [target guards](../Tests/EposTests/InsertionTargetGuardTests.swift),
 [focus signatures](../Tests/EposTests/InsertionTargetFocusSignatureTests.swift),
 [preview lifecycle](../Tests/EposTests/InlinePreviewSessionTests.swift),
+[preview callback isolation](../Tests/EposTests/InlinePreviewCoordinatorTests.swift),
 [socket failures](../Tests/EposTests/InlinePreviewTransportTests.swift), and
 [commit routing](../Tests/EposTests/FinalTranscriptCommitRouterTests.swift).
 The [feasibility spec](../specs/inline-preview-feasibility.md) and

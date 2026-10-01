@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+verify_dir="$(mktemp -d "${TMPDIR:-/tmp}/epos-preview-verify.XXXXXX")"
+trap 'rm -rf "$verify_dir"' EXIT
+sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
+
+/usr/bin/xcrun swiftc \
+  -sdk "$sdk_path" -target arm64-apple-macos26.0 \
+  -module-cache-path "$verify_dir/ModuleCache" -warnings-as-errors \
+  -o "$verify_dir/EposProbe" \
+  "$probe_dir/Sources/main.swift" \
+  "$probe_dir/Sources/ProbeSupport.swift" \
+  "$probe_dir/Sources/ProbePreviewSafety.swift" \
+  "$probe_dir/Sources/ProbeInputController.swift" \
+  "$probe_dir/Sources/ProbeCommandSocket.swift"
+
+/usr/bin/xcrun swiftc \
+  -sdk "$sdk_path" -target arm64-apple-macos26.0 \
+  -module-cache-path "$verify_dir/ModuleCache" -warnings-as-errors \
+  -o "$verify_dir/PreviewSafetyTests" \
+  "$probe_dir/Sources/ProbePreviewSafety.swift" \
+  "$probe_dir/Tests/PreviewSafetyTests.swift"
+"$verify_dir/PreviewSafetyTests"

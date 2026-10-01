@@ -37,9 +37,16 @@ final class InlinePreviewCoordinator {
         self.onFirstMarkRendered = onFirstMarkRendered
     }
 
-    func start(bundleIdentifier: String?) {
+    func start(bundleIdentifier: String?, selectedRange: InsertionTargetTextRange?) {
+        // A skipped preview still starts a new recording. Retire every callback
+        // from its predecessor before any early return.
+        generation += 1
         session = nil
         discard = nil
+        guard (selectedRange?.length ?? 0) == 0 else {
+            log.info("inline preview skipped: fn-press text selection is nonempty")
+            return
+        }
         guard let session = makeSession(bundleIdentifier: bundleIdentifier) else {
             if isEnabled() {
                 // Correlates a "saw nothing in app X" report with an unidentifiable
@@ -59,10 +66,10 @@ final class InlinePreviewCoordinator {
         bundleIdentifier: String?,
         transport: (any InlinePreviewTransport)? = nil
     ) -> InlinePreviewSession? {
+        generation += 1
         guard isEnabled(), let bundleIdentifier, !bundleIdentifier.isEmpty else {
             return nil
         }
-        generation += 1
         let generation = generation
         return InlinePreviewSession(
             transport: transport ?? UnixSocketInlinePreviewTransport(),

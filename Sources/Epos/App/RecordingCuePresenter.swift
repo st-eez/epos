@@ -27,7 +27,7 @@ final class RecordingCuePresenter<PillContent: View> {
     private(set) var pillVisible = false
 
     private let makePillContent: @MainActor () -> PillContent
-    private lazy var pill: RecordingIndicatorController = {
+    private lazy var pill: RecordingIndicatorController = { @MainActor in
         let controller = RecordingIndicatorController()
         controller.attach(content: makePillContent())
         return controller

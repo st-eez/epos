@@ -39,6 +39,7 @@ final class InsertionTargetGuardTests: XCTestCase {
         XCTAssertEqual(session.insertFinalResult("terminal text"), .accepted)
     }
 
+    @MainActor
     func testFinalSessionWritesExactlyOnceWhenTargetIsUnchanged() {
         let backend = FinalRecordingBackend()
         let observer = FinalTargetObserver(
@@ -50,6 +51,15 @@ final class InsertionTargetGuardTests: XCTestCase {
             insertionSession: backend.startInsertionSession(),
             target: observer
         )
+
+        let preview = InlinePreviewCoordinator(
+            isEnabled: { true },
+            log: EposLogger(category: "inject"),
+            onMarkingActivityChange: { _ in },
+            onFirstMarkRendered: {}
+        )
+        preview.start(bundleIdentifier: "com.test.app", selectedRange: session.baselineSelectedRange)
+        XCTAssertFalse(preview.isActive, "preview must preserve the selected text for the final replacement")
 
         XCTAssertEqual(backend.operations, [])
         XCTAssertEqual(session.insertFinalResult("replacement"), .accepted)

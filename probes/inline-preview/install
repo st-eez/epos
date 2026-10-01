@@ -51,6 +51,7 @@ if [[ "$verify_only" == false ]]; then
     -o "$build_dir/EposProbe" \
     "$probe_dir/Sources/main.swift" \
     "$probe_dir/Sources/ProbeSupport.swift" \
+    "$probe_dir/Sources/ProbePreviewSafety.swift" \
     "$probe_dir/Sources/ProbeInputController.swift" \
     "$probe_dir/Sources/ProbeCommandSocket.swift"
 

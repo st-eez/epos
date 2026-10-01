@@ -11,6 +11,10 @@ specification](../specs/baseline.md) governs scope and architecture.
 [The specification index](../specs/README.md) points to design decisions and
 historical experiments. Confirm behavior in source before changing it.
 
+The [October 1 bug hunt and review](review-2026-10-01.md) records the first fixes,
+remaining correctness work, structural findings, and replacement verification
+gate.
+
 ## Feature index
 
 | Feature | Documentation |

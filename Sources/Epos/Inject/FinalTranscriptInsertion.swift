@@ -271,6 +271,12 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         target.targetApplicationBundleIdentifier()
     }
 
+    /// Preview must not replace text selected at fn press. Unknown selections
+    /// are checked again by the input method before its first marked-text write.
+    public var baselineSelectedRange: InsertionTargetTextRange? {
+        target.baselineInsertionContext()?.selectedRange
+    }
+
     public func targetWindowTitle() -> String? {
         target.targetWindowTitle()
     }

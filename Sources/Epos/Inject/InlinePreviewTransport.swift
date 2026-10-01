@@ -16,6 +16,9 @@ enum InlinePreviewTransportError: Error {
     /// replying. Delivery is exactly as unknown as `replyTimedOut`; the two are
     /// distinct only so the log names a dead peer instead of blaming a timeout.
     case replyPeerClosed
+    /// The fully sent command received an invalid or extra reply line. Its
+    /// delivery is unknown and the connection can no longer pair replies safely.
+    case replyMalformed
 }
 
 /// Line-oriented command channel to the palette-IME preview probe. The seam that
@@ -57,10 +60,8 @@ enum InlinePreviewSocket {
 /// bounded by `SO_SNDTIMEO`/`SO_RCVTIMEO`: a wedged probe costs one timeout, not
 /// a stalled dictation.
 ///
-/// A timed-out read leaves the reply stream possibly one line behind. That is
-/// accepted deliberately: replies only feed the diagnostic acknowledgement flag,
-/// while *delivering* the discard command matters, so a late reply never closes
-/// the connection out from under a pending `cancel`.
+/// A failed reply closes the connection. Reusing it could mistake a late mark
+/// acknowledgment for a later cancel or commit acknowledgment.
 final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked Sendable {
     private let path: String
     private let timeout: TimeInterval
@@ -163,10 +164,16 @@ final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked
         try sendCommand(Array((line + "\n").utf8))
         if let replyTimeout {
             setReceiveTimeout(replyTimeout)
-            defer { setReceiveTimeout(timeout) }
-            return try readLine()
         }
-        return try readLine()
+        defer {
+            if replyTimeout != nil, descriptor >= 0 { setReceiveTimeout(timeout) }
+        }
+        do {
+            return try readLine()
+        } catch {
+            closeSocket()
+            throw error
+        }
     }
 
     /// Writes the whole command line or throws. A failure mid-payload leaves a
@@ -209,12 +216,16 @@ final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked
             if count == 0 { throw InlinePreviewTransportError.replyPeerClosed }
             guard count > 0 else { throw InlinePreviewTransportError.replyTimedOut }
             reply.append(contentsOf: buffer[0..<count])
-            if reply.contains(0x0A) {
-                return String(decoding: reply, as: UTF8.self)
+            if let newline = reply.firstIndex(of: 0x0A) {
+                guard newline == reply.count - 1,
+                      let line = String(bytes: reply[..<newline], encoding: .utf8) else {
+                    throw InlinePreviewTransportError.replyMalformed
+                }
+                return line
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
-        throw InlinePreviewTransportError.replyTimedOut
+        throw InlinePreviewTransportError.replyMalformed
     }
 
     private func closeSocket() {

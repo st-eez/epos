@@ -10,7 +10,9 @@ and attempt one authoritative final write.
 The coordinator moves through idle, recording, and finalizing. A press during
 bootstrap or finalization is deferred and replayed after readiness returns, only
 if fn remains held. Audio before the deferred recording starts is unavailable.
-A brief press released before the analyzer starts can finish without a transcript.
+A release during analyzer startup stops the microphone immediately. The captured
+startup audio reaches the analyzer before it is finalized, so a short spoken hold
+can still produce a transcript.
 
 The hotkey reads global fn modifier changes. While fn is tracked as held, it
 checks hardware state every 500 ms to recover a release event lost during secure
@@ -44,7 +46,9 @@ serve as the final fallback.
 AudioCapture attempts to reopen the input path when the device configuration
 changes during a hold. A failed reopen ends the recording and reports `Mic lost`.
 Recovery behavior across real input devices needs installed app verification.
-Speech finalization has a ten second bound to escape framework hangs.
+Analyzer startup and speech finalization each have a ten second bound to escape
+framework hangs. A cancellation-ignoring startup cannot keep the coordinator
+waiting forever.
 
 ## Ignore speaker audio
 

@@ -54,7 +54,7 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
     /// there would type into the field the user is still dictating into and leave the
     /// eventual release to be swallowed by the state guard — everything said after the
     /// failure would vanish with no explanation.
-    func testRecognizerFailureWhileFnHeldWaitsForTheReleaseBeforeWriting() async throws {
+    func testRecognizerFailureWithAnOpenStreamStopsCaptureAndWaitsForRelease() async throws {
         let log = try TemporaryDiagnosticLog()
         let coordinator = makeCoordinator(diagnostics: log.sink)
         fn.held = true
@@ -65,14 +65,16 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
 
         transcriber.emit(.final(Self.recognizedRaw))
         transcriber.emit(.failed("results stream failed after 3: RecognizerUnavailable()"))
-        transcriber.endStream()
 
         await advance(
             until: { coordinator.recognitionUnavailable },
             "the user was never told recognition died"
         )
         XCTAssertEqual(coordinator.state, .recording, "the hold is still the user's")
+        XCTAssertFalse(audio.isCapturing, "a failed recognizer must stop the microphone")
         XCTAssertEqual(backend.insertedTexts, [], "nothing may be typed while fn is held")
+        // A failed analyzer may keep emitting. Its failure ended this transcript.
+        transcriber.emit(.final(" stray result after failure"))
 
         fn.held = false
         coordinator.finishRecording()
@@ -165,12 +167,41 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
         XCTAssertEqual(coordinator.startNotice, "Mic blocked")
     }
 
-    /// A tap released during `transcriber.start` either trips the state guard or
-    /// loses the race and throws `tornDownDuringStart`; which one is chance. Both are
-    /// the same user action and must report the same outcome — not an error-level
-    /// setup failure, a "Not ready" notice, and a false row in the audit's
-    /// setup-failure bucket.
-    func testTapThatTearsDownTheStartReportsCancelledNotSetupFailed() async throws {
+    /// A short hold can finish while analyzer setup is suspended. Its microphone
+    /// audio must reach the analyzer before release closes the recognizer.
+    func testReleaseDuringStartupHandsOffCapturedAudioBeforeFinalizing() async throws {
+        let log = try TemporaryDiagnosticLog()
+        transcriber.holdStart = true
+        transcriber.finalTranscriptOnFinish = "short hold"
+        let coordinator = makeCoordinator(diagnostics: log.sink)
+
+        coordinator.startRecording()
+        let session = coordinator.transcriptionTask
+        audio.onBuffer?(try Self.makeBuffer())
+        audio.onBuffer?(try Self.makeBuffer())
+        await advance(until: { self.transcriber.isStartWaiting }, "startup did not suspend")
+
+        fn.held = false
+        coordinator.finishRecording()
+        // Let any premature finish task run before completing startup.
+        try? await Task.sleep(for: .milliseconds(20))
+        XCTAssertFalse(audio.isCapturing)
+        XCTAssertEqual(coordinator.state, .finalizing)
+        XCTAssertEqual(transcriber.finishCallCount, 0)
+
+        transcriber.completeStart()
+        await session?.value
+
+        XCTAssertEqual(transcriber.acceptedBufferCount, 2)
+        XCTAssertEqual(transcriber.buffersAtFirstFinish, 2)
+        XCTAssertEqual(backend.insertedTexts, ["short hold"])
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertFalse(try log.contents().contains("outcome=cancelled-before-audio"))
+    }
+
+    /// Release no longer tears down an analyzer still starting. An unexpected
+    /// teardown is therefore a real setup failure and must be visible.
+    func testUnexpectedTeardownDuringStartupReportsSetupFailure() async throws {
         let log = try TemporaryDiagnosticLog()
         transcriber.startError = TranscriberError.tornDownDuringStart
         let coordinator = makeCoordinator(diagnostics: log.sink)
@@ -179,11 +210,10 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
         await coordinator.transcriptionTask?.value
 
         XCTAssertEqual(coordinator.state, .idle)
-        XCTAssertFalse(coordinator.startUnavailable, "a rapid tap is a user action, not a failure")
+        XCTAssertTrue(coordinator.startUnavailable)
         let contents = try log.contents()
-        XCTAssertTrue(contents.contains("outcome=cancelled-before-audio"))
-        XCTAssertFalse(contents.contains("outcome=setup-failed"))
-        XCTAssertFalse(contents.contains("recording setup failed"))
+        XCTAssertTrue(contents.contains("outcome=setup-failed"))
+        XCTAssertFalse(contents.contains("outcome=cancelled-before-audio"))
     }
 
     /// A session that genuinely fails to start used to be silent: the user held fn,

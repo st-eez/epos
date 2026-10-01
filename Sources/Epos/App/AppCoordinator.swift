@@ -48,7 +48,7 @@ public final class AppCoordinator: ObservableObject {
     /// the dictation was cut short at that point.
     @Published public private(set) var microphoneUnavailable = false
     /// True while the indicator reports that speech recognition died while fn was
-    /// still held: nothing more will be recognized, and what was recognized before
+    /// still held: capture stops, and what was recognized before
     /// the failure is written at release.
     @Published public private(set) var recognitionUnavailable = false
 
@@ -161,6 +161,9 @@ public final class AppCoordinator: ObservableObject {
 
     /// Internal so tests can await one recording's full finalize.
     var transcriptionTask: Task<Void, Never>?
+    /// Release may stop the mic before asynchronous analyzer setup finishes. The
+    /// analyzer can finish only after it receives that recording's queued audio.
+    private var analyzerReadyForAudio = false
     /// Finalizes parked until the fn release, resumed by `finishRecording`. Only the
     /// recognizer-failed-mid-hold path parks, so this holds at most one waiter.
     private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
@@ -592,6 +595,7 @@ public final class AppCoordinator: ObservableObject {
         partial = ""
         displayText = ""
         amplitude = 0
+        analyzerReadyForAudio = false
         startUnavailable = false
         insertionUnavailable = false
         microphoneUnavailable = false
@@ -742,8 +746,10 @@ public final class AppCoordinator: ObservableObject {
         }
         log.info("recording finalize")
         audio.stop()
-        let transcriber = transcriber
-        Task { await transcriber.finish() }
+        if analyzerReadyForAudio {
+            let transcriber = transcriber
+            Task { await transcriber.finish() }
+        }
     }
 
     private func runSession(
@@ -764,33 +770,15 @@ public final class AppCoordinator: ObservableObject {
         let events: AsyncStream<TranscriptEvent>
         do {
             events = try await transcriber.start(contextualStrings: contextualStrings)
-            // Released before the analyzer was ready: the mic did run and the
-            // pre-roll holds whatever was said, but the release is already tearing
-            // the analyzer down, so that audio has nowhere to go.
-            guard state == .recording else {
-                await finishCancelledBeforeAnalyzerReady(
-                    reliability: reliability,
-                    keepingAudioSamples: shouldSaveAudioSamples,
-                    recordingID: sessionRecordingID
-                )
-                return
-            }
             // The analyzer exists now: hand it everything the mic captured while it
-            // was starting, then let the tap feed it directly.
+            // was starting, including a short hold that has already been released.
             let preRollBuffers = preRoll.attach { buffer in transcriber.accept(buffer) }
+            analyzerReadyForAudio = true
             log.info("capture pre-roll handed to the analyzer (buffers=\(preRollBuffers))")
-        } catch TranscriberError.tornDownDuringStart {
-            // The release beat the analyzer's start, so `finish()` tore the session
-            // down mid-`start`. Identical user action to the state guard above — a
-            // rapid fn tap — and which of the two a given tap lands on is a race. It
-            // must therefore report the same outcome, not an error-level setup
-            // failure and a "Not ready" notice for something the user did on purpose.
-            await finishCancelledBeforeAnalyzerReady(
-                reliability: reliability,
-                keepingAudioSamples: shouldSaveAudioSamples,
-                recordingID: sessionRecordingID
-            )
-            return
+            if state == .finalizing {
+                let transcriber = transcriber
+                Task { await transcriber.finish() }
+            }
         } catch {
             log.error("recording setup failed: \(String(describing: error))")
             reliability?.emit(.setupFailed)
@@ -806,7 +794,7 @@ public final class AppCoordinator: ObservableObject {
             return
         }
 
-        for await event in events {
+        transcriptEvents: for await event in events {
             switch event {
             case .partial(let text):
                 handlePartialTranscript(text)
@@ -817,6 +805,9 @@ public final class AppCoordinator: ObservableObject {
             case .failed(let message):
                 recognizerFailed = true
                 log.error("transcription failed: \(message)")
+                // Failure is terminal even when a wedged analyzer leaves its result
+                // stream open. Stop capture and report it before waiting for release.
+                break transcriptEvents
             }
         }
 
@@ -886,25 +877,6 @@ public final class AppCoordinator: ObservableObject {
         snapshotPermissions().microphone != .granted
     }
 
-    /// The release arrived before the analyzer was ready for audio: either the state
-    /// guard saw the recording already finalizing, or `start` threw
-    /// `tornDownDuringStart` because the concurrent `finish()` won. The mic did run
-    /// and the pre-roll holds whatever was said, but the release is already tearing
-    /// the analyzer down, so that audio has nowhere to go. A user action, not a
-    /// failure — both races report it identically.
-    private func finishCancelledBeforeAnalyzerReady(
-        reliability: ReliabilityRecording?,
-        keepingAudioSamples: Bool,
-        recordingID: String?
-    ) async {
-        cancelTextInsertionSession()
-        reliability?.emit(.cancelledBeforeAudio)
-        dogfood.stop(keeping: keepingAudioSamples)
-        await resetSessionStateBeforeIdle()
-        log.info("recording done (finalChars=0 cancelledBeforeAnalyzerReady=true)")
-        returnToIdleAndCompleteRecordingLogScope(finishedRecordingID: recordingID)
-    }
-
     /// The recognizer's result stream failed. If fn is still down, committing here
     /// would type into a field the user is still dictating into, and the release that
     /// follows would then be dropped by the state guard — so everything said after the
@@ -924,8 +896,7 @@ public final class AppCoordinator: ObservableObject {
             return
         }
         log.error("recognizer failed while fn was held; holding the transcript until release")
-        // The glow says "the mic is hot and this is being transcribed"; only the first
-        // half is still true, so hand the cue to the pill carrying the notice.
+        // Capture has stopped. Hand the recording cue to the failure notice.
         cues.hideEdgeGlow()
         flashRecognitionUnavailableNotice()
         await withCheckedContinuation { continuation in
@@ -1053,7 +1024,10 @@ public final class AppCoordinator: ObservableObject {
 
     private func startInlinePreview() {
         inlinePreviewMirroring = false
-        preview.start(bundleIdentifier: textInsertionSession?.targetApplicationBundleIdentifier())
+        preview.start(
+            bundleIdentifier: textInsertionSession?.targetApplicationBundleIdentifier(),
+            selectedRange: textInsertionSession?.baselineSelectedRange
+        )
     }
 
     /// Internal so preview tests can build a session over a fake transport.
@@ -1192,7 +1166,8 @@ public final class AppCoordinator: ObservableObject {
     /// today's path unchanged. Internal so ordering tests can drive the full
     /// release → route chain.
     func commitFinalTranscript(_ transcript: String) async -> FinalTranscriptCommitRouter.Route {
-        if let session = preview.session,
+        let previewSession = preview.session
+        if let session = previewSession,
            let route = await FinalTranscriptCommitRouter.attemptIMECommit(
                transcript: transcript,
                preview: session,
@@ -1208,6 +1183,10 @@ public final class AppCoordinator: ObservableObject {
         // leave the AX value before the guard reads it; a recording that never
         // marked has nothing to wait for, and its refusals stay instant.
         let compositionMayLinger = await finishInlinePreview()
+        if await previewSession?.hasUnsafeTarget() == true {
+            cancelTextInsertionSession()
+            return .completed(.targetRefused, viaIME: false)
+        }
         if compositionMayLinger {
             await textInsertionSession?.settleReadableBaseline()
         }
@@ -1291,6 +1270,7 @@ public final class AppCoordinator: ObservableObject {
         amplitude = 0
         partial = ""
         transcriptionTask = nil
+        analyzerReadyForAudio = false
         activeTranscriptCleaner = nil
         currentReliabilityRecording = nil
         transcriptTiming.finish()

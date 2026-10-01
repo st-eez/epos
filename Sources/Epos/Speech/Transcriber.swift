@@ -160,7 +160,17 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
 
         Self.log.info("session starting for locale \(self.locale.identifier)")
         do {
-            try await startT.value
+            try await Self.awaitStart(startT, timeout: Self.finishTimeout)
+        } catch TranscriberError.startTimedOut {
+            let abandoned = lock.withLock { () -> Session? in
+                guard self.session?.analyzer === analyzer else { return nil }
+                defer { self.session = nil }
+                return self.session
+            }
+            if let abandoned {
+                Self.forceClose(abandoned, message: "transcriber startup timed out")
+            }
+            throw TranscriberError.startTimedOut
         } catch {
             // Caller (e.g. AppCoordinator.runSession) logs the error with its String(describing:).
             // finish() handles teardown of the installed state and re-awaits the already-failed
@@ -176,6 +186,16 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
             throw TranscriberError.tornDownDuringStart
         }
         return eventStream
+    }
+
+    /// A framework start can ignore cancellation. Bound the caller's wait as well
+    /// as `finish()` so cancelling that task cannot strand the coordinator here.
+    static func awaitStart(_ task: Task<Void, Error>, timeout: Duration) async throws {
+        let completed = await completed(within: timeout) {
+            _ = try? await task.value
+        }
+        guard completed else { throw TranscriberError.startTimedOut }
+        try await task.value
     }
 
     /// The audio input stream, bounded at `maxQueuedInputBuffers`. `.bufferingOldest`
@@ -301,6 +321,10 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
 
         let message = "transcriber finish timed out after \(timeout)"
         Self.log.error("\(message); forcing session closed")
+        forceClose(session, message: message)
+    }
+
+    private static func forceClose(_ session: Session, message: String) {
         // Session state was already extracted and nilled by the caller, so the next
         // start() is unaffected. Cancel the start in case it is somewhere
         // cancellable, force-close both continuations so the caller's event loop
@@ -341,6 +365,7 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
 
 enum TranscriberError: Error {
     case alreadyRunning
+    case startTimedOut
     /// A concurrent `finish()` tore the session down while `start()` was awaiting
     /// `analyzer.start`; the event stream is already closed and must not be returned.
     case tornDownDuringStart

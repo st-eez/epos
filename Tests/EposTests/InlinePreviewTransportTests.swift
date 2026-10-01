@@ -11,13 +11,17 @@ final class InlinePreviewTransportTests: XCTestCase {
 
     /// Minimal AF_UNIX server standing in for the probe input method.
     private final class ProbeSocketServer: @unchecked Sendable {
-        enum Behavior {
+        enum Behavior: Sendable {
             /// Accept the connection, then hang up without reading anything.
             case hangUp
             /// Accept, consume the request, then hang up without replying.
             case readThenHangUp
             /// Accept and read nothing, so the client's send buffer fills up.
             case stall
+            /// Consume one command, wait for the test, then attempt its late reply.
+            case delayedReply
+            /// Reply in one write, including malformed framing when requested.
+            case reply(String)
         }
 
         enum Failure: Error { case setup }
@@ -28,6 +32,13 @@ final class InlinePreviewTransportTests: XCTestCase {
         private let drainFinished = DispatchSemaphore(value: 0)
         private let lock = NSLock()
         private var clientClosed = false
+        private var commandBytes: [UInt8] = []
+        private var bytesAfterCommand = 0
+
+        var consumedCommand: String {
+            lock.withLock { String(decoding: commandBytes, as: UTF8.self) }
+        }
+        var subsequentByteCount: Int { lock.withLock { bytesAfterCommand } }
 
         init(behavior: Behavior) throws {
             // sun_path is 104 bytes and the temp directory eats about half of
@@ -77,6 +88,11 @@ final class InlinePreviewTransportTests: XCTestCase {
             let connection = accept(listener, nil, nil)
             guard connection >= 0 else { return }
             defer { Darwin.close(connection) }
+            var suppressSignal: Int32 = 1
+            guard setsockopt(
+                connection, SOL_SOCKET, SO_NOSIGPIPE,
+                &suppressSignal, socklen_t(MemoryLayout<Int32>.size)
+            ) == 0 else { return }
             var buffer = [UInt8](repeating: 0, count: 4096)
             switch behavior {
             case .hangUp:
@@ -85,17 +101,49 @@ final class InlinePreviewTransportTests: XCTestCase {
                 _ = Darwin.read(connection, &buffer, buffer.count)
             case .stall:
                 drainGate.wait()
-                var reachedEndOfStream = false
-                while true {
-                    let count = Darwin.read(connection, &buffer, buffer.count)
-                    if count <= 0 {
-                        reachedEndOfStream = count == 0
-                        break
-                    }
-                }
-                lock.withLock { clientClosed = reachedEndOfStream }
-                drainFinished.signal()
+                drain(connection)
+            case .delayedReply:
+                consumeCommand(connection)
+                drainGate.wait()
+                writeReply("ok mark\n", to: connection)
+                drain(connection)
+            case .reply(let reply):
+                consumeCommand(connection)
+                writeReply(reply, to: connection)
             }
+        }
+
+        private func consumeCommand(_ connection: Int32) {
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            var received: [UInt8] = []
+            while !received.contains(0x0A) {
+                let count = Darwin.read(connection, &buffer, buffer.count)
+                guard count > 0 else { break }
+                received.append(contentsOf: buffer[0..<count])
+            }
+            lock.withLock { commandBytes = received }
+        }
+
+        private func writeReply(_ reply: String, to connection: Int32) {
+            let bytes = Array(reply.utf8)
+            _ = bytes.withUnsafeBytes { raw in
+                Darwin.write(connection, raw.baseAddress, bytes.count)
+            }
+        }
+
+        private func drain(_ connection: Int32) {
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            var reachedEndOfStream = false
+            while true {
+                let count = Darwin.read(connection, &buffer, buffer.count)
+                if count <= 0 {
+                    reachedEndOfStream = count == 0
+                    break
+                }
+                lock.withLock { bytesAfterCommand += count }
+            }
+            lock.withLock { clientClosed = reachedEndOfStream }
+            drainFinished.signal()
         }
     }
 
@@ -144,6 +192,74 @@ final class InlinePreviewTransportTests: XCTestCase {
         await transport.close()
 
         XCTAssertEqual(thrown, .replyPeerClosed)
+    }
+
+    /// A timed-out mark reply must never be read as acknowledgment of a later
+    /// cancel. The server waits until after the timeout to attempt its mark reply.
+    func testReplyTimeoutClosesTheConnectionBeforeALaterCancel() async throws {
+        let server = try ProbeSocketServer(behavior: .delayedReply)
+        defer { server.shutdown() }
+        let transport = UnixSocketInlinePreviewTransport(path: server.path, timeout: 0.05)
+        try await transport.open()
+
+        var markFailure: InlinePreviewTransportError?
+        do {
+            _ = try await transport.send("mark hello")
+        } catch let error as InlinePreviewTransportError {
+            markFailure = error
+        }
+        XCTAssertEqual(markFailure, .replyTimedOut)
+        XCTAssertEqual(server.consumedCommand, "mark hello\n")
+
+        var cancelFailure: InlinePreviewTransportError?
+        do {
+            _ = try await transport.send("cancel")
+        } catch let error as InlinePreviewTransportError {
+            cancelFailure = error
+        }
+        // Bound the drain even if the regression leaves the client connected.
+        await transport.close()
+        XCTAssertTrue(server.drainUntilClientClosed())
+        XCTAssertEqual(cancelFailure, .closed)
+        XCTAssertEqual(server.subsequentByteCount, 0, "cancel must never reuse an unaligned stream")
+    }
+
+    /// Coalesced replies cannot authorize a cancel from the first line while
+    /// hiding a refusal in the second line.
+    func testExtraReplyLineIsMalformedAndClosesTheConnection() async throws {
+        let server = try ProbeSocketServer(behavior: .reply("ok cancel\nerr compositionOwnerLost\n"))
+        defer { server.shutdown() }
+        let transport = UnixSocketInlinePreviewTransport(path: server.path, timeout: 0.5)
+        try await transport.open()
+
+        var thrown: InlinePreviewTransportError?
+        do {
+            _ = try await transport.send("cancel")
+        } catch let error as InlinePreviewTransportError {
+            thrown = error
+        }
+        XCTAssertEqual(thrown, .replyMalformed)
+
+        var afterFailure: InlinePreviewTransportError?
+        do {
+            _ = try await transport.send("end")
+        } catch let error as InlinePreviewTransportError {
+            afterFailure = error
+        }
+        await transport.close()
+        XCTAssertEqual(afterFailure, .closed)
+    }
+
+    func testSingleReplyLineStillSucceeds() async throws {
+        let server = try ProbeSocketServer(behavior: .reply("ok mark\n"))
+        defer { server.shutdown() }
+        let transport = UnixSocketInlinePreviewTransport(path: server.path, timeout: 0.5)
+        try await transport.open()
+
+        let reply = try await transport.send("mark hello")
+        await transport.close()
+
+        XCTAssertEqual(reply, "ok mark")
     }
 
     /// A send that fails partway leaves a truncated line on the wire. Reusing
