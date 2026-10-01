@@ -17,28 +17,30 @@ gate.
 
 ## Feature index
 
-| Feature | Documentation |
-| --- | --- |
-| Installed app, signing, first launch, Privacy shortcut | [Setup](setup.md) |
-| Microphone, Speech Recognition, Accessibility, speech asset readiness | [Setup](setup.md#permissions-and-readiness) |
-| Hold fn, release, deferred presses, missed release recovery | [Dictation](dictation.md#push-to-talk) |
-| Microphone conversion, startup audio, input device recovery | [Dictation](dictation.md#audio-and-recognition) |
-| Ignore speaker audio | [Dictation](dictation.md#ignore-speaker-audio) |
-| On-device recognition, locale, vocabulary context | [Dictation](dictation.md#audio-and-recognition) |
-| Final cleanup of fillers, stutters, and ordinals | [Dictation](dictation.md#transcript-cleanup) |
-| Stream into field, marked text, companion input method | [Insertion](insertion.md#stream-into-field) |
-| Captured target guard, final IME commit, Unicode keystrokes | [Insertion](insertion.md#final-delivery) |
-| Refused writes and delivery verification | [Insertion](insertion.md#delivery-evidence) |
-| Corrections editor, Literal and Name modes, developer tokens | [Corrections](corrections.md#dictionary-and-editor) |
-| Dictionary upgrades and protected storage | [Corrections](corrections.md#persistence) |
-| Learn corrections, observed edits, suggestion review | [Corrections](corrections.md#learning-and-suggestions) |
-| Recording pill, live meter, start and release sounds, notices | [Recording feedback](recording-feedback.md) |
-| Edge glow, intensity, thickness, color, Ember aura | [Recording feedback](recording-feedback.md#edge-glow) |
-| Launch at login and saved preferences | [Settings](settings.md) |
-| Quit and menu status | [Settings](settings.md#menu-actions) |
-| Diagnostic logs and transcript timing | [Diagnostics](diagnostics.md#logs) |
-| Save audio samples and local evidence storage | [Diagnostics](diagnostics.md#saved-audio-and-correction-evidence) |
-| Reliability audit, corpus labeling, confirmation, benchmarks | [Diagnostics](diagnostics.md#evaluation-tools) |
+Search terms include common user wording and implementation names.
+
+| Feature | Search terms | Documentation |
+| --- | --- | --- |
+| Installed app, signing, first launch, Privacy shortcut | install, onboarding, privacy settings | [Setup](setup.md) |
+| Microphone, Speech Recognition, Accessibility, speech asset readiness | permissions, TCC, speech model | [Setup](setup.md#permissions-and-readiness) |
+| Hold fn, release, deferred presses, missed release recovery | push-to-talk, hold to dictate, hotkey | [Dictation](dictation.md#push-to-talk) |
+| Microphone conversion, startup audio, input device recovery | mic switching, pre-roll, route changes | [Dictation](dictation.md#audio-and-recognition) |
+| Ignore speaker audio | echo cancellation, music bleed, background playback | [Dictation](dictation.md#ignore-speaker-audio) |
+| On-device recognition, locale, vocabulary context | local transcription, offline speech, custom vocabulary | [Dictation](dictation.md#audio-and-recognition) |
+| Final cleanup of fillers, stutters, and ordinals | filler removal, um and uh, repeated words | [Dictation](dictation.md#transcript-cleanup) |
+| Stream into field, marked text, companion input method | live preview, inline dictation, provisional text | [Insertion](insertion.md#stream-into-field) |
+| Captured target guard, final IME commit, Unicode keystrokes | paste, text injection, focus protection | [Insertion](insertion.md#final-delivery) |
+| Refused writes and delivery verification | not inserted, no access, missing text | [Insertion](insertion.md#delivery-evidence) |
+| Corrections editor, Literal and Name modes, developer tokens | custom words, names, spoken symbols | [Corrections](corrections.md#dictionary-and-editor) |
+| Dictionary upgrades and protected storage | migration, saved corrections, data protection | [Corrections](corrections.md#persistence) |
+| Learn corrections, observed edits, suggestion review | learning, user edits, rule suggestions | [Corrections](corrections.md#learning-and-suggestions) |
+| Recording pill, live meter, start and release sounds, notices | HUD, recording indicator, beeps | [Recording feedback](recording-feedback.md) |
+| Edge glow, intensity, thickness, color, Ember aura | border glow, recording animation, aura | [Recording feedback](recording-feedback.md#edge-glow) |
+| Launch at login and saved preferences | startup, preferences, autostart | [Settings](settings.md) |
+| Quit and menu status | tray icon, menu bar, exit | [Settings](settings.md#menu-actions) |
+| Diagnostic logs and transcript timing | debug logs, latency, trace | [Diagnostics](diagnostics.md#logs) |
+| Save audio samples and local evidence storage | WAV, recordings, dogfood samples | [Diagnostics](diagnostics.md#saved-audio-and-correction-evidence) |
+| Reliability audit, corpus labeling, confirmation, benchmarks | WER, accuracy, corpus quality | [Diagnostics](diagnostics.md#evaluation-tools) |
 
 ## Replacement readiness
 
