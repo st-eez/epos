@@ -9,7 +9,7 @@ import XCTest
 ///
 /// None of these can be provoked on a live `SpeechAnalyzer`, so they run against
 /// `FakeTranscriber` through the coordinator's real `startRecording` →
-/// `runSession` → `finishRecording` path.
+/// recording session → `finishRecording` path.
 @MainActor
 final class CoordinatorRecognizerFailureTests: XCTestCase {
     private struct RecognizerUnavailable: Error {}
@@ -61,6 +61,7 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
 
         coordinator.startRecording()
         let session = coordinator.transcriptionTask
+        let captureFailure = try XCTUnwrap(audio.onCaptureFailure)
         await advance(until: { self.transcriber.didStart }, "the transcriber never started")
 
         transcriber.emit(.final(Self.recognizedRaw))
@@ -73,6 +74,10 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .recording, "the hold is still the user's")
         XCTAssertFalse(audio.isCapturing, "a failed recognizer must stop the microphone")
         XCTAssertEqual(backend.insertedTexts, [], "nothing may be typed while fn is held")
+        // A delayed mic failure belongs to capture that recognition already stopped.
+        captureFailure(RecognizerUnavailable())
+        XCTAssertEqual(coordinator.state, .recording, "a stale capture callback cannot release the user's hold")
+        XCTAssertFalse(coordinator.microphoneUnavailable)
         // A failed analyzer may keep emitting. Its failure ended this transcript.
         transcriber.emit(.final(" stray result after failure"))
 
@@ -229,6 +234,26 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .idle)
         XCTAssertTrue(coordinator.startUnavailable)
         XCTAssertTrue(try log.contents().contains("outcome=setup-failed"))
+    }
+
+    func testAnOldTapCallbackCannotFeedTheNextAnalyzer() async throws {
+        let log = try TemporaryDiagnosticLog()
+        let coordinator = makeCoordinator(diagnostics: log.sink)
+        coordinator.startRecording()
+        let oldBuffer = try XCTUnwrap(audio.onBuffer)
+        await advance(until: { self.transcriber.didStart }, "the first analyzer never started")
+        coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
+
+        coordinator.startRecording()
+        let session = coordinator.transcriptionTask
+        oldBuffer(try Self.makeBuffer())
+        audio.onBuffer?(try Self.makeBuffer())
+        coordinator.finishRecording()
+        await session?.value
+
+        XCTAssertEqual(transcriber.acceptedBufferCount, 1, "only the new hold's audio belongs to its analyzer")
+        XCTAssertEqual(coordinator.state, .idle)
     }
 
     private static func makeBuffer() throws -> AVAudioPCMBuffer {

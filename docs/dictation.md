@@ -7,8 +7,12 @@ start sound after capture starts, and captures the destination's insertion
 context. Release fn to stop capture, play the release sound, finalize recognition,
 and attempt one authoritative final write.
 
-The coordinator moves through idle, recording, and finalizing. A press during
-bootstrap or finalization is deferred and replayed after readiness returns, only
+The coordinator moves through idle, recording, and finalizing. Each fn hold has
+one RecordingSession that owns capture callbacks, startup audio, the analyzer
+task, the frozen transcript transform, preview, insertion target and reliability
+record. It closes those resources before the coordinator returns to idle.
+Callbacks retained from a finished hold cannot update or feed a newer recording.
+A press during bootstrap or finalization is deferred and replayed after readiness returns, only
 if fn remains held. Audio before the deferred recording starts is unavailable.
 A release during analyzer startup stops the microphone immediately. The captured
 startup audio reaches the analyzer before it is finalized, so a short spoken hold
@@ -80,6 +84,7 @@ matching; [insertion](insertion.md) describes the destination checks.
 ## Evidence
 
 The path is wired by [AppCoordinator](../Sources/Epos/App/AppCoordinator.swift),
+[RecordingSession](../Sources/Epos/App/RecordingSession.swift),
 [FnHotkey](../Sources/Epos/Hotkey/FnHotkey.swift),
 [AudioCapture](../Sources/Epos/Audio/AudioCapture.swift),
 [CapturePreRoll](../Sources/Epos/Audio/CapturePreRoll.swift), and

@@ -19,6 +19,7 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
     ) -> AppCoordinator {
         let coordinator = AppCoordinator(
             audio: audio,
+            transcriber: FakeTranscriber(),
             textInsertion: NoOpInsertionBackend(),
             insertionTargetObserverFactory: { LoggingInsertionTargetObserver(events: events) },
             settings: settings,
@@ -33,7 +34,7 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
     /// The AX baseline capture is synchronous and can stall for hundreds of
     /// milliseconds; the analyzer start is an await. Both used to run before the
     /// mic opened, and everything said in that window was lost.
-    func testMicrophoneOpensBeforeTheAccessibilityBaselineCapture() {
+    func testMicrophoneOpensBeforeTheAccessibilityBaselineCapture() async {
         let audio = FakeMicrophoneCapture()
         let events = RecordingStartEventLog()
         audio.events = events
@@ -45,12 +46,13 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
         XCTAssertEqual(audio.startCount, 1)
         XCTAssertEqual(coordinator.state, .recording)
         coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
     }
 
     /// The mic is open before the analyzer exists, so those buffers have to wait
     /// somewhere. The relay is unit-tested separately; here the contract is that
     /// the coordinator wired the tap up at press rather than at analyzer start.
-    func testAudioCallbacksAreInstalledAtPress() {
+    func testAudioCallbacksAreInstalledAtPress() async {
         let audio = FakeMicrophoneCapture()
         let coordinator = makeCoordinator(audio: audio)
 
@@ -60,24 +62,27 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
         XCTAssertNotNil(audio.onAmplitude)
         XCTAssertNotNil(audio.onCaptureFailure)
         coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
     }
 
     /// Voice processing can only be switched while the audio engine is stopped, so
     /// the setting is read at each fn press rather than latched at launch. A stale
     /// read here is invisible in the UI and only shows up as the user's music being
     /// transcribed, so pin that the live setting is what reaches the capture.
-    func testEchoCancellationSettingIsPassedToTheCaptureAtPress() {
+    func testEchoCancellationSettingIsPassedToTheCaptureAtPress() async {
         let on = FakeMicrophoneCapture()
         let onCoordinator = makeCoordinator(audio: on, settings: Settings(echoCancellation: true))
         onCoordinator.startRecording()
         XCTAssertEqual(on.lastEchoCancellation, true)
         onCoordinator.finishRecording()
+        await onCoordinator.transcriptionTask?.value
 
         let off = FakeMicrophoneCapture()
         let offCoordinator = makeCoordinator(audio: off, settings: Settings(echoCancellation: false))
         offCoordinator.startRecording()
         XCTAssertEqual(off.lastEchoCancellation, false)
         offCoordinator.finishRecording()
+        await offCoordinator.transcriptionTask?.value
     }
 
     /// A mic that will not open must take the announced recording back rather than
@@ -102,7 +107,7 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
     /// An input-device change the engine cannot be restarted through: the mic stops
     /// producing buffers, so the recording ends where it ended instead of leaving
     /// the glow advertising a live mic for the rest of the hold.
-    func testCaptureFailureMidRecordingEndsTheRecording() {
+    func testCaptureFailureMidRecordingEndsTheRecording() async {
         let audio = FakeMicrophoneCapture()
         let coordinator = makeCoordinator(audio: audio)
         coordinator.startRecording()
@@ -114,6 +119,27 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
         XCTAssertTrue(coordinator.microphoneUnavailable)
         XCTAssertFalse(coordinator.edgeGlowVisible)
         XCTAssertGreaterThanOrEqual(audio.stopCount, 1)
+        await coordinator.transcriptionTask?.value
+    }
+
+    func testCallbacksFromAFinishedHoldCannotMutateTheNextRecording() async throws {
+        let audio = FakeMicrophoneCapture()
+        let coordinator = makeCoordinator(audio: audio)
+        coordinator.startRecording()
+        let oldAmplitude = try XCTUnwrap(audio.onAmplitude)
+        let oldCaptureFailure = try XCTUnwrap(audio.onCaptureFailure)
+        coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
+
+        coordinator.startRecording()
+        oldAmplitude(0.9)
+        oldCaptureFailure(CaptureUnavailable())
+        await Task.yield()
+        XCTAssertEqual(coordinator.state, .recording)
+        XCTAssertEqual(coordinator.amplitude, 0)
+        XCTAssertFalse(coordinator.microphoneUnavailable)
+        coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
     }
 }
 

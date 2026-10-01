@@ -41,11 +41,13 @@ final class CapturePreRoll {
     private var pending: [AVAudioPCMBuffer] = []
     private var pendingSeconds: Double = 0
     private var didReportCap = false
+    private var accepting = true
     private var destination: ((AVAudioPCMBuffer) -> Void)?
 
     /// Audio thread. Forwards once a destination exists, queues until then.
     func accept(_ buffer: AVAudioPCMBuffer) {
         let hitCap: Bool = lock.withLock {
+            guard accepting else { return false }
             if let destination {
                 destination(buffer)
                 return false
@@ -67,6 +69,12 @@ final class CapturePreRoll {
                 "capture pre-roll hit its \(Self.capSeconds)s cap; the analyzer start has not settled"
             )
         }
+    }
+
+    /// End this hold's tap delivery while retaining startup audio for the handoff.
+    /// A captured callback from an older tap cannot feed a later analyzer session.
+    func stopAccepting() {
+        lock.withLock { accepting = false }
     }
 
     private static func seconds(of buffer: AVAudioPCMBuffer) -> Double {

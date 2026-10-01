@@ -55,7 +55,8 @@ Flat layout, one test target, no subsystem folders beyond what's listed. The cor
 Sources/Epos/
   App/
     EposApp.swift               # @main, scenes, dependency wiring
-    AppCoordinator.swift        # state machine: idle <-> recording <-> finalizing
+    AppCoordinator.swift        # readiness, fn/deferred presses, published UI and presentation
+    RecordingSession.swift      # one hold owns capture, recognition, preview, final delivery and teardown
     StartReadinessProbe.swift   # can a press open a dictation: grants + model + capture format
     RecordingCuePresenter.swift # which cue is up: screen-edge glow, pill, or neither
     InlinePreviewCoordinator.swift # one recording's inline-preview session lifecycle
@@ -88,8 +89,10 @@ Sources/Epos/
 No `Core/`, no `Utilities/`, no `Models/` folder of empty types. (Settings, the
 indicator controller, the coordinator's settings facade, and small view styles also
 live under `App/` and `UI/`; the tree above lists the load-bearing modules.) The
-four `App/` types below `AppCoordinator` are its collaborators: it owns the state
-machine and every published value the UI observes, and delegates the subsystems.
+recording session owns the transcription task, frozen transcript transform, capture
+callbacks, target insertion session, preview, reliability record, and release waiter.
+`AppCoordinator` owns readiness, deferred fn presses, and every published UI value.
+A session completes cleanup before the coordinator returns to idle and replays a press.
 
 ### Data flow
 
@@ -173,9 +176,9 @@ The insertion session captures its target at fn press, before recording or async
 ### Concurrency
 
 - Audio capture on its dedicated `AVAudioEngine` thread.
-- Transcription stream consumed on a `Task` owned by `AppCoordinator`.
+- Transcription stream consumed on a `Task` owned by that hold's `RecordingSession`.
 - UI updates marshaled to the main actor.
-- `AppCoordinator` owns UI and recording state on the main actor. Capture uses the audio-engine callback thread; the capture pre-roll and transcriber input handoff are bounded. Blocking socket and Electron Accessibility work use dedicated queues, and other AX readbacks run off the main actor. Ownership and cancellation must remain explicit across these boundaries.
+- `AppCoordinator` owns UI and readiness on the main actor; `RecordingSession` owns each hold's lifecycle on the main actor. Capture uses the audio-engine callback thread; the capture pre-roll and transcriber input handoff are bounded. Blocking socket and Electron Accessibility work use dedicated queues, and other AX readbacks run off the main actor. Ownership and cancellation must remain explicit across these boundaries.
 
 ### Logging
 
