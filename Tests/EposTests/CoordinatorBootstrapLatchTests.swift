@@ -52,6 +52,7 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
             audio: audio,
             transcriber: transcriber,
             textInsertion: NoOpInsertionBackend(),
+            insertionTargetObserverFactory: { StableOpaqueObserver() },
             settings: Settings(),
             permissions: .stub(),
             refreshSpeechAsset: { [assets] in assets.status },
@@ -60,6 +61,7 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
                 return "deferred-start-test-\(started.count)"
             },
             isFnKeyHeld: { [fn] in fn.held },
+            inlinePreviewEnabled: false,
             autoStart: false
         )
     }
@@ -115,6 +117,7 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .recording)
         XCTAssertFalse(coordinator.startUnavailable)
         coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
     }
 
     func testReplayConsumesLatchAndFlashesNoticeWithoutCaptureFormat() {
@@ -183,6 +186,7 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
         XCTAssertEqual(coordinator.startReadiness, .ready)
         XCTAssertFalse(coordinator.startUnavailable, "the recovered start clears its own notice")
         coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
     }
 
     /// A grant made in System Settings after launch is the other way the same
@@ -253,6 +257,7 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .recording)
         XCTAssertFalse(coordinator.pendingDeferredStart)
         coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
     }
 
     func testBootstrapReplayDropsLatchWhenFnReleased() async {
@@ -288,6 +293,7 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
         XCTAssertEqual(started.count, 1)
         XCTAssertEqual(coordinator.state, .recording)
         coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
     }
 
     func testFinalizeWindowPressDropsWhenFnReleased() async {

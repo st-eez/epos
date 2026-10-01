@@ -102,7 +102,10 @@ final class ElectronAccessibilityWakerTests: XCTestCase {
             release.wait()
             ranEverything.fulfill()
         }
-        started.wait()
+        guard started.wait(timeout: .now() + 2) == .success else {
+            release.signal()
+            return XCTFail("the first wake never started")
+        }
         // The queue is occupied, so every one of these is either the single
         // pending wake for its pid or a coalesced duplicate.
         for _ in 0..<10 {
@@ -141,9 +144,13 @@ final class ElectronAccessibilityWakerTests: XCTestCase {
         let started = expectation(description: "frontmost app poked at start")
         let pressed = expectation(description: "frontmost app poked at press time")
         let wakes = WakeCounter()
+        var frontmostReads = 0
         let waker = ElectronAccessibilityWaker(
             notificationCenter: NotificationCenter(),
-            frontmostApplication: { .current },
+            frontmostApplication: {
+                frontmostReads += 1
+                return .current
+            },
             wake: { _ in
                 (wakes.increment() == 1 ? started : pressed).fulfill()
                 return .woke
@@ -151,6 +158,7 @@ final class ElectronAccessibilityWakerTests: XCTestCase {
         )
         // Not started (the test-runner state): a press must stay off the machine.
         waker.wakeFrontmostApplication()
+        XCTAssertEqual(frontmostReads, 0, "a pre-start press must not inspect the real frontmost app")
         waker.start()
         await fulfillment(of: [started], timeout: 2)
         waker.wakeFrontmostApplication()

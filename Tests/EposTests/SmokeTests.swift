@@ -1,4 +1,5 @@
 import AVFoundation
+import CoreMedia
 import Speech
 import XCTest
 @testable import Epos
@@ -268,21 +269,13 @@ final class SmokeTests: XCTestCase {
             throw XCTSkip("Transcriber.start() unavailable in test env: \(error)")
         }
 
-        let finished = await withTaskGroup(of: Bool.self) { group in
-            group.addTask {
-                await transcriber.finish()
-                return true
-            }
-            group.addTask {
-                try? await Task.sleep(nanoseconds: 3_000_000_000)
-                return false
-            }
-            let result = await group.next() ?? false
-            group.cancelAll()
-            return result
+        let finished = expectation(description: "no-input transcription finished")
+        let finishing = Task {
+            await transcriber.finish()
+            finished.fulfill()
         }
-
-        XCTAssertTrue(finished, "Transcriber.finish() hung with no input")
+        defer { finishing.cancel() }
+        await fulfillment(of: [finished], timeout: 3)
     }
 
     /// The settle-wait on `analyzer.start` used to sit OUTSIDE the finalize timeout,
@@ -348,21 +341,24 @@ final class SmokeTests: XCTestCase {
     /// that stopped draining retained every mic buffer of the recording, indefinitely.
     /// The bound has to hold the opening of the utterance and refuse the overflow
     /// rather than evicting already-captured audio.
-    func testInputStreamBoundsQueuedAudioBuffers() async {
+    func testInputStreamBoundsQueuedAudioBuffers() async throws {
         let (stream, continuation) = Transcriber.makeInputStream()
 
         var dropped = 0
-        for _ in 0..<(Transcriber.maxQueuedInputBuffers + 8) {
-            if case .dropped = continuation.yield(makeAnalyzerInput()) { dropped += 1 }
+        for index in 0..<(Transcriber.maxQueuedInputBuffers + 8) {
+            if case .dropped = continuation.yield(makeAnalyzerInput(marker: Int64(index))) { dropped += 1 }
         }
         continuation.finish()
 
         XCTAssertEqual(dropped, 8, "everything past the bound must be refused, not buffered")
-        var buffered = 0
-        for await _ in stream { buffered += 1 }
+        var retainedMarkers: [Int64] = []
+        for await input in stream {
+            retainedMarkers.append(try XCTUnwrap(input.bufferStartTime).value)
+        }
+        XCTAssertFalse(retainedMarkers.isEmpty, "the opening audio must be retained")
         XCTAssertEqual(
-            buffered,
-            Transcriber.maxQueuedInputBuffers,
+            retainedMarkers,
+            (0..<Transcriber.maxQueuedInputBuffers).map { Int64($0) },
             "the bound must keep the opening of the utterance, not evict it for newer audio"
         )
     }
@@ -412,11 +408,11 @@ final class SmokeTests: XCTestCase {
 /// One capture-shaped buffer wrapped as analyzer input. `AnalyzerInput.init(buffer:)`
 /// traps on float32 buffers, so this uses the interleaved 16 kHz int16 shape
 /// `SpeechAnalyzer.bestAvailableAudioFormat` hands `AudioCapture` to convert into.
-private func makeAnalyzerInput() -> AnalyzerInput {
+private func makeAnalyzerInput(marker: Int64 = 0) -> AnalyzerInput {
     let format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true)!
     let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 128)!
     buffer.frameLength = 128
-    return AnalyzerInput(buffer: buffer)
+    return AnalyzerInput(buffer: buffer, bufferStartTime: CMTime(value: marker, timescale: 16_000))
 }
 
 private func makeTemporaryDirectory() throws -> URL {
