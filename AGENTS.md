@@ -3,8 +3,8 @@
 Start feature work at [docs/readme.md](docs/readme.md), then read the relevant
 feature page and its linked source, tests, and design records.
 
-Read [docs/development.md](docs/development.md) for build,
-signing, verification, logging, and project generation rules.
+Before code changes or verification, read [docs/development.md](docs/development.md)
+for build, signing, verification, and project generation rules.
 
 [specs/baseline.md](specs/baseline.md) governs product scope. Re-read it before
 changing architecture or adding a feature, and update it first when the work

@@ -1,8 +1,7 @@
 # Development and verification
 
-Return to the [feature index](readme.md). Product scope lives in
-[baseline.md](../specs/baseline.md); current behavior is established by source,
-tests, and installed-app observations.
+Return to the [feature index](readme.md). Shared repository instructions live in
+[AGENTS.md](../AGENTS.md).
 
 ## Build and tests
 
@@ -28,30 +27,11 @@ labeling, and migration CLIs expose deterministic checks through `--test`.
 
 ## Installed app
 
-Permission-gated verification requires the installed signed app. The preferred
-development path uses an Apple Development certificate, including one obtained
-with a free Apple ID in Xcode.
-
-```sh
-scripts/install-signed-app.sh
-open /Applications/Epos.app
-```
-
-The installer builds the app, verifies a non-ad-hoc signature, installs it, and
-builds and registers the inline-preview companion. Quit Epos before installing.
+Follow [setup](setup.md) for installation, signing options, companion registration,
+and permissions. Runtime verification requires the installed signed app identity.
 Do not launch a DerivedData copy for runtime testing. Raw `xcodebuild` and Swift
-Package Manager establish compilation, not microphone, Speech, Accessibility,
-fn-key, InputMethodKit, or delivery correctness.
-
-`scripts/install-local-app.sh` supports a free local source install with an
-ad-hoc fallback when no development certificate is available. Permission grants
-can be less stable across those rebuilds. This installer currently installs only
-the main app, so inline preview requires a separate companion install. Read
-[insertion and inline preview](insertion.md) before testing that route.
-
-First launch requires Microphone, Speech Recognition, Accessibility, and the
-on-device locale asset. Disable the macOS Dictation fn shortcut in System
-Settings, Keyboard, Dictation, so the two listeners do not collide.
+Package Manager establish compilation; microphone, Speech, Accessibility, fn-key,
+InputMethodKit, and delivery require installed-app checks.
 
 ## Build topology
 
@@ -63,8 +43,7 @@ Settings, Keyboard, Dictation, so the two listeners do not collide.
 - Signed builds live under `.build/xcode`. The signed installer is the source
   of truth for the runnable app and stable TCC identity.
 - The companion currently lives in [probes/inline-preview](../probes/inline-preview/README.md).
-  It is a runtime dependency for preview and IME delivery, with a HUD and
-  keystroke fallback when unavailable.
+  See [insertion](insertion.md) for preview, IME delivery, and fallback behavior.
 
 ## Apple Speech API
 
@@ -82,27 +61,9 @@ introduced at that floor.
 
 ## Logging and investigation
 
-Use `EposLogger`. It writes unified logging under `com.steez.Epos` and an
-app-owned diagnostic log under `~/Library/Caches/Epos/logs/`. Reuse the category
-owned by the module. Recording IDs join capture, recognizer, preview, guard,
-insertion, and terminal reliability events.
-
-Start with `scripts/audit`, then inspect recording-scoped diagnostic events.
-Historical logs before the test-sink fix contain synthetic test output. Missing
-recording IDs, `app=nil`, and bursts without real recording boundaries are not
-proof of user harm. Check dates and installed build provenance before attributing
-an old log to current source.
-
-Transcript timing text is redacted unless `EPOS_DIAGNOSTIC_TRANSCRIPT_TEXT=1`.
-Reliability auditing prints metadata only. Keep transcript-bearing diagnostics
-local and out of source control. Audio samples and correction evidence are
-separate opt-in features.
-
-Use unified log streaming only as a bounded manual debugging action.
-
-```sh
-/usr/bin/log stream --predicate 'subsystem == "com.steez.Epos"' --info --debug
-```
+Read [diagnostics](diagnostics.md) before changing logging or interpreting
+recording evidence. It covers `EposLogger`, log inspection, transcript privacy,
+reliability auditing, and evaluation tools.
 
 ## Runtime acceptance
 

@@ -5,8 +5,8 @@ transcript, then release to deliver the cleaned final text to the captured field
 Apple Speech performs recognition on the device. The feature pages below describe
 the implementation in `Sources/` and its regression coverage in `Tests/`.
 
-Start with [development](development.md) for repository rules and verification,
-or [setup](setup.md) for installation and permissions. [The baseline
+Before code changes or verification, read [development](development.md).
+Use [setup](setup.md) for installation and permissions. [The baseline
 specification](../specs/baseline.md) governs scope and architecture.
 [The specification index](../specs/README.md) points to design decisions and
 historical experiments. Confirm behavior in source before changing it.

@@ -2,8 +2,9 @@
 
 ## Logs
 
-EposLogger sends events to Apple unified logging under `com.steez.Epos` and
-mirrors them into `~/Library/Caches/Epos/logs/`. The diagnostic sink rotates
+Use `EposLogger` and reuse the category owned by the module. It sends events to
+Apple unified logging under `com.steez.Epos` and mirrors them into
+`~/Library/Caches/Epos/logs/`. The diagnostic sink rotates
 at roughly 10 MB per file and keeps at most 14 files. Individual messages are
 capped at 20,000 characters. The shared sink is disabled in recognized test
 processes so synthetic failures do not become dogfood evidence.
@@ -12,15 +13,22 @@ Transcript timing logs contain event order, elapsed time, and UTF-16 counts by
 default. Setting `EPOS_DIAGNOSTIC_TRANSCRIPT_TEXT=1` for the app process adds raw,
 final, partial, and displayed transcript text. Diagnostic logs are local debug
 material, and enabling transcript text preserves dictated content there.
+Keep transcript-bearing diagnostics local and out of source control.
 
-For a bounded live investigation, use `scripts/epos-tail-logs.sh` or the manual
-unified log command documented in [development](development.md). The companion
-keeps its own log at `~/Library/Caches/EposProbe/probe.log`; inspect its logging
-when debugging marked text.
+For a bounded live investigation, use `scripts/epos-tail-logs.sh` or this manual
+unified log command:
 
-Each recording emits schema-1 reliability metadata with counts, stage outcomes,
-write acceptance, readback state, IME acknowledgment, and release latency. The
-terminal emitter is idempotent. Recognition failures, interrupted capture,
+```sh
+/usr/bin/log stream --predicate 'subsystem == "com.steez.Epos"' --info --debug
+```
+
+The companion keeps its own log at `~/Library/Caches/EposProbe/probe.log`; inspect
+it when debugging marked text.
+
+Recording IDs join capture, recognizer, preview, guard, insertion, and terminal
+reliability events. Each recording emits schema-1 reliability metadata with counts,
+stage outcomes, write acceptance, readback state, IME acknowledgment, and release
+latency. The terminal emitter is idempotent. Recognition failures, interrupted capture,
 empty speech, target refusal, backend refusal, delivery mismatch, verified
 delivery, and accepted but unverified delivery have distinct outcomes. A fully
 sent IME commit without acknowledgment is explicitly ambiguous.
@@ -52,6 +60,12 @@ Run these from the repository root. Use `--help` for Python command options.
 | `scripts/correct <candidate.json> [artifact.jsonl]` | Evaluate a correction candidate against the confirmed signed production arm |
 | `scripts/migrate` | Move the historical recording corpus from cache storage to Application Support |
 | `scripts/raw-stt-benchmark.py` | Benchmark saved audio with supported recognizers and score transcript errors |
+
+Start an investigation with `scripts/audit`, then inspect events for the affected
+recording. Reliability auditing prints metadata only. Check log dates and installed
+build provenance. Logs before the test-sink fix can contain synthetic test output;
+missing recording IDs, `app=nil`, or bursts without recording boundaries alone
+cannot establish user harm.
 
 `scripts/bench` replaces the installed application. Candidate evaluation defaults
 to `.build/evals/apple-presets-signed-confirmed75.jsonl`, whose expected shape is

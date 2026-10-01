@@ -1,13 +1,11 @@
 # Setup
 
-The package builds the Epos library and test target. The Xcode application target
-produces the runnable bundle. Runtime checks for microphone, Speech Recognition,
-Accessibility, fn, and insertion use the installed app identity.
+For build commands and project generation rules, see [development](development.md).
 
 ## Install
 
-For development with an Apple Development certificate, quit the running Epos app
-and run from the repository root:
+Use an Apple Development certificate for development. One can be obtained with a
+free Apple ID in Xcode. Quit the running Epos app and run from the repository root:
 
 ```sh
 scripts/install-signed-app.sh
