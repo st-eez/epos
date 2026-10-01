@@ -27,6 +27,8 @@ final class InlinePreviewTransportTests: XCTestCase {
         enum Failure: Error { case setup }
 
         let path: String
+        let peerClosed = XCTestExpectation(description: "server closed the accepted connection")
+        let commandConsumed = XCTestExpectation(description: "server consumed the first command")
         private let listener: Int32
         private let drainGate = DispatchSemaphore(value: 0)
         private let drainFinished = DispatchSemaphore(value: 0)
@@ -87,7 +89,10 @@ final class InlinePreviewTransportTests: XCTestCase {
         private func serve(_ behavior: Behavior) {
             let connection = accept(listener, nil, nil)
             guard connection >= 0 else { return }
-            defer { Darwin.close(connection) }
+            defer {
+                Darwin.close(connection)
+                peerClosed.fulfill()
+            }
             var suppressSignal: Int32 = 1
             guard setsockopt(
                 connection, SOL_SOCKET, SO_NOSIGPIPE,
@@ -122,6 +127,7 @@ final class InlinePreviewTransportTests: XCTestCase {
                 received.append(contentsOf: buffer[0..<count])
             }
             lock.withLock { commandBytes = received }
+            commandConsumed.fulfill()
         }
 
         private func writeReply(_ reply: String, to connection: Int32) {
@@ -157,6 +163,7 @@ final class InlinePreviewTransportTests: XCTestCase {
         defer { server.shutdown() }
         let transport = UnixSocketInlinePreviewTransport(path: server.path, timeout: 0.05)
         try await transport.open()
+        await fulfillment(of: [server.peerClosed], timeout: 3)
 
         var errors: [InlinePreviewTransportError] = []
         for _ in 0..<4 {
@@ -209,6 +216,7 @@ final class InlinePreviewTransportTests: XCTestCase {
             markFailure = error
         }
         XCTAssertEqual(markFailure, .replyTimedOut)
+        await fulfillment(of: [server.commandConsumed], timeout: 3)
         XCTAssertEqual(server.consumedCommand, "mark hello\n")
 
         var cancelFailure: InlinePreviewTransportError?

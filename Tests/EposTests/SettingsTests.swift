@@ -4,7 +4,7 @@ import XCTest
 /// Settings round-trip through an ephemeral `UserDefaults` suite — never the
 /// shared `.standard` domain — so persistence is exercised hermetically.
 final class SettingsTests: XCTestCase {
-    private let suiteName = "com.steez.Epos.tests.settings"
+    private let suiteName = "com.steez.Epos.tests.settings.\(UUID().uuidString)"
     private var defaults: UserDefaults!
 
     override func setUp() {
