@@ -433,6 +433,7 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         coordinator.evidenceRecorder.record(
             rawTranscript: "open siemux",
+            correctionResult: coordinator.corrections.canonicalizer.canonicalizeWithProvenance("open siemux"),
             finalTranscript: "open CMUX",
             applied: true,
             recordingID: "rec-1"
@@ -462,6 +463,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         let evidenceID = coordinator.evidenceRecorder.recordIfEnabled(
             enabled: false,
             rawTranscript: "open siemux",
+            correctionResult: coordinator.corrections.canonicalizer.canonicalizeWithProvenance("open siemux"),
             finalTranscript: "open CMUX",
             applied: true,
             recordingID: "rec-1"
@@ -487,6 +489,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         let evidenceID = coordinator.evidenceRecorder.recordIfEnabled(
             enabled: true,
             rawTranscript: "open siemux",
+            correctionResult: coordinator.corrections.canonicalizer.canonicalizeWithProvenance("open siemux"),
             finalTranscript: "open CMUX",
             applied: false,
             finalInsertedTranscript: nil,
@@ -513,6 +516,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         let evidenceID = coordinator.evidenceRecorder.recordIfEnabled(
             enabled: true,
             rawTranscript: "open siemux",
+            correctionResult: coordinator.corrections.canonicalizer.canonicalizeWithProvenance("open siemux"),
             finalTranscript: "open CMUX",
             applied: true,
             finalInsertedTranscript: "open CMUX",
@@ -538,6 +542,7 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         let evidenceID = coordinator.evidenceRecorder.record(
             rawTranscript: "open widget pro",
+            correctionResult: coordinator.corrections.canonicalizer.canonicalizeWithProvenance("open widget pro"),
             finalTranscript: "open widget pro",
             applied: true,
             recordingID: "rec-1"
@@ -573,6 +578,7 @@ final class CorrectionEvidenceTests: XCTestCase {
         _ = session.insertFinalResult("open widget pro")
         coordinator.evidenceRecorder.record(
             rawTranscript: "open widget pro",
+            correctionResult: coordinator.corrections.canonicalizer.canonicalizeWithProvenance("open widget pro"),
             finalTranscript: "open widget pro",
             applied: true,
             recordingID: "rec-1",
@@ -627,7 +633,7 @@ final class CorrectionEvidenceTests: XCTestCase {
     }
 
     @MainActor
-    func testCoordinatorCapturesObservedUserEditAcrossSparseWindow() async throws {
+    func testCoordinatorObservedUserEditCaptureStoresOnlyTheFirstNontrivialEdit() async throws {
         let suiteName = "EposTests-\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -658,17 +664,26 @@ final class CorrectionEvidenceTests: XCTestCase {
         _ = session.insertFinalResult("widget pro")
         session.finish()
         observer.value = "open widget pro please"
-        coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
+        let gate = ManualEvidenceSleep()
+        let samples = coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
-            session: session
+            session: session,
+            sleep: { delay in await gate.wait(delay) }
         )
+        guard samples.count == 3 else {
+            return XCTFail("Each configured delay must schedule a sample")
+        }
 
-        try await Task.sleep(nanoseconds: 40_000_000)
+        await gate.resume(0.02)
+        await samples[0].value
+        XCTAssertNil(evidenceStore.evidence.first?.userEditedTranscript)
         observer.value = "open WidgetPro please"
-        try await Task.sleep(nanoseconds: 40_000_000)
+        await gate.resume(0.06)
+        await samples[1].value
         observer.value = "open WidgetProX please"
-        try await Task.sleep(nanoseconds: 60_000_000)
+        await gate.resume(0.10)
+        await samples[2].value
 
         XCTAssertEqual(evidenceStore.evidence.first?.userEditedTranscript, "WidgetPro")
         XCTAssertEqual(evidenceStore.suggestedRecords.map(\.canonical), ["WidgetPro"])
@@ -698,26 +713,30 @@ final class CorrectionEvidenceTests: XCTestCase {
         ))
         let observer = EvidenceFakeTargetObserver()
         observer.insertionContext = InsertionTargetContext(prefix: "open ", suffix: " please")
-        observer.value = "open WidgetPro please"
         let session = FinalTranscriptInsertionSession(
             insertionSession: EvidenceNoopTextInsertionSession(),
             target: observer
         )
 
-        _ = session.insertFinalResult("widget pro")
+        XCTAssertEqual(session.insertFinalResult("widget pro"), .accepted)
         session.finish()
-        coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
+        observer.value = "open WidgetPro please"
+        let gate = ManualEvidenceSleep()
+        let samples = coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
-            session: session
+            session: session,
+            sleep: { delay in await gate.wait(delay) }
         )
+        XCTAssertEqual(samples.count, 1)
         coordinator.evidenceRecorder.scheduleObservedUserEditCapture(
             evidenceID: evidenceID,
             finalInsertedTranscript: "widget pro",
             session: nil
         )
 
-        try await Task.sleep(nanoseconds: 80_000_000)
+        await gate.resume(0.04)
+        for sample in samples { await sample.value }
 
         XCTAssertNil(evidenceStore.evidence.first?.userEditedTranscript)
         XCTAssertTrue(evidenceStore.suggestedRecords.isEmpty)
@@ -816,6 +835,23 @@ final class CorrectionEvidenceTests: XCTestCase {
 
         XCTAssertNil(evidenceStore.evidence.first?.userEditedTranscript)
         XCTAssertTrue(evidenceStore.suggestedRecords.isEmpty)
+    }
+}
+
+/// A sample can resume before its task reaches the sleeper. Permits keep both
+/// arrival orders deterministic, including a cancelled task that wakes late.
+private actor ManualEvidenceSleep {
+    private var resumed: Set<TimeInterval> = []
+    private var waiters: [TimeInterval: CheckedContinuation<Void, Never>] = [:]
+
+    func wait(_ delay: TimeInterval) async {
+        guard !resumed.contains(delay) else { return }
+        await withCheckedContinuation { waiters[delay] = $0 }
+    }
+
+    func resume(_ delay: TimeInterval) {
+        resumed.insert(delay)
+        waiters.removeValue(forKey: delay)?.resume()
     }
 }
 

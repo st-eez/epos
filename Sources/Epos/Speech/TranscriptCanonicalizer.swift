@@ -62,12 +62,19 @@ public struct TranscriptCanonicalizer: Sendable {
 
     public init(rules: [Rule] = Self.defaultRules) {
         self.rules = rules
-        self.specs = Self.compile(rules)
+        self.specs = Self.compile(rules.map { (rule: $0, recordID: nil) })
+    }
+
+    /// Freezes executable rules and their source IDs together for one recording.
+    init(records: [CorrectionRecord]) {
+        let compiled = CorrectionRuleCompiler.compileWithSources(records: records)
+        self.rules = compiled.map(\.rule)
+        self.specs = Self.compile(compiled.map { (rule: $0.rule, recordID: $0.record.id) })
     }
 
     public static func load(from defaults: UserDefaults = .standard) -> TranscriptCanonicalizer {
         let dictionary = CorrectionDictionary.load(from: defaults)
-        return TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: dictionary.records))
+        return TranscriptCanonicalizer(records: dictionary.records)
     }
 
     public static func rules(from defaults: UserDefaults = .standard) -> [Rule] {
@@ -76,7 +83,11 @@ public struct TranscriptCanonicalizer: Sendable {
     }
 
     public func canonicalize(_ text: String) -> String {
-        CorrectionRuleMatcher.apply(specs, to: text).output
+        canonicalizeWithProvenance(text).output
+    }
+
+    func canonicalizeWithProvenance(_ text: String) -> CorrectionRuleMatchResult {
+        CorrectionRuleMatcher.apply(specs, to: text)
     }
 
     /// Canonical vocabulary to feed the recognizer as best-effort `AnalysisContext`
@@ -109,11 +120,13 @@ public struct TranscriptCanonicalizer: Sendable {
 }
 
 private extension TranscriptCanonicalizer {
-    static func compile(_ rules: [Rule]) -> [CorrectionRuleMatchSpec] {
+    static func compile(_ rules: [(rule: Rule, recordID: String?)]) -> [CorrectionRuleMatchSpec] {
         rules.enumerated()
-            .flatMap { ruleOrder, rule in
-                allAliases(for: rule).enumerated().map { aliasOrder, alias in
+            .flatMap { ruleOrder, entry in
+                let rule = entry.rule
+                return allAliases(for: rule).enumerated().map { aliasOrder, alias in
                     (
+                        recordID: entry.recordID,
                         canonical: rule.canonical,
                         alias: alias,
                         contexts: rule.contexts,
@@ -131,7 +144,7 @@ private extension TranscriptCanonicalizer {
             .compactMap { spec in
                 CorrectionMatchContext.regex(forAlias: spec.alias).map {
                     CorrectionRuleMatchSpec(
-                        recordID: nil,
+                        recordID: spec.recordID,
                         canonical: spec.canonical,
                         regex: $0,
                         contexts: spec.contexts,

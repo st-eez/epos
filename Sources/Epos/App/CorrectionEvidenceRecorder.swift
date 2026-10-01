@@ -9,20 +9,17 @@ import Foundation
 /// which is why `AppCoordinator` cancels the outstanding checks at the next press.
 @MainActor
 final class CorrectionEvidenceRecorder {
-    private let corrections: CorrectionStore
     private let evidence: CorrectionEvidenceStore
     private let captureDelays: [TimeInterval]
     /// The recording an evidence row belongs to when the caller does not name one.
     private let currentRecordingID: @MainActor () -> String?
-    private var captureWorkItems: [DispatchWorkItem] = []
+    private var captureTasks: [Task<Void, Never>] = []
 
     init(
-        corrections: CorrectionStore,
         evidence: CorrectionEvidenceStore,
         captureDelays: [TimeInterval],
         currentRecordingID: @escaping @MainActor () -> String?
     ) {
-        self.corrections = corrections
         self.evidence = evidence
         self.captureDelays = captureDelays
         self.currentRecordingID = currentRecordingID
@@ -32,6 +29,7 @@ final class CorrectionEvidenceRecorder {
     func recordIfEnabled(
         enabled: Bool,
         rawTranscript: String,
+        correctionResult: CorrectionRuleMatchResult,
         finalTranscript: String,
         applied: Bool,
         finalInsertedTranscript: String? = nil,
@@ -45,6 +43,7 @@ final class CorrectionEvidenceRecorder {
         }
         return record(
             rawTranscript: rawTranscript,
+            correctionResult: correctionResult,
             finalTranscript: finalTranscript,
             applied: applied,
             finalInsertedTranscript: finalInsertedTranscript,
@@ -56,13 +55,14 @@ final class CorrectionEvidenceRecorder {
     @discardableResult
     func record(
         rawTranscript: String,
+        correctionResult: CorrectionRuleMatchResult,
         finalTranscript: String,
         applied: Bool,
         finalInsertedTranscript: String? = nil,
         recordingID: String? = nil,
         session: FinalTranscriptInsertionSession? = nil
     ) -> String {
-        let canonicalizedRaw = corrections.canonicalize(rawTranscript)
+        let canonicalizedRaw = correctionResult.output
         return evidence.record(CorrectionEvidence(
             id: UUID().uuidString,
             observedAt: Date(),
@@ -73,19 +73,23 @@ final class CorrectionEvidenceRecorder {
             userEditedTranscript: nil,
             applicationBundleIdentifier: session?.targetApplicationBundleIdentifier(),
             windowTitle: session?.targetWindowTitle(),
-            appliedRuleIDs: corrections.dictionary.appliedRecordIDs(in: rawTranscript)
+            appliedRuleIDs: correctionResult.appliedRecordIDs
         ))
     }
 
     /// The evidence row for the row just written and the field it landed in: read
     /// back at each configured delay until one read differs from what was inserted.
+    @discardableResult
     func scheduleObservedUserEditCapture(
         evidenceID: String,
         finalInsertedTranscript: String,
-        session: FinalTranscriptInsertionSession?
-    ) {
+        session: FinalTranscriptInsertionSession?,
+        sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { delay in
+            try await Task.sleep(for: .seconds(delay))
+        }
+    ) -> [Task<Void, Never>] {
         cancelObservedEditCaptureChecks()
-        guard let session else { return }
+        guard let session else { return [] }
 
         let delays = captureDelays.isEmpty ? [0] : captureDelays
 
@@ -97,29 +101,30 @@ final class CorrectionEvidenceRecorder {
                     session: session
                 ) {
                     cancelObservedEditCaptureChecks()
-                    return
+                    return []
                 }
                 continue
             }
 
-            let workItem = DispatchWorkItem { [weak self, session, evidenceID, finalInsertedTranscript] in
+            let task = Task { [weak self, session, evidenceID, finalInsertedTranscript] in
+                do {
+                    try await sleep(delay)
+                    try Task.checkCancellation()
+                } catch {
+                    return
+                }
                 guard let self else { return }
-                MainActor.assumeIsolated {
-                    if self.captureObservedUserEdit(
-                        evidenceID: evidenceID,
-                        finalInsertedTranscript: finalInsertedTranscript,
-                        session: session
-                    ) {
-                        self.cancelObservedEditCaptureChecks()
-                    }
+                if self.captureObservedUserEdit(
+                    evidenceID: evidenceID,
+                    finalInsertedTranscript: finalInsertedTranscript,
+                    session: session
+                ) {
+                    self.cancelObservedEditCaptureChecks()
                 }
             }
-            captureWorkItems.append(workItem)
-            DispatchQueue.main.asyncAfter(
-                deadline: .now() + delay,
-                execute: workItem
-            )
+            captureTasks.append(task)
         }
+        return captureTasks
     }
 
     @discardableResult
@@ -144,7 +149,7 @@ final class CorrectionEvidenceRecorder {
     }
 
     func cancelObservedEditCaptureChecks() {
-        captureWorkItems.forEach { $0.cancel() }
-        captureWorkItems = []
+        captureTasks.forEach { $0.cancel() }
+        captureTasks = []
     }
 }

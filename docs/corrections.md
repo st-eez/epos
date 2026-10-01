@@ -24,8 +24,10 @@ rejected, and unsupported entries.
 `dash dash fix` becomes `--fix`. Removing the dictionary's bare `dash dash` entry
 does not disable that transform.
 
-The coordinator snapshots compiled rules at each recording start. Those rules
-clean provisional text and the final transcript. Pronounceable canonical entries
+The coordinator snapshots compiled rules and their stable record IDs at each
+recording start. The same snapshot cleans provisional text and supplies the final
+transcript and evidence provenance. Edits during a hold apply to the next
+recording. Pronounceable canonical entries
 also provide best-effort recognition vocabulary; error aliases are excluded.
 
 ## Persistence
@@ -82,6 +84,7 @@ Regression coverage includes [matching](../Tests/EposTests/CorrectionSmokeTests.
 [persistence](../Tests/EposTests/CorrectionDictionaryPersistenceTests.swift),
 [editor integrity](../Tests/EposTests/CorrectionEditorRecordIntegrityTests.swift),
 [edit evidence](../Tests/EposTests/CorrectionEvidenceTests.swift),
+[recording snapshots](../Tests/EposTests/CoordinatorCorrectionSnapshotTests.swift),
 [promotion gates](../Tests/EposTests/CorrectionPromotionGateTests.swift), and
 [suggestion review](../Tests/EposTests/CorrectionSuggestionReviewTests.swift).
 Real edit observation needs installed app verification.

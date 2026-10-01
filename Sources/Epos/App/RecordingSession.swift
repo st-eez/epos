@@ -25,8 +25,7 @@ final class RecordingSession {
     private let textInsertion: TextInsertionBackend
     private let targetObserverFactory: @MainActor () -> any InsertionTargetObserver
     private let settings: Settings
-    private let cleanTranscript: @Sendable (String) -> String
-    private let contextualStrings: [String]
+    private let canonicalizer: TranscriptCanonicalizer
     private let reliability: ReliabilityRecording?
     private let evidenceRecorder: CorrectionEvidenceRecorder
     private let correctionEvidence: CorrectionEvidenceStore
@@ -69,8 +68,7 @@ final class RecordingSession {
         textInsertion: TextInsertionBackend,
         targetObserverFactory: @escaping @MainActor () -> any InsertionTargetObserver,
         settings: Settings,
-        cleanTranscript: @escaping @Sendable (String) -> String,
-        contextualStrings: [String],
+        canonicalizer: TranscriptCanonicalizer,
         diagnostics: DiagnosticLogSink,
         evidenceRecorder: CorrectionEvidenceRecorder,
         correctionEvidence: CorrectionEvidenceStore,
@@ -85,8 +83,7 @@ final class RecordingSession {
         self.textInsertion = textInsertion
         self.targetObserverFactory = targetObserverFactory
         self.settings = settings
-        self.cleanTranscript = cleanTranscript
-        self.contextualStrings = contextualStrings
+        self.canonicalizer = canonicalizer
         self.reliability = recordingID.map { ReliabilityRecording(recordingID: $0, diagnostics: diagnostics) }
         self.evidenceRecorder = evidenceRecorder
         self.correctionEvidence = correctionEvidence
@@ -167,7 +164,9 @@ final class RecordingSession {
     private func run() async {
         let events: AsyncStream<TranscriptEvent>
         do {
-            events = try await transcriber.start(contextualStrings: contextualStrings)
+            events = try await transcriber.start(
+                contextualStrings: ["Epos"] + canonicalizer.speechContextualStrings
+            )
             let transcriber = transcriber
             let buffers = preRoll.attach { buffer in transcriber.accept(buffer) }
             analyzerReadyForAudio = true
@@ -203,12 +202,14 @@ final class RecordingSession {
             onEvent(self, .recognitionFailedWhileHeld)
             await withCheckedContinuation { releaseWaiter = $0 }
         }
-        let finalTranscript = cleanTranscript(finalText)
+        let correctionResult = canonicalizer.canonicalizeWithProvenance(finalText)
+        let finalTranscript = TranscriptDeterministicCleaner.streamClean(correctionResult.output)
         var microphoneDenied = false
         if !finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             onEvent(self, .inserting)
             await deliverFinalTranscript(
                 finalTranscript,
+                correctionResult: correctionResult,
                 recognizerFailed: recognizerFailed
             )
         } else {
@@ -244,7 +245,9 @@ final class RecordingSession {
     }
 
     private func refreshDisplayText() {
-        displayText = cleanTranscript(finalText + partial)
+        displayText = TranscriptDeterministicCleaner.streamClean(
+            canonicalizer.canonicalize(finalText + partial)
+        )
         onEvent(self, .transcript(final: finalText, partial: partial, display: displayText))
     }
 
@@ -294,6 +297,7 @@ final class RecordingSession {
     /// evidence and reliability records that describe how it went.
     private func deliverFinalTranscript(
         _ finalTranscript: String,
+        correctionResult: CorrectionRuleMatchResult,
         recognizerFailed: Bool
     ) async {
         switch await commitFinalTranscript(finalTranscript) {
@@ -316,6 +320,7 @@ final class RecordingSession {
                 // site: evidence describes the raw transcript as it stands after
                 // the write, exactly as it did before this was its own method.
                 rawTranscript: finalText,
+                correctionResult: correctionResult,
                 finalTranscript: finalTranscript,
                 applied: applied,
                 finalInsertedTranscript: insertedTranscript == finalTranscript ? insertedTranscript : nil,

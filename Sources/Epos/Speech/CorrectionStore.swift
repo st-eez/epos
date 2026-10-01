@@ -20,9 +20,7 @@ public final class CorrectionStore: ObservableObject {
         self.defaults = defaults
         self.lockedBaseline = lockedBaseline
         self.dictionary = CorrectionDictionary.load(from: defaults)
-        self.canonicalizer = TranscriptCanonicalizer(
-            rules: CorrectionRuleCompiler.compile(records: dictionary.records)
-        )
+        self.canonicalizer = TranscriptCanonicalizer(records: dictionary.records)
     }
 
     public var rules: [TranscriptCanonicalizer.Rule] { canonicalizer.rules }
@@ -58,9 +56,7 @@ public final class CorrectionStore: ObservableObject {
 
         guard CorrectionDictionary.saveRecords(savedRecords, to: defaults) else { return }
         dictionary = CorrectionDictionary(records: savedRecords)
-        canonicalizer = TranscriptCanonicalizer(
-            rules: CorrectionRuleCompiler.compile(records: savedRecords)
-        )
+        canonicalizer = TranscriptCanonicalizer(records: savedRecords)
     }
 
     @discardableResult
@@ -118,9 +114,7 @@ public final class CorrectionStore: ObservableObject {
         }
 
         guard CorrectionDictionary.saveRecords(dictionary.records, to: defaults) else { return }
-        canonicalizer = TranscriptCanonicalizer(
-            rules: CorrectionRuleCompiler.compile(records: dictionary.records)
-        )
+        canonicalizer = TranscriptCanonicalizer(records: dictionary.records)
     }
 
     private func hasEquivalentActiveRecord(to record: CorrectionRecord) -> Bool {

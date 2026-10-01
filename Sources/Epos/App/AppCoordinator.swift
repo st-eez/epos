@@ -85,7 +85,7 @@ public final class AppCoordinator: ObservableObject {
     public static let defaultObservedEditCaptureDelays: [TimeInterval] = [2, 6, 12, 15]
     /// Shared correction rules: this coordinator canonicalizes against it; the Corrections
     /// editor mutates the same instance (the app hands the editor `coordinator.corrections`).
-    public let corrections = CorrectionStore()
+    public let corrections: CorrectionStore
     public let correctionEvidence: CorrectionEvidenceStore
     /// Internal, not private, only so the settings facade in
     /// `AppCoordinatorSettings.swift` can log its own writes.
@@ -120,7 +120,6 @@ public final class AppCoordinator: ObservableObject {
     /// watch for the user's own edit of it. Internal so evidence tests can drive it
     /// without a live recording.
     lazy var evidenceRecorder = CorrectionEvidenceRecorder(
-        corrections: corrections,
         evidence: correctionEvidence,
         captureDelays: observedEditCaptureDelays,
         currentRecordingID: { [weak self] in self?.currentRecordingID }
@@ -200,6 +199,7 @@ public final class AppCoordinator: ObservableObject {
         permissions: PermissionsGate = PermissionsGate(),
         refreshSpeechAsset: (@Sendable () async -> AssetStatus)? = nil,
         diagnostics: DiagnosticLogSink = .shared,
+        corrections: CorrectionStore = CorrectionStore(),
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
         isFnKeyHeld: (@MainActor () -> Bool)? = nil,
@@ -217,6 +217,7 @@ public final class AppCoordinator: ObservableObject {
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.inlinePreviewOverride = inlinePreviewEnabled
         self.correctionEvidence = correctionEvidence
+        self.corrections = corrections
         self.recordingIDGenerator = recordingIDGenerator
         self.reliabilityDiagnostics = diagnostics
         self.isFnKeyHeld = isFnKeyHeld ?? { [hotkey] in hotkey.isFunctionKeyDown }
@@ -252,8 +253,8 @@ public final class AppCoordinator: ObservableObject {
 
     /// The authoritative final-transcript transform, built once per recording so a
     /// mid-session correction-rule edit cannot alter the finalization behavior of an
-    /// already-running dictation. RecordingSession applies that same closure to
-    /// every streamed partial (`displayText`), so the one final write
+    /// already-running dictation. RecordingSession freezes the same canonicalizer
+    /// for every streamed partial (`displayText`), so the one final write
     /// cannot re-type text differently from what the user watched on screen.
     func makeFinalTranscriptCleaner() -> @Sendable (String) -> String {
         let canonicalizer = corrections.canonicalizer
@@ -567,6 +568,7 @@ public final class AppCoordinator: ObservableObject {
     private func makeRecordingSession(recordingID: String?) -> RecordingSession {
         var sessionSettings = settings
         sessionSettings.inlinePreview = inlinePreviewEnabled
+        let canonicalizer = corrections.canonicalizer
         return RecordingSession(
             recordingID: recordingID,
             audio: audio,
@@ -574,8 +576,7 @@ public final class AppCoordinator: ObservableObject {
             textInsertion: textInsertion,
             targetObserverFactory: insertionTargetObserverFactory,
             settings: sessionSettings,
-            cleanTranscript: makeFinalTranscriptCleaner(),
-            contextualStrings: speechContextualStrings(),
+            canonicalizer: canonicalizer,
             diagnostics: reliabilityDiagnostics,
             evidenceRecorder: evidenceRecorder,
             correctionEvidence: correctionEvidence,
