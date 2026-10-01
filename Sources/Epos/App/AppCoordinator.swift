@@ -35,10 +35,9 @@ public final class AppCoordinator: ObservableObject {
     /// speech model installs, "Mic blocked" for a revoked grant — because a bare
     /// "Not ready" leaves the user with nothing to act on.
     @Published public private(set) var startNotice = StartReadiness.ready.noticeLabel
-    /// True while the indicator reports that the guarded final write was refused.
+    /// True while the indicator reports a refused or unconfirmed final write.
     @Published public private(set) var insertionUnavailable = false
-    /// What that notice says: "Not inserted" for a refused write, "No access" when
-    /// the refusal was Accessibility being untrusted rather than a moved target.
+    /// Names a refusal or asks the user to check the field when delivery is unknown.
     @Published public private(set) var insertionNotice = AppCoordinator.defaultInsertionNotice
     /// True while the indicator reports that the microphone died mid-recording and
     /// the dictation was cut short at that point.
@@ -130,6 +129,7 @@ public final class AppCoordinator: ObservableObject {
     private let assets: AssetManager
     private let refreshSpeechAsset: @Sendable () async -> AssetStatus
     private let observedEditCaptureDelays: [TimeInterval]
+    private let noticeExpiryScheduler: @MainActor (Duration, @escaping @MainActor () -> Void) -> Void
 
     /// Distributed-notification tokens for the debug dictation trigger.
     private var debugTriggerObservers: [NSObjectProtocol] = []
@@ -206,6 +206,14 @@ public final class AppCoordinator: ObservableObject {
         observedEditCaptureDelays: [TimeInterval] = AppCoordinator.defaultObservedEditCaptureDelays,
         includeTranscriptTextInDiagnostics: Bool? = nil,
         inlinePreviewEnabled: Bool? = nil,
+        noticeExpiryScheduler: @escaping @MainActor (
+            Duration, @escaping @MainActor () -> Void
+        ) -> Void = { duration, expire in
+            Task {
+                try? await Task.sleep(for: duration)
+                expire()
+            }
+        },
         autoStart: Bool = true
     ) {
         self.hotkey = hotkey
@@ -222,6 +230,7 @@ public final class AppCoordinator: ObservableObject {
         self.reliabilityDiagnostics = diagnostics
         self.isFnKeyHeld = isFnKeyHeld ?? { [hotkey] in hotkey.isFunctionKeyDown }
         self.observedEditCaptureDelays = observedEditCaptureDelays
+        self.noticeExpiryScheduler = noticeExpiryScheduler
         self.includeTranscriptTextInDiagnostics =
             includeTranscriptTextInDiagnostics ?? TranscriptDiagnosticTextPolicy.load()
         self.settings = settings
@@ -438,8 +447,7 @@ public final class AppCoordinator: ObservableObject {
         noticeFlashGenerations[notice] = generation
         self[keyPath: notice] = true
         cues.showPill()
-        Task { [weak self] in
-            try? await Task.sleep(for: Self.noticeFlashDuration)
+        noticeExpiryScheduler(Self.noticeFlashDuration) { [weak self] in
             guard let self, self.noticeFlashGenerations[notice] == generation,
                   self[keyPath: notice] else { return }
             self[keyPath: notice] = false

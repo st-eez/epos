@@ -53,8 +53,9 @@ can fall back to guarded keystrokes. If the complete command was
 sent and its acknowledgment is lost or malformed, delivery is ambiguous.
 The transport closes a connection after any reply failure, so a late reply cannot
 become the acknowledgement for the next command. Epos suppresses a
-second write to avoid duplicated text. The current implementation records this
-as `ime-commit-unacknowledged` without a user-facing refusal notice.
+second write to avoid duplicated text and shows `Check the field`. This notice
+asks the user to inspect the destination because the text may already be there.
+Diagnostics record the outcome as `ime-commit-unacknowledged`.
 
 The keystroke backend uses private Unicode keyboard events with cleared modifier
 flags. Text appears only on key-down. Payloads are chunked on grapheme boundaries,
@@ -101,6 +102,9 @@ Tests cover [target guards](../Tests/EposTests/InsertionTargetGuardTests.swift),
 [final preview safety](../Tests/EposTests/InlinePreviewFinalSafetyTests.swift),
 [socket failures](../Tests/EposTests/InlinePreviewTransportTests.swift), and
 [commit routing](../Tests/EposTests/FinalTranscriptCommitRouterTests.swift).
+[Ambiguous delivery tests](../Tests/EposTests/CoordinatorAmbiguousDeliveryTests.swift)
+model an IME write that lands before its acknowledgment disappears, then verify
+the notice remains visible through recording teardown without another write.
 The [feasibility spec](../specs/inline-preview-feasibility.md) and
 [companion README](../probes/inline-preview/README.md) retain historical per-app
 observations, which require rechecking after changes.

@@ -43,9 +43,11 @@ their own lifetimes so finalization does not hide an active failure.
 | Recognition lost | Recognition failed during a hold |
 | Not inserted | The final target or backend refused delivery |
 | No access | Accessibility trust prevented delivery |
+| Check the field | The final IME command was sent, but delivery could not be confirmed |
 
-The final IME commit's missing acknowledgment is currently logged as ambiguous
-without a refusal notice. See [insertion](insertion.md#final-delivery).
+`Check the field` asks the user to inspect the destination. The IME may have
+inserted the text before its acknowledgment was lost, so Epos suppresses a second
+write. See [insertion](insertion.md#final-delivery).
 
 ## Evidence
 

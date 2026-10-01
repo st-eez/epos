@@ -30,7 +30,7 @@ Search terms include common user wording and implementation names.
 | Final cleanup of fillers, stutters, and ordinals | filler removal, um and uh, repeated words | [Dictation](dictation.md#transcript-cleanup) |
 | Stream into field, marked text, companion input method | live preview, inline dictation, provisional text | [Insertion](insertion.md#stream-into-field) |
 | Captured target guard, final IME commit, Unicode keystrokes | paste, text injection, focus protection | [Insertion](insertion.md#final-delivery) |
-| Refused writes and delivery verification | not inserted, no access, missing text | [Insertion](insertion.md#delivery-evidence) |
+| Refused and unconfirmed writes, delivery verification | not inserted, check the field, missing text | [Insertion](insertion.md#delivery-evidence) |
 | Corrections editor, Literal and Name modes, developer tokens | custom words, names, spoken symbols | [Corrections](corrections.md#dictionary-and-editor) |
 | Dictionary upgrades and protected storage | migration, saved corrections, data protection | [Corrections](corrections.md#persistence) |
 | Learn corrections, observed edits, suggestion review | learning, user edits, rule suggestions | [Corrections](corrections.md#learning-and-suggestions) |

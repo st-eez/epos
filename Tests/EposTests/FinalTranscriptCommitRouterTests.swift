@@ -5,7 +5,7 @@ import XCTest
 /// write between the palette-IME commit and the keystroke backend: the shared
 /// guard runs before any commit, an ack means exactly one IME write and zero
 /// keystrokes, a probe refusal falls back to keystrokes over a cancelled
-/// composition, and an unacknowledged commit writes nothing at all.
+/// composition, and an unacknowledged commit suppresses every further write.
 @MainActor
 final class FinalTranscriptCommitRouterTests: XCTestCase {
     private static let transcript = "Hello there."
@@ -238,7 +238,7 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         )
     }
 
-    func testAmbiguousCommitWritesNothingAndClosesTheInsertionSession() async {
+    func testAmbiguousCommitSuppressesFallbackAndClosesTheInsertionSession() async {
         let transport = ScriptedTransport(commitError: .replyTimedOut)
         let preview = await makeHealthyPreview(transport: transport)
         let backend = RecordingBackend()

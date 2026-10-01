@@ -41,8 +41,7 @@ struct RecordingIndicatorSurface: View {
     /// rather than always reading "Not ready".
     let startNotice: String
     let insertionUnavailable: Bool
-    /// What the refused-write notice says: "Not inserted", or "No access" when the
-    /// refusal was Accessibility rather than a moved target.
+    /// Names a refused write or asks the user to check an unconfirmed delivery.
     let insertionNotice: String
     /// Flash a red "Mic lost" notice: the microphone went away mid-hold, so the
     /// dictation stops where it stopped. Distinct from "Not ready" — this one has

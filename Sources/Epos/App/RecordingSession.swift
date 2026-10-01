@@ -346,12 +346,9 @@ final class RecordingSession {
             )
             finishTextInsertionSession()
         case .imeAmbiguous:
-            // The commit was fully sent over a healthy channel and the ack
-            // never arrived: it may have landed. A keystroke fallback could
-            // insert the transcript twice, and flashing "Not inserted" would
-            // invite a manual retype with the same double-text risk — so
-            // write nothing, flash nothing, and report the recording as an
-            // unacknowledged IME commit.
+            // The IME may have inserted the text before its acknowledgement was
+            // lost. Ask the user to inspect the field and suppress another write.
+            onEvent(self, .insertionUnavailable("Check the field"))
             reliability?.emit(
                 recognizerFailed ? .recognizerFailed : .imeCommitUnacknowledged,
                 transcriptUTF16: finalTranscript.utf16.count,
