@@ -126,4 +126,3 @@ final class StableOpaqueObserver: InsertionTargetObserver {
     func targetApplicationBundleIdentifier() -> String? { "com.test.app" }
     func targetWindowTitle() -> String? { nil }
 }
-
