@@ -5,7 +5,7 @@ Date: 2026-10-01.
 ## Question
 
 Does `SpeechAnalyzer.prepareToAnalyze(in:)` reduce the time from a hold to the
-first visible recognition result enough to justify preparing the next analyzer
+first nonempty recognizer result enough to justify preparing the next analyzer
 while Epos is idle? The installed Speech SDK exposes the API on macOS 26. Apple's
 [documentation](https://developer.apple.com/documentation/speech/speechanalyzer/preparetoanalyze(in:))
 describes preparing the analyzer's resources ahead of the first input.
@@ -36,6 +36,10 @@ idle interval, and after cleanup. Preparation and idle time remain separate from
 the hold clock. An advance-arm result cannot describe work moved earlier as work
 eliminated. RSS is the evaluation process's sampled resident memory, not the
 installed app's five-minute idle acceptance measurement.
+
+First result means the first nonempty raw recognition event. Cleanup may remove
+that event's filler text before the app displays it. This host does not measure
+preview rendering or release to field delivery.
 
 The experiment retains every startup frame. If setup exceeds the app's three
 second capture pre-roll cap, the inline arm does not model the resulting loss of
