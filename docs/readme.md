@@ -11,9 +11,8 @@ specification](../specs/baseline.md) governs scope and architecture.
 [The specification index](../specs/README.md) points to design decisions and
 historical experiments. Confirm behavior in source before changing it.
 
-The [October 1 bug hunt and review](review-2026-10-01.md) records the first fixes,
-remaining correctness work, structural findings, and replacement verification
-gate.
+The [October 1 bug hunt and review](review-2026-10-01.md) records the audit findings,
+completed fixes, and replacement verification gate.
 
 ## Feature index
 
@@ -39,8 +38,10 @@ Search terms include common user wording and implementation names.
 | Launch at login and saved preferences | startup, preferences, autostart | [Settings](settings.md) |
 | Quit and menu status | tray icon, menu bar, exit | [Settings](settings.md#menu-actions) |
 | Diagnostic logs and transcript timing | debug logs, latency, trace | [Diagnostics](diagnostics.md#logs) |
+| Recording stage durations and successful write timing | startup speed, first text, release latency, p95 | [Stage timing](diagnostics.md#stage-timing) |
 | Save audio samples and local evidence storage | WAV, recordings, dogfood samples | [Diagnostics](diagnostics.md#saved-audio-and-correction-evidence) |
 | Reliability audit, corpus labeling, confirmation, benchmarks | WER, accuracy, corpus quality | [Diagnostics](diagnostics.md#evaluation-tools) |
+| Paced analyzer preparation comparison | prewarming, prepareToAnalyze, recognition speed, memory | [Preparation experiment](../specs/analyzer-preparation-experiment.md) |
 
 ## Replacement readiness
 
