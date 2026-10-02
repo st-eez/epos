@@ -13,6 +13,12 @@ MSG
   exit 64
 fi
 
+# Pin the physical parent so replacement and rollback use stable paths.
+install_app_parent="$(dirname "$install_app_path")"
+mkdir -p "$install_app_parent"
+install_app_parent="$(cd "$install_app_parent" && pwd -P)"
+install_app_path="$install_app_parent/Epos.app"
+
 if pgrep -f "$install_app_path/Contents/MacOS/Epos" >/dev/null 2>&1; then
   cat >&2 <<MSG
 error: $install_app_path is running.
@@ -26,8 +32,7 @@ fi
 
 built_app_path="$("$script_dir/build-signed-app.sh")"
 
-mkdir -p "$(dirname "$install_app_path")"
-staging_dir="$(mktemp -d "$(dirname "$install_app_path")/.$(basename "$install_app_path").install.XXXXXX")"
+staging_dir="$(mktemp -d "$install_app_parent/.Epos.app.install.XXXXXX")"
 staged_app_path="$staging_dir/new.app"
 previous_app_path="$staging_dir/previous.app"
 installation_verified=false
