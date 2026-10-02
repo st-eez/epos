@@ -30,10 +30,12 @@ The installer check uses disposable bundles and injected failures. It does not
 build, sign, install, or quit the user's app.
 
 The audio input probe binds an isolated, stopped engine to the current default
-input and checks device readback and the unchanged system default. It records no
-audio. Run it on the host: a sandbox may expose no Core Audio devices even when
-HAL returns success. This check does not cover alternate-device capture, voice
-processing, or physical disconnect recovery.
+and, when available, a different input. It checks device readback, restores the
+engine's original route, and verifies that the system default stays unchanged.
+It records no audio and leaves voice processing off. Run it on the host: a sandbox
+may expose no Core Audio devices even when HAL returns success. This check does
+not cover capture from those devices, voice processing, or physical disconnect
+recovery.
 
 ## Installed app
 
