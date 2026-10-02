@@ -1,0 +1,12 @@
+#!/bin/bash
+set -euo pipefail
+epos_repo_path=$(cd "$(dirname "$0")/../.." && pwd)
+epos_probe_dir=$(mktemp -d "${TMPDIR:-/tmp}/epos-audio-input.XXXXXX")
+trap 'rm -rf "$epos_probe_dir"' EXIT
+xcrun swiftc -swift-version 6 -warnings-as-errors -target arm64-apple-macos26.0 \
+  -module-cache-path "$epos_probe_dir/cache" \
+  "$epos_repo_path/Sources/Epos/Audio/AudioInputDevices.swift" \
+  "$epos_repo_path/Sources/Epos/Audio/AudioInputDeviceBinding.swift" \
+  "$epos_repo_path/probes/audio-input/main.swift" \
+  -o "$epos_probe_dir/verify-audio-input"
+"$epos_probe_dir/verify-audio-input"

@@ -1,4 +1,5 @@
 @preconcurrency import AVFoundation
+import CoreAudio
 import Foundation
 
 /// The microphone the coordinator opens at fn press. `AudioCapture` is the only
@@ -18,7 +19,10 @@ public protocol MicrophoneCapture: AnyObject {
     /// `echoCancellation` runs the input through Apple's voice-processing IO, which
     /// subtracts what the machine is playing out of the mic signal. Read per session
     /// because the mode can only be changed while the engine is stopped.
-    func start(targetFormat: AVAudioFormat, echoCancellation: Bool) throws
+    /// An unset UID follows System default. A chosen UID never falls back to another input.
+    func start(targetFormat: AVAudioFormat, echoCancellation: Bool, inputDeviceUID: String?) throws
+    /// Recheck the active route after the coordinator's hardware catalog changes.
+    func inputDevicesDidChange()
     func stop()
 }
 
@@ -51,9 +55,9 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private var isRunning = false
-    /// The format the running capture converts to, kept so an input-device change can
-    /// rebuild the same conversion into the same recording. Nil while stopped.
-    private var activeTargetFormat: AVAudioFormat?
+    /// Frozen for the hold. Recovery resolves the same UID to a fresh hardware ID.
+    private var activeConfiguration: AudioCaptureInputConfiguration?
+    private var activeInputDeviceID: AudioDeviceID?
     private var configurationChangeObserver: (any NSObjectProtocol)?
 
     public init() {
@@ -79,19 +83,32 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     /// Begin capture. Converts the input node's native format to `targetFormat` via
     /// `AVAudioConverter` and emits converted buffers on `onBuffer`. RMS amplitude is
     /// computed off the pre-conversion buffer and reported via `onAmplitude`.
-    public func start(targetFormat: AVAudioFormat, echoCancellation: Bool) throws {
-        // Before reading the input format: voice processing changes the input node's
-        // output format, and it can only be toggled while the engine is stopped —
-        // which it is here, on a first start and after every `stop()`.
-        applyVoiceProcessing(enabled: echoCancellation)
+    public func start(targetFormat: AVAudioFormat, echoCancellation: Bool, inputDeviceUID: String?) throws {
+        let configuration = AudioCaptureInputConfiguration(
+            targetFormat: targetFormat, echoCancellation: echoCancellation, inputDeviceUID: inputDeviceUID
+        )
         do {
-            try openInputPath(targetFormat: targetFormat)
+            try openInputPath(configuration: configuration)
         } catch {
             closeInputPath()
             throw error
         }
-        activeTargetFormat = targetFormat
+        activeConfiguration = configuration
         isRunning = true
+    }
+
+    public func inputDevicesDidChange() {
+        guard isRunning, let configuration = activeConfiguration else { return }
+        do {
+            let deviceID = try configuration.resolveDeviceID()
+            if deviceID != activeInputDeviceID || engine.inputNode.auAudioUnit.deviceID != deviceID {
+                handleConfigurationChange()
+            }
+        } catch {
+            closeInputPath()
+            Self.log.error("active input device unavailable: \(String(describing: error))")
+            onCaptureFailure?(error)
+        }
     }
 
     /// Put the input node into (or out of) Apple's voice-processing mode — the same
@@ -149,7 +166,8 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     /// can enable voice processing before it throws, without reaching isRunning.
     private func closeInputPath() {
         isRunning = false
-        activeTargetFormat = nil
+        activeConfiguration = nil
+        activeInputDeviceID = nil
         engine.stop()                          // synchronous; quiesces the HAL IO thread
         engine.inputNode.removeTap(onBus: 0)   // safe only after the engine has stopped
         converter = nil
@@ -164,9 +182,14 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     /// Build the converter, install the tap, and start the engine. Shared by `start`
     /// and the recovery after an input-device change, so both paths configure the
     /// input path identically.
-    private func openInputPath(targetFormat: AVAudioFormat) throws {
+    private func openInputPath(configuration: AudioCaptureInputConfiguration) throws {
+        let deviceID = try configuration.configureDevice(
+            applyVoiceProcessing: applyVoiceProcessing,
+            bindDevice: { try AudioInputDeviceBinding.bind($0, to: engine.inputNode) }
+        )
         let inputNode = engine.inputNode
         let inputFormat = inputNode.outputFormat(forBus: 0)
+        let targetFormat = configuration.targetFormat
 
         guard inputFormat.sampleRate > 0 else {
             throw AudioCaptureError.zeroSampleRate
@@ -237,6 +260,7 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         }
 
         self.converter = converter
+        activeInputDeviceID = deviceID
         Self.log.info("capture started: input \(inputFormat.sampleRate)Hz/\(inputFormat.channelCount)ch -> target \(targetFormat.sampleRate)Hz/\(targetFormat.channelCount)ch voiceProcessing=\(inputNode.isVoiceProcessingEnabled)")
     }
 
@@ -244,18 +268,16 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     ///
     /// `AVAudioEngine` handles a device change (AirPods connecting, a USB interface
     /// unplugged, a sample-rate switch) by stopping itself, uninitializing, and removing
-    /// every installed tap. Nothing throws and nothing else notices: the tap simply never
-    /// fires again, so the amplitude freezes, the glow keeps advertising a live mic, and
-    /// every word after the switch is lost. Rebuilding the input path here keeps the
-    /// dictation the user is still speaking going, on the new device, at the same target
-    /// format. A rebuild that fails ends the recording honestly instead of silently.
+    /// every installed tap. Rebuilding the input path reapplies the frozen input UID
+    /// and capture mode at the same target format. A missing chosen input or failed
+    /// rebuild ends the recording through the existing microphone failure path.
     private func handleConfigurationChange() {
-        guard isRunning, let targetFormat = activeTargetFormat else { return }
+        guard isRunning, let configuration = activeConfiguration else { return }
         Self.log.info("input configuration changed during capture; restarting engine")
         engine.stop()
         engine.inputNode.removeTap(onBus: 0)
         do {
-            try openInputPath(targetFormat: targetFormat)
+            try openInputPath(configuration: configuration)
             Self.log.info("capture resumed on the reconfigured input")
         } catch {
             closeInputPath()
@@ -313,6 +335,32 @@ enum AudioCaptureError: Error {
     case zeroSampleRate
     case converterUnavailable
     case engineFailed(Error)
+}
+
+/// Initial open and recovery share the frozen choices, but never cache a hardware ID.
+struct AudioCaptureInputConfiguration {
+    let targetFormat: AVAudioFormat
+    let echoCancellation: Bool
+    let inputDeviceUID: String?
+
+    func resolveDeviceID(
+        snapshotReader: () throws -> AudioInputDeviceSnapshot = AudioInputDevices.snapshot
+    ) throws -> AudioDeviceID {
+        try snapshotReader().deviceID(for: inputDeviceUID)
+    }
+
+    func configureDevice(
+        snapshotReader: () throws -> AudioInputDeviceSnapshot = AudioInputDevices.snapshot,
+        applyVoiceProcessing: (Bool) -> Void,
+        bindDevice: (AudioDeviceID) throws -> Void
+    ) throws -> AudioDeviceID {
+        let deviceID = try resolveDeviceID(snapshotReader: snapshotReader)
+        // The toggle can replace the I/O unit. The binding closure fetches it after
+        // applying the frozen mode, before the caller reads its format or adds a tap.
+        applyVoiceProcessing(echoCancellation)
+        try bindDevice(deviceID)
+        return deviceID
+    }
 }
 
 /// Single-shot holder for the converter's input buffer. The converter's
