@@ -13,13 +13,15 @@ MSG
   exit 64
 fi
 
+requested_install_app_path="$install_app_path"
 # Pin the physical parent so replacement and rollback use stable paths.
 install_app_parent="$(dirname "$install_app_path")"
 mkdir -p "$install_app_parent"
 install_app_parent="$(cd "$install_app_parent" && pwd -P)"
 install_app_path="$install_app_parent/Epos.app"
 
-if pgrep -f "$install_app_path/Contents/MacOS/Epos" >/dev/null 2>&1; then
+if pgrep -f "$requested_install_app_path/Contents/MacOS/Epos" >/dev/null 2>&1 ||
+  pgrep -f "$install_app_path/Contents/MacOS/Epos" >/dev/null 2>&1; then
   cat >&2 <<MSG
 error: $install_app_path is running.
 
