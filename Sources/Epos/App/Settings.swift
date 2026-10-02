@@ -71,9 +71,12 @@ public struct Settings: Equatable, Sendable {
     /// occasionally transcribing it, so this stays opt-in until the cancellation can
     /// be done without touching the output.
     public var echoCancellation: Bool
-    /// Streams volatile text into the fn-press field as marked text via the
+    /// Streams volatile text into the shortcut-press field as marked text via the
     /// companion input method; falls back to the pill HUD when unavailable.
     public var inlinePreview: Bool
+    public var dictationShortcut: DictationShortcut
+    /// nil follows the system input; a stored UID pins only Epos's capture.
+    public var inputDeviceUID: String?
     public var edgeGlow: EdgeGlowSettings
 
     public init(
@@ -83,6 +86,8 @@ public struct Settings: Equatable, Sendable {
         saveCorrectionEvidence: Bool = false,
         echoCancellation: Bool = false,
         inlinePreview: Bool = true,
+        dictationShortcut: DictationShortcut = .functionKey,
+        inputDeviceUID: String? = nil,
         edgeGlow: EdgeGlowSettings = EdgeGlowSettings()
     ) {
         self.launchAtLogin = launchAtLogin
@@ -91,6 +96,8 @@ public struct Settings: Equatable, Sendable {
         self.saveCorrectionEvidence = saveCorrectionEvidence
         self.echoCancellation = echoCancellation
         self.inlinePreview = inlinePreview
+        self.dictationShortcut = dictationShortcut
+        self.inputDeviceUID = inputDeviceUID.flatMap { $0.isEmpty ? nil : $0 }
         self.edgeGlow = edgeGlow
     }
 
@@ -101,6 +108,8 @@ public struct Settings: Equatable, Sendable {
         static let saveCorrectionEvidence = "settings.saveCorrectionEvidence"
         static let echoCancellation = "settings.echoCancellation"
         static let inlinePreview = "settings.inlinePreview"
+        static let dictationShortcut = "settings.dictationShortcut"
+        static let inputDeviceUID = "settings.inputDeviceUID"
         static let edgeGlowEnabled = "settings.edgeGlow.enabled"
         static let edgeGlowTheme = "settings.edgeGlow.theme"
         static let edgeGlowIntensity = "settings.edgeGlow.intensity"
@@ -119,6 +128,9 @@ public struct Settings: Equatable, Sendable {
             saveCorrectionEvidence: defaults.bool(forKey: Key.saveCorrectionEvidence),
             echoCancellation: defaults.object(forKey: Key.echoCancellation) as? Bool ?? false,
             inlinePreview: defaults.object(forKey: Key.inlinePreview) as? Bool ?? true,
+            dictationShortcut: defaults.data(forKey: Key.dictationShortcut)
+                .flatMap { try? JSONDecoder().decode(DictationShortcut.self, from: $0) } ?? .functionKey,
+            inputDeviceUID: defaults.object(forKey: Key.inputDeviceUID) as? String,
             edgeGlow: EdgeGlowSettings(
                 // `object(forKey:)` distinguishes "never set" (use defaults)
                 // from a stored false/0.
@@ -144,6 +156,12 @@ public struct Settings: Equatable, Sendable {
         defaults.set(saveCorrectionEvidence, forKey: Key.saveCorrectionEvidence)
         defaults.set(echoCancellation, forKey: Key.echoCancellation)
         defaults.set(inlinePreview, forKey: Key.inlinePreview)
+        do {
+            defaults.set(try JSONEncoder().encode(dictationShortcut), forKey: Key.dictationShortcut)
+        } catch {
+            preconditionFailure("A validated scalar shortcut must encode")
+        }
+        defaults.set(inputDeviceUID, forKey: Key.inputDeviceUID)
         defaults.set(edgeGlow.enabled, forKey: Key.edgeGlowEnabled)
         defaults.set(edgeGlow.theme.rawValue, forKey: Key.edgeGlowTheme)
         defaults.set(edgeGlow.intensity, forKey: Key.edgeGlowIntensity)

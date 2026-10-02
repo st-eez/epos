@@ -12,7 +12,8 @@ vocabulary rules and text cleanup before inserting the final transcript.
 
 | Feature | What it does |
 | --- | --- |
-| Hold to dictate | Hold fn to record and release to insert the final text. |
+| Hold to dictate | Hold fn to record and release to insert the final text, or record your own hold shortcut. |
+| Microphone choice | Follow the system default or pin an input so connecting another microphone does not redirect Epos. |
 | Live preview | Show text in the destination field as you speak through the companion input method, or in the recording indicator when the companion is unavailable. |
 | Personal vocabulary | Add corrections for names, technical terms, and spoken developer symbols. |
 | Text cleanup | Remove fillers such as `um` and repeats such as `the the`. For example, `um, the the 2nd task` becomes `the second task`. |
@@ -57,11 +58,14 @@ can be less stable across rebuilds with an ad hoc signature.
 ## Use Epos
 
 1. Focus the field where you want to write.
-2. Hold fn and speak.
-3. Release fn to insert the final text.
+2. Hold fn, or your configured shortcut, and speak.
+3. Release the shortcut to insert the final text.
 
 Open the menu bar app to edit Corrections, adjust recording feedback, or enable
-launch at login. If Epos shows `Not inserted`, check the destination and its
+launch at login. Its Shortcut recorder changes the hold shortcut; Microphone
+chooses an input for Epos without changing the system default. A disconnected
+chosen microphone stays selected and unavailable until it returns or you choose
+another input. If Epos shows `Not inserted`, check the destination and its
 permissions before trying again. If it shows `Check the field`, inspect the text
 before repeating the dictation because it may already have been inserted.
 
@@ -76,8 +80,8 @@ See [diagnostics](docs/diagnostics.md) for storage locations and logging setting
 
 ## Current limits
 
-Epos uses one configured language, US English by default, and the fn shortcut.
-It has no language switcher or shortcut editor. Inline preview and text insertion
+Epos uses one configured language, US English by default, without a language
+switcher. Inline preview and text insertion
 depend on the destination app and its accessibility support. See
 [insertion](docs/insertion.md) for selection, focus, and delivery behavior.
 

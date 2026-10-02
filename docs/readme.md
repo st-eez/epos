@@ -1,9 +1,10 @@
 # Epos documentation
 
-Epos is a macOS menu bar dictation app. Hold fn to record, watch the provisional
+Epos is a macOS menu bar dictation app. Hold the configured shortcut to record, watch the provisional
 transcript, then release to deliver the cleaned final text to the captured field.
 Apple Speech performs recognition on the device. The feature pages below describe
 the implementation in `Sources/` and its regression coverage in `Tests/`.
+The shortcut defaults to fn; the menu also lets you pin a microphone.
 
 Before code changes or verification, read [development](development.md).
 Use [setup](setup.md) for installation and permissions. [The baseline
@@ -22,7 +23,9 @@ Search terms include common user wording and implementation names.
 | --- | --- | --- |
 | Installed app, signing, first launch, Privacy shortcut | install, onboarding, privacy settings | [Setup](setup.md) |
 | Microphone, Speech Recognition, Accessibility, speech asset readiness | permissions, TCC, speech model | [Setup](setup.md#permissions-and-readiness) |
-| Hold fn, release, deferred presses, missed release recovery | push-to-talk, hold to dictate, hotkey | [Dictation](dictation.md#push-to-talk) |
+| Hold shortcut, release, deferred presses, missed release recovery | fn, push-to-talk, hold to dictate, hotkey | [Dictation](dictation.md#push-to-talk) |
+| Record a modifier or key combination, restore fn | custom shortcut, remap, binding, keyboard shortcut | [Settings](settings.md#input-controls) |
+| Pin a microphone or follow the system default | mic picker, built-in microphone, AirPods, input device | [Settings](settings.md#input-controls) |
 | Microphone conversion, startup audio, input device recovery | mic switching, pre-roll, route changes | [Dictation](dictation.md#audio-and-recognition) |
 | Ignore speaker audio | echo cancellation, music bleed, background playback | [Dictation](dictation.md#ignore-speaker-audio) |
 | On-device recognition, locale, vocabulary context | local transcription, offline speech, custom vocabulary | [Dictation](dictation.md#audio-and-recognition) |
@@ -62,6 +65,6 @@ dates and corpus assumptions.
 
 Push-to-talk, one configured locale, deterministic cleanup, and personal
 corrections are the current product path. Toggle recording, transcript history,
-locale switching UI, cloud fallback, and a custom hotkey UI remain outside the
+locale switching UI and cloud fallback remain outside the
 baseline. The local LLM polish stage was removed after evaluation. See the
 [backlog](../specs/baseline.md#backlog-post-baseline) before adding capabilities.

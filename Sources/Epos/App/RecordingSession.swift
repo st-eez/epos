@@ -29,7 +29,7 @@ final class RecordingSession {
     private let reliability: ReliabilityRecording?
     private let latency: RecordingLatencyDiagnostics?
     private let evidenceRecorder: CorrectionEvidenceRecorder
-    private let isFnKeyHeld: @MainActor () -> Bool
+    private let isShortcutHeld: @MainActor () -> Bool
     private let isMicrophoneAccessMissing: @MainActor () -> Bool
     private let onEvent: @MainActor (RecordingSession, Event) -> Void
     private let log: EposLogger
@@ -75,7 +75,7 @@ final class RecordingSession {
         canonicalizer: TranscriptCanonicalizer,
         diagnostics: DiagnosticLogSink,
         evidenceRecorder: CorrectionEvidenceRecorder,
-        isFnKeyHeld: @escaping @MainActor () -> Bool,
+        isShortcutHeld: @escaping @MainActor () -> Bool,
         isMicrophoneAccessMissing: @escaping @MainActor () -> Bool,
         includeTranscriptText: Bool,
         latencyNow: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now },
@@ -93,7 +93,7 @@ final class RecordingSession {
             RecordingLatencyDiagnostics(recordingID: $0, diagnostics: diagnostics, now: latencyNow)
         }
         self.evidenceRecorder = evidenceRecorder
-        self.isFnKeyHeld = isFnKeyHeld
+        self.isShortcutHeld = isShortcutHeld
         self.isMicrophoneAccessMissing = isMicrophoneAccessMissing
         self.onEvent = onEvent
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
@@ -127,7 +127,11 @@ final class RecordingSession {
         }
         do {
             latency?.begin(.microphoneOpen)
-            try audio.start(targetFormat: format, echoCancellation: settings.echoCancellation)
+            try audio.start(
+                targetFormat: format,
+                echoCancellation: settings.echoCancellation,
+                inputDeviceUID: settings.inputDeviceUID
+            )
             latency?.end(.microphoneOpen)
             microphoneOpen = true
         } catch {
@@ -140,7 +144,8 @@ final class RecordingSession {
             stopMicrophone()
             clearAudioCallbacks()
             dogfood.stop(keeping: settings.saveAudioSamples)
-            complete(finalCharacters: 0, startNotice: StartReadiness.ready.noticeLabel, failed: true)
+            let notice = error is AudioInputDeviceError ? "Mic unavailable" : StartReadiness.ready.noticeLabel
+            complete(finalCharacters: 0, startNotice: notice, failed: true)
             return
         }
         RecordingCue.playStart()
@@ -232,8 +237,8 @@ final class RecordingSession {
         latency?.end(.recognizerFinalization, outcome: completion)
         stopMicrophone()
         promotePartialTranscriptAsFallbackFinalIfNeeded()
-        if recognizerFailed, phase == .held, isFnKeyHeld() {
-            log.error("recognizer failed while fn was held; holding the transcript until release")
+        if recognizerFailed, phase == .held, isShortcutHeld() {
+            log.error("recognizer failed while the shortcut was held; holding the transcript until release")
             onEvent(self, .recognitionFailedWhileHeld)
             await withCheckedContinuation { releaseWaiter = $0 }
         }

@@ -155,7 +155,7 @@ final class RecordingLatencyPipelineTests: XCTestCase {
             evidenceRecorder: CorrectionEvidenceRecorder(
                 evidence: CorrectionEvidenceStore(defaults: defaults), captureDelays: [], currentRecordingID: { nil }
             ),
-            isFnKeyHeld: { true }, isMicrophoneAccessMissing: { false }, includeTranscriptText: false,
+            isShortcutHeld: { true }, isMicrophoneAccessMissing: { false }, includeTranscriptText: false,
             latencyNow: { clock.now }, onEvent: { _, event in onEvent(event) }
         )
     }
@@ -171,12 +171,13 @@ private final class TimedMicrophone: MicrophoneCapture {
 
     init(clock: LatencyTestClock) { self.clock = clock }
 
-    func start(targetFormat: AVAudioFormat, echoCancellation: Bool) throws {
+    func start(targetFormat: AVAudioFormat, echoCancellation: Bool, inputDeviceUID: String?) throws {
         clock.advance(.milliseconds(7))
         if failStart { throw CocoaError(.fileReadUnknown) }
     }
 
     func stop() {}
+    func inputDevicesDidChange() {}
 }
 
 private final class TimedTranscriber: SpeechTranscribing, @unchecked Sendable {

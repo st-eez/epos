@@ -2,25 +2,31 @@
 
 ## Push-to-talk
 
-Hold fn with the destination field focused. Epos opens the microphone, plays a
+Hold the configured shortcut with the destination field focused. The default is
+fn; the menu's Shortcut recorder can change it. Epos opens the microphone, plays a
 start sound after capture starts, and captures the destination's insertion
-context. Release fn to stop capture, play the release sound, finalize recognition,
+context. Release the shortcut to stop capture, play the release sound, finalize recognition,
 and attempt one authoritative final write.
 
-The coordinator moves through idle, recording, and finalizing. Each fn hold has
+The coordinator moves through idle, recording, and finalizing. Each hold has
 one RecordingSession that owns capture callbacks, startup audio, the analyzer
 task, the frozen transcript transform, preview, insertion target and reliability
 record. It closes those resources before the coordinator returns to idle.
 Callbacks retained from a finished hold cannot update or feed a newer recording.
 A press during bootstrap or finalization is deferred and replayed after readiness returns, only
-if fn remains held. Audio before the deferred recording starts is unavailable.
+if the configured shortcut remains held. Audio before the deferred recording starts is unavailable.
 A release during analyzer startup stops the microphone immediately. The captured
 startup audio reaches the analyzer before it is finalized, so a short spoken hold
 can still produce a transcript.
 
-The hotkey reads global fn modifier changes. While fn is tracked as held, it
-checks hardware state every 500 ms to recover a release event lost during secure
-input, such as a password field or lock screen.
+The hotkey reads global modifier and key events through an active event tap.
+Modifier-only shortcuts start when the configured modifiers match; combinations
+start on the configured key-down with those modifiers. Releasing the key or a
+required modifier ends the hold. Combination key events are consumed, including
+repeats and the matching key-up. The tap schedules coordinator work outside its
+callback. A hardware check every 500 ms recovers missed releases and clears
+stale key suppression, including after secure input. Opening the shortcut
+recorder cancels pending holds and suspends dictation.
 
 ## Audio and recognition
 
@@ -43,12 +49,19 @@ Correction error aliases stay out of this bias list.
 Volatile partials replace the current segment's provisional tail. Final segments
 accumulate. The recording's correction rules and cleanup transform are captured
 once, so editing a dictionary during a hold does not change that hold's output.
-If recognition fails, Epos reports `Recognition lost`, waits for fn release, and
+If recognition fails, Epos reports `Recognition lost`, waits for shortcut release, and
 attempts to deliver text recognized before the failure. A trailing partial can
 serve as the final fallback.
 
-AudioCapture attempts to reopen the input path when the device configuration
-changes during a hold. A failed reopen ends the recording and reports `Mic lost`.
+The [Microphone menu](settings.md#input-controls) can pin an input by its Core
+Audio UID. Each open or recovery resolves that UID to its current device ID,
+binds Epos's audio unit, and verifies the binding. It leaves the system default
+unchanged. System default resolves the current macOS input instead. An
+unavailable pinned microphone blocks a new recording without falling back.
+
+AudioCapture attempts to reopen the input path when the device configuration or
+input inventory changes during a hold. A reconnected device is resolved again,
+so its device ID can change. A failed reopen ends the recording and reports `Mic lost`.
 Recovery behavior across real input devices needs installed app verification.
 Analyzer startup and speech finalization each have a ten second bound to escape
 framework hangs. A cancellation-ignoring startup cannot keep the coordinator
@@ -85,7 +98,7 @@ matching; [insertion](insertion.md) describes the destination checks.
 
 The path is wired by [AppCoordinator](../Sources/Epos/App/AppCoordinator.swift),
 [RecordingSession](../Sources/Epos/App/RecordingSession.swift),
-[FnHotkey](../Sources/Epos/Hotkey/FnHotkey.swift),
+[DictationHotkey](../Sources/Epos/Hotkey/DictationHotkey.swift),
 [AudioCapture](../Sources/Epos/Audio/AudioCapture.swift),
 [CapturePreRoll](../Sources/Epos/Audio/CapturePreRoll.swift), and
 [Transcriber](../Sources/Epos/Speech/Transcriber.swift).
@@ -93,7 +106,10 @@ The path is wired by [AppCoordinator](../Sources/Epos/App/AppCoordinator.swift),
 owns cleanup.
 
 Regression coverage includes
-[hotkey reconciliation](../Tests/EposTests/FnHotkeyStuckKeyTests.swift),
+[shortcut events and reconciliation](../Tests/EposTests/DictationHotkeyTests.swift),
+[shortcut validation](../Tests/EposTests/DictationShortcutTests.swift),
+[shortcut recording](../Tests/EposTests/ShortcutRecordingTests.swift),
+[device routing and inventory](../Tests/EposTests/AudioInputDeviceTests.swift),
 [audio lifecycle](../Tests/EposTests/CoordinatorAudioLifecycleTests.swift),
 [startup audio ordering](../Tests/EposTests/CapturePreRollTests.swift),
 [channel conversion](../Tests/EposTests/AudioCaptureConverterTests.swift),
@@ -102,3 +118,5 @@ Regression coverage includes
 [final transform](../Tests/EposTests/CoordinatorFinalCleaningTests.swift).
 Fakes prove coordinator decisions. They do not measure current microphone
 capture, recognition accuracy, device recovery, or release latency.
+The [stopped-engine probe](../probes/audio-input/verify) checks native device
+binding and readback without recording audio or changing the system default.

@@ -13,7 +13,7 @@ import XCTest
 @MainActor
 final class CoordinatorDeferredStartLatchTests: XCTestCase {
     /// Mutable stand-in for the live fn hardware read, handed to the coordinator's
-    /// injectable `isFnKeyHeld` provider.
+    /// injectable `isShortcutHeld` provider.
     private final class FnKeyState {
         var held = false
     }
@@ -60,7 +60,7 @@ final class CoordinatorDeferredStartLatchTests: XCTestCase {
                 started.count += 1
                 return "deferred-start-test-\(started.count)"
             },
-            isFnKeyHeld: { [fn] in fn.held },
+            isShortcutHeld: { [fn] in fn.held },
             inlinePreviewEnabled: false,
             autoStart: false
         )

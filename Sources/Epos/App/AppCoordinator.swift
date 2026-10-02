@@ -16,7 +16,7 @@ public enum FinalizationPhase: Equatable {
     case inserting
 }
 
-/// Coordinates readiness, fn presses and UI presentation.
+/// Coordinates readiness, shortcut presses and UI presentation.
 /// Each RecordingSession owns one hold through recognition, final delivery and
 /// cleanup. Its events update the published values the UI observes here.
 @MainActor
@@ -29,6 +29,8 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var partial: String = ""
     @Published public private(set) var amplitude: Float = 0
     @Published public private(set) var settings: Settings
+    @Published public private(set) var inputDeviceSnapshot: AudioInputDeviceSnapshot
+    @Published public internal(set) var isRecordingShortcut = false
     /// True while the indicator pill flashes the dropped-start notice; read by `RecordingIndicator`.
     @Published public private(set) var startUnavailable = false
     /// What that notice says. It names the actual blocker — "Preparing" while the
@@ -42,7 +44,7 @@ public final class AppCoordinator: ObservableObject {
     /// True while the indicator reports that the microphone died mid-recording and
     /// the dictation was cut short at that point.
     @Published public private(set) var microphoneUnavailable = false
-    /// True while the indicator reports that speech recognition died while fn was
+    /// True while the indicator reports that speech recognition died while the shortcut was
     /// still held: capture stops, and what was recognized before
     /// the failure is written at release.
     @Published public private(set) var recognitionUnavailable = false
@@ -57,7 +59,7 @@ public final class AppCoordinator: ObservableObject {
     @Published public private(set) var displayText: String = ""
 
     /// True while the inline preview is actively mirroring the volatile transcript
-    /// into the fn-press field (begin acked, channel healthy this whole recording).
+    /// into the shortcut-press field (begin acked, channel healthy this whole recording).
     @Published public private(set) var inlinePreviewMirroring = false
 
     /// What the HUD's transcript line shows: empty while the inline preview is
@@ -74,7 +76,8 @@ public final class AppCoordinator: ObservableObject {
     /// Where setting mutations persist; injectable so tests never write the
     /// user's real defaults.
     private let settingsDefaults: UserDefaults
-    private let hotkey: FnHotkey
+    let hotkey: DictationHotkey
+    private let inputDevices: AudioInputDeviceMonitor
     private let audio: any MicrophoneCapture
     private let transcriber: any SpeechTranscribing
     private let textInsertion: TextInsertionBackend
@@ -112,7 +115,7 @@ public final class AppCoordinator: ObservableObject {
     private lazy var cues = RecordingCuePresenter { [unowned self] in
         RecordingIndicator(coordinator: self)
     }
-    /// Keeps Electron apps' accessibility trees awake so the fn-press capture can
+    /// Keeps Electron apps' accessibility trees awake so the shortcut-press capture can
     /// see their focused element.
     private let electronAccessibilityWaker = ElectronAccessibilityWaker()
     /// Correction evidence for the dictation just written, and the post-insertion
@@ -142,7 +145,7 @@ public final class AppCoordinator: ObservableObject {
     private var currentRecordingID: String? { recordingSession?.recordingID }
     /// Cached at bootstrap; nil until then. Internal so latch tests can install one.
     var captureFormat: AVAudioFormat?
-    /// Mirrors the volatile transcript into the fn-press field as input-method
+    /// Mirrors the volatile transcript into the shortcut-press field as input-method
     /// marked text (`Settings.inlinePreview`, default on). Preview only — it is
     /// always discarded before the one authoritative write. Tests inject a fixed
     /// value; the app follows the live setting per recording.
@@ -160,9 +163,9 @@ public final class AppCoordinator: ObservableObject {
     /// the start. Latch + replay task are internal so tests can pin the behavior.
     var pendingDeferredStart = false
     var deferredStartReplayTask: Task<Void, Never>?
-    /// Live fn-key state consulted before replaying a latched press. Injectable so
+    /// Live shortcut state consulted before replaying a latched press. Injectable so
     /// tests can pin both replay outcomes; defaults to the hotkey's hardware read.
-    private let isFnKeyHeld: @MainActor () -> Bool
+    private let isShortcutHeld: @MainActor () -> Bool
     private var didBootstrap = false
     /// `didBootstrap` only means bootstrap STARTED. This is set when it has run
     /// to completion, which is what tells a press with no capture format apart:
@@ -181,28 +184,27 @@ public final class AppCoordinator: ObservableObject {
     /// The re-check-then-replay a post-bootstrap press kicks off. Internal so
     /// tests can await the whole recovery.
     var readinessRecoveryTask: Task<Void, Never>?
-    /// Accessibility trust as it stood when the fn monitor was installed. `NSEvent`
-    /// global keyboard monitors deliver only to a trusted process and do not
-    /// retro-activate when the grant arrives, so a monitor installed before the
-    /// first AX prompt is inert until it is reinstalled.
+    /// Accessibility trust when the event tap was installed. A tap denied before
+    /// the first AX prompt must be created again after the grant arrives.
     private var monitorInstalledUnderTrust: PermissionStatus?
     private var didBindHotkey = false
 
     public init(
-        hotkey: FnHotkey = FnHotkey(),
+        hotkey: DictationHotkey = DictationHotkey(),
         audio: any MicrophoneCapture = AudioCapture(),
         transcriber: (any SpeechTranscribing)? = nil,
         textInsertion: TextInsertionBackend = KeystrokeTextInjector(),
         insertionTargetObserverFactory: (@MainActor () -> any InsertionTargetObserver)? = nil,
         settings: Settings = Settings.load(),
         settingsDefaults: UserDefaults = .standard,
+        inputDevices: AudioInputDeviceMonitor? = nil,
         permissions: PermissionsGate = PermissionsGate(),
         refreshSpeechAsset: (@Sendable () async -> AssetStatus)? = nil,
         diagnostics: DiagnosticLogSink = .shared,
         corrections: CorrectionStore = CorrectionStore(),
         correctionEvidence: CorrectionEvidenceStore = CorrectionEvidenceStore(),
         recordingIDGenerator: @escaping @Sendable () -> String = RecordingID.make,
-        isFnKeyHeld: (@MainActor () -> Bool)? = nil,
+        isShortcutHeld: (@MainActor () -> Bool)? = nil,
         observedEditCaptureDelays: [TimeInterval] = AppCoordinator.defaultObservedEditCaptureDelays,
         includeTranscriptTextInDiagnostics: Bool? = nil,
         inlinePreviewEnabled: Bool? = nil,
@@ -228,13 +230,16 @@ public final class AppCoordinator: ObservableObject {
         self.corrections = corrections
         self.recordingIDGenerator = recordingIDGenerator
         self.reliabilityDiagnostics = diagnostics
-        self.isFnKeyHeld = isFnKeyHeld ?? { [hotkey] in hotkey.isFunctionKeyDown }
+        self.isShortcutHeld = isShortcutHeld ?? { [hotkey] in hotkey.isShortcutHeld }
         self.observedEditCaptureDelays = observedEditCaptureDelays
         self.noticeExpiryScheduler = noticeExpiryScheduler
         self.includeTranscriptTextInDiagnostics =
             includeTranscriptTextInDiagnostics ?? TranscriptDiagnosticTextPolicy.load()
         self.settings = settings
         self.settingsDefaults = settingsDefaults
+        let inputDevices = inputDevices ?? AudioInputDeviceMonitor()
+        self.inputDevices = inputDevices
+        self.inputDeviceSnapshot = inputDevices.snapshot
         self.permissions = permissions
         let assets = AssetManager(locale: settings.locale)
         self.assets = assets
@@ -249,13 +254,19 @@ public final class AppCoordinator: ObservableObject {
             return await assets.prepare()
         }
         self.transcriber = transcriber ?? Transcriber(locale: settings.locale)
+        hotkey.setShortcut(settings.dictationShortcut)
+        inputDevices.onChange = { [weak self] snapshot in
+            guard let self else { return }
+            self.inputDeviceSnapshot = snapshot
+            self.audio.inputDevicesDidChange()
+        }
         if autoStart {
             bindHotkey()
             bindDebugDictationTriggerIfEnabled()
             // Bootstrap at launch, not on first menu-icon click. This used to hang
             // off `.task` on the MenuBarExtra content view, which SwiftUI builds
             // only when the popover first opens — so `captureFormat` stayed nil and
-            // every fn press was dropped until the user happened to open the menu.
+            // every shortcut press was dropped until the user happened to open the menu.
             Task { await self.bootstrap() }
         }
     }
@@ -268,8 +279,12 @@ public final class AppCoordinator: ObservableObject {
         readinessProbe.snapshotPermissions()
     }
 
-    /// Whether a fn press can open a dictation right now, and if not, why.
+    /// Whether a shortcut press can open a dictation right now, and if not, why.
     public var startReadiness: StartReadiness {
+        if let uid = settings.inputDeviceUID,
+           !inputDeviceSnapshot.devices.contains(where: { $0.uid == uid }) {
+            return .blocked(.microphoneUnavailable)
+        }
         if captureFormat != nil { return .ready }
         if let startBlocker { return .blocked(startBlocker) }
         return .preparing
@@ -329,7 +344,7 @@ public final class AppCoordinator: ObservableObject {
         startBlocker = resolution.blocker
     }
 
-    /// Reinstall the fn monitor the first time a grant is observed to have arrived
+    /// Reinstall the shortcut event tap the first time a grant is observed to have arrived
     /// after the monitor went in. Idempotent — the recorded trust advances with the
     /// reinstall — and never fires mid-recording, where tearing the monitor out
     /// would swallow the release that ends the hold.
@@ -339,8 +354,8 @@ public final class AppCoordinator: ObservableObject {
             monitorInstalledUnderTrust = trust
             return
         }
-        guard monitorInstalledUnderTrust != .granted, state == .idle else { return }
-        log.info("accessibility trust arrived after launch; reinstalling the fn monitor")
+        guard monitorInstalledUnderTrust != .granted, state == .idle, !isRecordingShortcut else { return }
+        log.info("accessibility trust arrived after launch; reinstalling the shortcut event tap")
         hotkey.stop()
         hotkey.start()
         monitorInstalledUnderTrust = .granted
@@ -355,6 +370,7 @@ public final class AppCoordinator: ObservableObject {
     /// user is mid-release on does not open a phantom session (observed live:
     /// a 161ms, zero-result recording). Internal so tests can pin both outcomes.
     func replayDeferredStartIfNeeded() {
+        guard !isRecordingShortcut else { cancelDeferredStart(); return }
         guard pendingDeferredStart else { return }
         pendingDeferredStart = false
         guard captureFormat != nil else {
@@ -367,18 +383,18 @@ public final class AppCoordinator: ObservableObject {
             flashStartUnavailableNotice()
             return
         }
-        guard isFnKeyHeld() else {
-            log.info("pending start dropped: fn released while start was blocked")
+        guard isShortcutHeld() else {
+            log.info("pending start dropped: shortcut released while start was blocked")
             return
         }
         deferredStartReplayTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 75_000_000)
-            guard let self, self.state == .idle else { return }
-            guard self.isFnKeyHeld() else {
-                self.log.info("pending start dropped: fn released during replay debounce")
+            guard !Task.isCancelled, let self, self.state == .idle, !self.isRecordingShortcut else { return }
+            guard self.isShortcutHeld() else {
+                self.log.info("pending start dropped: shortcut released during replay debounce")
                 return
             }
-            self.log.info("replaying start: fn still held")
+            self.log.info("replaying start: shortcut still held")
             self.startRecording()
         }
     }
@@ -501,13 +517,21 @@ public final class AppCoordinator: ObservableObject {
     // MARK: - Recording lifecycle
 
     public func startRecording() {
+        guard !isRecordingShortcut else { return }
         guard state == .idle else {
             // A press during the finalize window starts the user's next utterance:
             // latch it and replay when the coordinator returns to idle.
             if state == .finalizing {
                 pendingDeferredStart = true
-                log.info("start requested during finalize; will retry at idle if fn held")
+                log.info("start requested during finalize; will retry at idle if the shortcut remains held")
             }
+            return
+        }
+        refreshInputDevices()
+        if let uid = settings.inputDeviceUID,
+           !inputDeviceSnapshot.devices.contains(where: { $0.uid == uid }) {
+            cancelDeferredStart()
+            flashStartUnavailableNotice(StartBlocker.microphoneUnavailable.noticeLabel)
             return
         }
         guard let format = captureFormat else {
@@ -515,7 +539,7 @@ public final class AppCoordinator: ObservableObject {
                 startAfterReadinessRefresh()
                 return
             }
-            // The launch window: fn pressed before bootstrap cached the format.
+            // The launch window: shortcut pressed before bootstrap cached the format.
             // Latch the press instead of dropping it; `bootstrap()` replays it.
             // The latch is silent by itself, and on a first launch it can hold for
             // the whole model download — so say so, without disturbing the replay.
@@ -551,12 +575,28 @@ public final class AppCoordinator: ObservableObject {
     }
 
     public func finishRecording() {
+        cancelDeferredStart()
         guard state == .recording else { return }
         state = .finalizing
         finalizationPhase = .finalizingSpeech
         RecordingCue.playEnd()
         cues.hideEdgeGlow()
         recordingSession?.release()
+    }
+
+    func cancelDeferredStart() {
+        pendingDeferredStart = false
+        deferredStartReplayTask?.cancel()
+        deferredStartReplayTask = nil
+    }
+
+    public func refreshInputDevices() {
+        inputDevices.refresh()
+        inputDeviceSnapshot = inputDevices.snapshot
+    }
+
+    public var canChangeInputControls: Bool {
+        state == .idle && !pendingDeferredStart && !isShortcutHeld() && !isRecordingShortcut
     }
 
     private func makeRecordingSession(recordingID: String?) -> RecordingSession {
@@ -573,7 +613,7 @@ public final class AppCoordinator: ObservableObject {
             canonicalizer: canonicalizer,
             diagnostics: reliabilityDiagnostics,
             evidenceRecorder: evidenceRecorder,
-            isFnKeyHeld: isFnKeyHeld,
+            isShortcutHeld: isShortcutHeld,
             isMicrophoneAccessMissing: { [weak self] in self?.snapshotPermissions().microphone != .granted },
             includeTranscriptText: includeTranscriptTextInDiagnostics,
             onEvent: { [weak self] session, event in self?.handleSessionEvent(event, from: session) }

@@ -15,6 +15,7 @@ swiftlint lint --quiet --no-cache
 scripts/audit --self-test
 scripts/verify-signed-installer
 probes/inline-preview/verify
+probes/audio-input/verify
 ```
 
 The Swift suite includes behavior tests and opt-in evaluation harnesses. The
@@ -28,12 +29,18 @@ labeling, and migration CLIs expose deterministic checks through `--test`.
 The installer check uses disposable bundles and injected failures. It does not
 build, sign, install, or quit the user's app.
 
+The audio input probe binds an isolated, stopped engine to the current default
+input and checks device readback and the unchanged system default. It records no
+audio. Run it on the host: a sandbox may expose no Core Audio devices even when
+HAL returns success. This check does not cover alternate-device capture, voice
+processing, or physical disconnect recovery.
+
 ## Installed app
 
 Follow [setup](setup.md) for installation, signing options, companion registration,
 and permissions. Runtime verification requires the installed signed app identity.
 Do not launch a DerivedData copy for runtime testing. Raw `xcodebuild` and Swift
-Package Manager establish compilation; microphone, Speech, Accessibility, fn-key,
+Package Manager establish compilation; microphone, Speech, Accessibility, shortcut,
 InputMethodKit, and delivery require installed-app checks.
 
 ## Build topology

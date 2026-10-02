@@ -21,7 +21,7 @@ final class CoordinatorAmbiguousDeliveryTests: XCTestCase {
             insertionTargetObserverFactory: { UnidentifiedOpaqueObserver() },
             settings: Settings(),
             permissions: .stub(),
-            isFnKeyHeld: { false },
+            isShortcutHeld: { false },
             inlinePreviewEnabled: true,
             noticeExpiryScheduler: expiry.schedule,
             autoStart: false

@@ -182,7 +182,7 @@ final class StartReadinessTests: XCTestCase {
         grants: MutablePermissionGrants
     ) -> AppCoordinator {
         AppCoordinator(
-            hotkey: FnHotkey(
+            hotkey: DictationHotkey(
                 hardwareStateReader: { false },
                 installMonitor: { _ in monitors.install() },
                 removeMonitor: { _ in monitors.remove() }

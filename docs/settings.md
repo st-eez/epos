@@ -9,10 +9,12 @@ own window.
 
 | Control | Initial value | Effect |
 | --- | --- | --- |
+| Shortcut | fn | Records a modifier or a modifier-plus-key hold shortcut |
+| Microphone | System default | Follows macOS input selection or pins a chosen input for Epos |
 | Launch at login | Off | Registers the main app with SMAppService |
 | Save audio samples | Off | Enables local WAV capture for new recordings |
 | Learn corrections | Off | Enables transcript and observed edit evidence for new recordings |
-| Ignore speaker audio | Off | Enables microphone voice processing at the next fn press |
+| Ignore speaker audio | Off | Enables microphone voice processing at the next shortcut press |
 | Stream into field | On | Attempts inline marked text through the companion on the next recording |
 | Edge glow | On | Selects the screen edge capture cue; changes apply to a current hold |
 | Glow intensity | 0.85 | Brightness multiplier, constrained to 0.4 through 1.6 |
@@ -31,6 +33,25 @@ See [dictation](dictation.md#ignore-speaker-audio),
 [corrections](corrections.md#learning-and-suggestions), and
 [recording feedback](recording-feedback.md#edge-glow) for behavior and limits.
 
+## Input controls
+
+Click the Shortcut control to open its recorder. Hold a modifier key, or a
+modifier with one other key, then release to save it. Escape cancels; Use fn
+restores the default. Dictation is suspended while the recorder is open. A
+configured key combination consumes its triggering key so it does not type into
+the destination field. Choose a shortcut that does not conflict with another app
+or macOS command.
+
+The Microphone menu lists available input devices and System default. Choosing a
+device pins its persistent Core Audio UID for Epos without changing the macOS
+default input. Connecting another microphone does not replace that choice. A
+disconnected selection stays selected and shows Unavailable; reconnect it or
+choose another input to dictate. System default follows macOS input changes.
+
+Shortcut and microphone changes are disabled while a hold is pending, recording,
+or finalizing, and while the shortcut recorder is open. Each recording freezes
+its microphone choice and voice processing setting.
+
 ## Menu actions
 
 Corrections opens the dictionary editor and activates its window. Privacy opens
@@ -44,7 +65,13 @@ the coordinator and current grants.
 Source is [Settings](../Sources/Epos/App/Settings.swift),
 [AppCoordinatorSettings](../Sources/Epos/App/AppCoordinatorSettings.swift), and
 [MenuBarView](../Sources/Epos/UI/MenuBarView.swift).
+[AppCoordinatorInputControls](../Sources/Epos/App/AppCoordinatorInputControls.swift)
+guards input changes; [ShortcutRecorderView](../Sources/Epos/UI/ShortcutRecorderView.swift)
+hosts the recorder.
 [SettingsTests](../Tests/EposTests/SettingsTests.swift) and
 [SmokeTests](../Tests/EposTests/SmokeTests.swift) cover persistence, defaults,
-and glow range validation. System login registration and native color panel
+and glow range validation.
+[CoordinatorInputControlsTests](../Tests/EposTests/CoordinatorInputControlsTests.swift)
+cover selection, deferred holds, recorder suspension, and missing inputs.
+System login registration, native shortcut recording, and native color panel
 interaction require installed app verification.

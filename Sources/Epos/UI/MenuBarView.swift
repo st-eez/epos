@@ -49,6 +49,7 @@ public struct MenuBarView: View {
         .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(.white.opacity(0.12), lineWidth: 1))
         .shadow(color: .black.opacity(0.22), radius: 20, x: 0, y: 12)
         .onAppear {
+            coordinator.refreshInputDevices()
             permissions = coordinator.snapshotPermissions()
             launchAtLogin = coordinator.launchAtLogin
             saveAudioSamples = coordinator.saveAudioSamples
@@ -98,6 +99,36 @@ public struct MenuBarView: View {
 
     private var metadataRows: some View {
         VStack(spacing: 0) {
+            metaRow("Shortcut") {
+                ShortcutRecorderView(
+                    shortcut: coordinator.dictationShortcut,
+                    isEnabled: coordinator.canChangeInputControls,
+                    onChange: { _ = coordinator.setDictationShortcut($0) },
+                    onRecordingChange: { coordinator.setRecordingShortcut($0) }
+                )
+            }
+            Divider().overlay(.white.opacity(0.08))
+            metaRow("Microphone") {
+                Menu {
+                    microphoneChoice("System default", uid: nil)
+                    if let uid = coordinator.inputDeviceUID,
+                       !coordinator.availableMicrophones.contains(where: { $0.uid == uid }) {
+                        Label("Unavailable", systemImage: "checkmark").disabled(true)
+                    }
+                    ForEach(coordinator.availableMicrophones) { device in
+                        microphoneChoice(device.name, uid: device.uid)
+                    }
+                } label: {
+                    Text(coordinator.selectedMicrophoneName)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(maxWidth: 185, alignment: .trailing)
+                }
+                .menuStyle(.borderlessButton)
+                .disabled(!coordinator.canChangeInputControls)
+                .help("Keep Epos on a chosen microphone")
+            }
+            Divider().overlay(.white.opacity(0.08))
             metaRow("Locale") {
                 Text(coordinator.localeIdentifier)
                     .font(.system(size: 12, weight: .semibold))
@@ -250,6 +281,16 @@ public struct MenuBarView: View {
     /// slider, the color panel that outlives the popover) is immediately what
     /// every control shows.
     private var glow: EdgeGlowSettings { coordinator.edgeGlowStyle }
+
+    private func microphoneChoice(_ name: String, uid: String?) -> some View {
+        Button { _ = coordinator.setInputDeviceUID(uid) } label: {
+            if coordinator.inputDeviceUID == uid {
+                Label(name, systemImage: "checkmark")
+            } else {
+                Text(name)
+            }
+        }
+    }
 
     private func glowBinding<Value>(
         _ keyPath: WritableKeyPath<EdgeGlowSettings, Value>
@@ -436,9 +477,15 @@ public struct MenuBarView: View {
         }
         return switch coordinator.state {
         case .idle:
-            Readiness(icon: "mic", title: "Ready to dictate", subtitle: "Hold fn in any text field", color: teal)
+            Readiness(
+                icon: "mic", title: "Ready to dictate",
+                subtitle: "Hold \(coordinator.dictationShortcut.displayName) in any text field", color: teal
+            )
         case .recording:
-            Readiness(icon: "waveform", title: "Recording", subtitle: "Release fn to finish", color: red)
+            Readiness(
+                icon: "waveform", title: "Recording",
+                subtitle: "Release \(coordinator.dictationShortcut.displayName) to finish", color: red
+            )
         case .finalizing:
             finalizationReadiness
         }

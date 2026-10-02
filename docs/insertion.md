@@ -1,6 +1,6 @@
 # Insertion
 
-Epos captures the destination at fn press and authorizes one final write after
+Epos captures the destination at shortcut press and authorizes one final write after
 release. Provisional text may appear while recording through the companion input
 method. The final path either commits through that companion or posts Unicode
 keystrokes.
@@ -22,7 +22,7 @@ source consent. A missing companion, unidentified target, refused focus lock, or
 failed channel restores the recording pill and its transcript for that hold.
 The menu toggle can disable inline preview.
 
-Preview is skipped when the fn-press target has selected text. Before every mark,
+Preview is skipped when the captured target has selected text. Before every mark,
 the companion also requires a readable empty selection and checks composition
 ownership against the recorded marked range and text. Unknown selections and
 ambiguous sets of client sessions use the HUD.

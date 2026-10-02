@@ -41,7 +41,7 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
             settings: Settings(),
             permissions: .stub(microphone: microphone),
             diagnostics: diagnostics,
-            isFnKeyHeld: { [fn] in fn.held },
+            isShortcutHeld: { [fn] in fn.held },
             observedEditCaptureDelays: [],
             inlinePreviewEnabled: false,
             autoStart: false

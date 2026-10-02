@@ -30,7 +30,9 @@ path is the recording pill followed by guarded Unicode keystrokes.
 
 The app targets macOS 26 or later. Disable the macOS Dictation fn shortcut in
 System Settings, Keyboard, Dictation so the same hold does not activate two
-dictation systems. Epos has one fn binding and no remapping UI.
+dictation systems. Epos defaults to fn. Use the menu's Shortcut recorder to choose
+another hold shortcut, and its Microphone menu to choose an input or follow the
+system default. See [input controls](settings.md#input-controls).
 
 ## Permissions and readiness
 
@@ -42,12 +44,14 @@ displays it without a locale switcher.
 The menu shows permission tiles and a readiness banner. Microphone, Speech
 Recognition, and Accessibility use `OK`, `Blocked`, or `Needed`. Pipeline
 blockers distinguish an installing or missing model, missing grants, and a speech
-engine that resolved no capture format. Asset installation has no progress bar.
+engine that resolved no capture format. A disconnected pinned microphone shows
+Mic unavailable until it returns or another input is chosen. Asset installation
+has no progress bar.
 
-A blocked pipeline is rechecked when the menu opens or fn is pressed. This
+A blocked pipeline is rechecked when the menu opens or the shortcut is pressed. This
 recheck reads grants and asset status without presenting new prompts or starting
 a missing model download. A newly granted Accessibility permission causes the
-fn monitor to be reinstalled when the app observes the grant while idle.
+shortcut event tap to be reinstalled when the app observes the grant while idle.
 
 The Privacy button opens System Settings. Grant changes and asset readiness are
 live system state; an existing source checkout says nothing about the grants of
@@ -62,7 +66,7 @@ Implementation lives in [StartReadinessProbe](../Sources/Epos/App/StartReadiness
 [StartReadinessTests](../Tests/EposTests/StartReadinessTests.swift) and
 [CoordinatorBootstrapLatchTests](../Tests/EposTests/CoordinatorBootstrapLatchTests.swift)
 cover blocker wording, permission observation, and deferred startup using fakes.
-Actual consent, model downloads, source registration, and fn event delivery
+Actual consent, model downloads, source registration, and shortcut event delivery
 require installed app verification.
 
 See [development](development.md), [dictation](dictation.md), and

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Why a fn press cannot open a dictation right now.
+/// Why a shortcut press cannot open a dictation right now.
 ///
 /// One value carries every face the app needs for the same fact — the pill's
 /// two-word notice, the menu banner's sentence, and the diagnostic log's
@@ -14,6 +14,8 @@ public enum StartBlocker: Equatable, Sendable {
     case speechModelUnavailable(String)
     /// Microphone access is denied, or the prompt was never answered.
     case microphoneDenied
+    /// A pinned input is disconnected, or the capture device cannot be opened.
+    case microphoneUnavailable
     /// Speech recognition access is denied, or the prompt was never answered.
     case speechDenied
     /// Model installed and grants in place, and the analyzer still resolved no
@@ -27,6 +29,7 @@ public enum StartBlocker: Equatable, Sendable {
         case .speechModelInstalling: "Preparing"
         case .speechModelUnavailable: "No model"
         case .microphoneDenied: "Mic blocked"
+        case .microphoneUnavailable: "Mic unavailable"
         case .speechDenied: "Speech blocked"
         case .speechEngineUnavailable: "Not ready"
         }
@@ -38,6 +41,7 @@ public enum StartBlocker: Equatable, Sendable {
         case .speechModelInstalling: "The speech model is still downloading"
         case .speechModelUnavailable: "The on-device speech model is not installed"
         case .microphoneDenied: "Allow Microphone in Privacy settings"
+        case .microphoneUnavailable: "Reconnect the selected microphone or choose another input"
         case .speechDenied: "Allow Speech Recognition in Privacy settings"
         case .speechEngineUnavailable: "The speech engine resolved no audio format"
         }
@@ -71,13 +75,14 @@ public enum StartBlocker: Equatable, Sendable {
         case .speechModelInstalling: "speech model still downloading"
         case .speechModelUnavailable(let message): "speech model unavailable (\(message))"
         case .microphoneDenied: "microphone access not granted"
+        case .microphoneUnavailable: "selected microphone unavailable"
         case .speechDenied: "speech recognition access not granted"
         case .speechEngineUnavailable: "speech engine resolved no audio format"
         }
     }
 }
 
-/// Whether a fn press can open a dictation, as one value the HUD and the menu
+/// Whether a shortcut press can open a dictation, as one value the HUD and the menu
 /// both read. `preparing` is the launch window before bootstrap has resolved a
 /// capture format; `blocked` is a resolved, named reason there is none.
 public enum StartReadiness: Equatable, Sendable {
