@@ -3,6 +3,7 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 install_app_path="${INSTALL_APP_PATH:-/Applications/Epos.app}"
+install_app_path="${install_app_path%/}"
 
 if pgrep -f "$install_app_path/Contents/MacOS/Epos" >/dev/null 2>&1; then
   cat >&2 <<MSG
@@ -18,9 +19,40 @@ fi
 built_app_path="$("$script_dir/build-signed-app.sh")"
 
 mkdir -p "$(dirname "$install_app_path")"
-ditto "$built_app_path" "$install_app_path"
+staging_dir="$(mktemp -d "$(dirname "$install_app_path")/.$(basename "$install_app_path").install.XXXXXX")"
+staged_app_path="$staging_dir/new.app"
+previous_app_path="$staging_dir/previous.app"
+installation_verified=false
+
+cleanup_installation() {
+  local status="$?"
+  if [[ "$installation_verified" == false && ( -e "$previous_app_path" || -L "$previous_app_path" ) ]]; then
+    if [[ -e "$install_app_path" || -L "$install_app_path" ]] &&
+      ! mv "$install_app_path" "$staging_dir/failed.app"; then
+      echo "error: could not restore the previous bundle; it remains at $previous_app_path" >&2
+      return "$status"
+    fi
+    if ! mv "$previous_app_path" "$install_app_path"; then
+      echo "error: could not restore the previous bundle; it remains at $previous_app_path" >&2
+      return "$status"
+    fi
+  fi
+  rm -rf "$staging_dir"
+  return "$status"
+}
+trap cleanup_installation EXIT
+
+# A fresh destination excludes artifacts from the previous build configuration.
+ditto "$built_app_path" "$staged_app_path"
+codesign --verify --deep --strict "$staged_app_path"
+
+if [[ -e "$install_app_path" || -L "$install_app_path" ]]; then
+  mv "$install_app_path" "$previous_app_path"
+fi
+mv "$staged_app_path" "$install_app_path"
 
 codesign --verify --deep --strict "$install_app_path"
+installation_verified=true
 
 # The inline preview streams into the field through the companion palette input
 # method; keep it in lockstep with the app. A registration that needs a logout
