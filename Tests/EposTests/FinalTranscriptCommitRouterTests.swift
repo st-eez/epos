@@ -96,7 +96,8 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         FinalTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
             target: observer,
-            latency: latency
+            latency: latency,
+            isAccessibilityTrusted: { true }
         )
     }
 
