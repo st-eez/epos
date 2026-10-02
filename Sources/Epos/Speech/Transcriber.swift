@@ -32,6 +32,7 @@ public protocol SpeechTranscribing: Sendable {
 public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
     public let locale: Locale
 
+    /// Shared by live dictation and signed evaluation hosts to keep preset fidelity.
     public static let speechPreset = SpeechTranscriber.Preset(
         transcriptionOptions: [],
         reportingOptions: [.volatileResults, .fastResults],
@@ -210,6 +211,7 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
         SpeechTranscriber(locale: locale, preset: speechPreset)
     }
 
+    /// Shared by live dictation and signed evaluation hosts so vocabulary limits match.
     /// Build an `AnalysisContext` from a bias list, trimming and de-duplicating.
     /// Returns nil for an empty list so the caller skips `setContext` entirely.
     public static func analysisContext(contextualStrings: [String]) -> AnalysisContext? {
