@@ -13,6 +13,9 @@ Unix socket. It renders the same cleaned provisional transcript as marked text
 in the captured application's field. Updates are coalesced to at most one per
 100 ms. The normal keyboard layout remains the user's layout.
 
+An empty provisional transcript clears Epos's owned composition while retaining
+the preview pass. Later text starts a new composition.
+
 The signed app installer installs the companion in lockstep with Epos. The local
 installer leaves it uninstalled. The companion needs live registration and input
 source consent. A missing companion, unidentified target, refused focus lock, or
@@ -98,6 +101,7 @@ attempts to expose Electron's focused accessibility tree.
 Tests cover [target guards](../Tests/EposTests/InsertionTargetGuardTests.swift),
 [focus signatures](../Tests/EposTests/InsertionTargetFocusSignatureTests.swift),
 [preview lifecycle](../Tests/EposTests/InlinePreviewSessionTests.swift),
+[empty preview updates](../Tests/EposTests/InlinePreviewEmptyTests.swift),
 [preview callback isolation](../Tests/EposTests/InlinePreviewCoordinatorTests.swift),
 [final preview safety](../Tests/EposTests/InlinePreviewFinalSafetyTests.swift),
 [socket failures](../Tests/EposTests/InlinePreviewTransportTests.swift), and

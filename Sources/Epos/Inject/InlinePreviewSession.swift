@@ -162,7 +162,6 @@ actor InlinePreviewSession {
         let sanitized = text
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
-        guard !sanitized.isEmpty else { return }
         guard sanitized != lastSentMark || pendingMark != nil else { return }
         pendingMark = sanitized
         startDrainIfNeeded()
@@ -180,7 +179,7 @@ actor InlinePreviewSession {
         // never touch text, so it is safe even after an ambiguous commit.
         transition(to: .discarded)
         pendingMark = nil
-        // Consume a pending begin or mark reply so its safety refusal
+        // Consume a pending begin, mark, or preview-clear reply so its safety refusal
         // cannot arrive after the coordinator has authorized a fallback write.
         await awaitSafetyReply()
         let shouldCancel = didAttemptMark && !compositionCancelled
@@ -348,7 +347,7 @@ actor InlinePreviewSession {
         await withCheckedContinuation { drainCompletions.append($0) }
     }
 
-    /// Discard waits for a begin or mark reply, without the coalescing interval.
+    /// Discard waits for a begin, mark, or clear reply, without the coalescing interval.
     /// That reply can carry a safety refusal that must precede any final write.
     private func awaitSafetyReply() async {
         guard safetyReplyInFlight else { return }
@@ -380,7 +379,18 @@ actor InlinePreviewSession {
         defer { finishDraining() }
         while phase == .marking, let text = pendingMark {
             pendingMark = nil
+            // Deduplicate against the in-flight state too. A newer revision
+            // must replace this update while its reply is pending.
+            lastSentMark = text
+            if text.isEmpty {
+                await clearPreviewComposition()
+                guard phase == .marking else { return }
+                await sleep(throttle)
+                continue
+            }
             didAttemptMark = true
+            compositionCancelled = false
+            cancelAcknowledged = false
             do {
                 let reply = try await sendSafetyCommand("mark \(text)")
                 _ = recordUnsafeTarget(reply)
@@ -397,13 +407,30 @@ actor InlinePreviewSession {
                 if unsafeTarget { return degrade("unsafeTarget") }
                 guard reply.hasPrefix("ok") else { return degrade("markRefused") }
                 marksSent += 1
-                lastSentMark = text
                 if marksSent == 1 { onFirstMarkRendered() }
             } catch {
                 recordUnknownSafetyFailure(error)
                 return degrade("markFailed")
             }
             await sleep(throttle)
+        }
+    }
+
+    /// Empty display text retires the owned composition while retaining the pass.
+    /// Sending `mark ` would leave the companion with a zero-length ownership record.
+    private func clearPreviewComposition() async {
+        guard didAttemptMark, !compositionCancelled else { return }
+        do {
+            let reply = try await sendSafetyCommand("cancel")
+            if recordUnsafeTarget(reply) || !reply.hasPrefix("ok") {
+                unsafeTarget = true
+                return degrade("previewCancelRefused")
+            }
+            cancelAcknowledged = true
+            compositionCancelled = true
+        } catch {
+            unsafeTarget = true
+            degrade("previewCancelFailed")
         }
     }
 
