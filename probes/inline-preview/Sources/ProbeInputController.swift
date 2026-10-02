@@ -92,6 +92,22 @@ final class EposProbeInputController: IMKInputController {
             + "owner=\(composition?.bundleID ?? "-") marked=\"\(composition?.text ?? "")\""
     }
 
+    /// Developer metadata only. Run with Epos stopped: opening a new socket
+    /// connection supersedes its previous peer before any command is dispatched.
+    static func ranges(expected: String) -> String {
+        guard lockedConnection == nil, composition == nil else {
+            return "err range inspection requires an idle companion"
+        }
+        let matches = controllers.allObjects.filter { $0.client()?.bundleIdentifier() == expected }
+        guard !expected.isEmpty, matches.count == 1, let client = matches[0].client() else {
+            return "err range inspection requires one matching client"
+        }
+        let selection = client.selectedRange()
+        let marked = client.markedRange()
+        return "ok ranges selection=\(selection.location),\(selection.length) "
+            + "marked=\(marked.location),\(marked.length) client=\(describe(client))"
+    }
+
     /// Pins the pass to one app. `expected` of "any" takes whichever session
     /// activated most recently; anything else must have a live session or the
     /// pass is refused.
@@ -198,8 +214,10 @@ final class EposProbeInputController: IMKInputController {
             }
         }
         let selectedRange = client.selectedRange()
-        let liveState = liveCompositionState(of: client, expected: composition)
+        let markedRange = client.markedRange()
+        let liveState = liveCompositionState(of: client, expected: composition, markedRange: markedRange)
         if liveState == .foreign {
+            logMarkRefusal(client: client, selection: selectedRange, marked: markedRange, state: liveState)
             return "err unsafe composition before preview"
         }
         guard ProbePreviewSafety.canWrite(
@@ -207,6 +225,7 @@ final class EposProbeInputController: IMKInputController {
             compositionState: liveState,
             continuingComposition: composition != nil
         ) else {
+            logMarkRefusal(client: client, selection: selectedRange, marked: markedRange, state: liveState)
             return composition == nil
                 ? "err preview requires a readable empty selection and no existing composition"
                 : "err unsafe selection or composition before preview"
@@ -394,7 +413,8 @@ final class EposProbeInputController: IMKInputController {
 
     private static func liveCompositionState(
         of client: IMKTextInput & NSObjectProtocol,
-        expected current: Composition?
+        expected current: Composition?,
+        markedRange: NSRange? = nil
     ) -> ProbePreviewSafety.CompositionState {
         let expected: (range: NSRange, text: String)?
         if let current, current.client === client {
@@ -402,9 +422,22 @@ final class EposProbeInputController: IMKInputController {
         } else {
             expected = nil
         }
-        return ProbePreviewSafety.compositionState(markedRange: client.markedRange(), expected: expected) {
+        return ProbePreviewSafety.compositionState(markedRange: markedRange ?? client.markedRange(), expected: expected) {
             client.attributedSubstring(from: $0)?.string
         }
+    }
+
+    private static func logMarkRefusal(
+        client: IMKTextInput & NSObjectProtocol,
+        selection: NSRange,
+        marked: NSRange,
+        state: ProbePreviewSafety.CompositionState
+    ) {
+        ProbeLog.write(
+            "mark refused selection=\(selection.location),\(selection.length) "
+                + "marked=\(marked.location),\(marked.length) state=\(state) "
+                + "continuing=\(composition != nil) client=\(describe(client))"
+        )
     }
 
     // MARK: - Helpers

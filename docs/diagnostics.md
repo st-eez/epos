@@ -24,6 +24,11 @@ unified log command:
 
 The companion keeps its own log at `~/Library/Caches/EposProbe/probe.log`; inspect
 it when debugging marked text.
+Refused marks record selection and marked ranges, composition state, and client
+type without transcript text. Its developer `ranges <bundle-id>` socket command
+returns those ranges without writing to the field. Use it only with Epos stopped
+and no probe driver active: every new connection supersedes the previous peer,
+which can tear down its preview even for a metadata command.
 
 Recording IDs join capture, recognizer, preview, guard, insertion, and terminal
 reliability events. Each recording emits schema-1 reliability metadata with counts,

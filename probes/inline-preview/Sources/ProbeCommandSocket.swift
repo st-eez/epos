@@ -200,6 +200,8 @@ final class ProbeCommandSocket {
             return "pong"
         case "status":
             return EposProbeInputController.status()
+        case "ranges":
+            return EposProbeInputController.ranges(expected: argument)
         case "begin":
             return EposProbeInputController.begin(
                 expected: argument.isEmpty ? "any" : argument,

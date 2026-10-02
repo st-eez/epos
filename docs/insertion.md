@@ -39,8 +39,8 @@ verification in each target app because rendering and teardown are host dependen
 ## Final delivery
 
 The captured target guard checks the application and field. Where Accessibility
-exposes text, it also requires the original value, caret, and selection. Opaque
-targets use process, window, and focus signature evidence. An absent or changed
+exposes an editable text context, it also requires the original value, caret, and
+selection. Opaque targets use process, window, and focus signature evidence. An absent or changed
 target refuses delivery. Epos does not restore focus or undo the user's edits.
 
 A healthy preview channel that acknowledged at least one mark can receive the
@@ -65,6 +65,24 @@ flags. Text appears only on key-down. Payloads are chunked on grapheme boundarie
 normally up to 20 UTF-16 units per event. The clipboard is untouched. A long
 keystroke write is an ordered event sequence, so target app verification must
 include long text and complex Unicode.
+
+## Terminal input
+
+Ghostty exposes its rendered terminal screen through Accessibility, including
+output from programs such as Claude Code. That text and the terminal's selection
+are separate from the command editor's prompt and caret. Treating a redraw as an
+input edit would refuse dictation even when the user stayed in the same field.
+
+The confirmed Ghostty terminal surface uses the opaque target guard. Application,
+window, and focused surface checks still apply. Its native search and rename
+fields keep exact value, caret, and selection checks, as do unconfirmed surfaces
+and other applications.
+
+Inline preview still requires a readable empty selection and provable composition
+ownership through the companion. A first refused mark uses the overlay and
+guarded final delivery. Current Ghostty preview refusals need live IMK range
+evidence; the terminal screen fix does not establish streaming support or waive
+composition safety.
 
 ## Delivery evidence
 

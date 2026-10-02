@@ -152,7 +152,17 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         }
         homeWindowTitle = windowTitle(of: baseline)
         if let value = textValue(of: baseline), let selectedRange = selectedTextRange(of: baseline) {
-            insertionContext = Self.context(in: value, selectedRange: selectedRange)
+            let isGhostty = homeApplicationBundleIdentifier == "com.mitchellh.ghostty"
+            if isGhostty {
+                AXUIElementSetMessagingTimeout(baseline, Self.focusedElementMessagingTimeout)
+            }
+            insertionContext = Self.context(
+                in: value,
+                selectedRange: selectedRange,
+                applicationBundleIdentifier: homeApplicationBundleIdentifier,
+                role: isGhostty ? rawStringAttribute(of: baseline, kAXRoleAttribute as String) : nil,
+                help: isGhostty ? rawStringAttribute(of: baseline, kAXHelpAttribute as String) : nil
+            )
         }
         homeHasReadableTextContext = insertionContext != nil
         homeOpaqueFocusSignature = homeHasReadableTextContext ? nil : focusSignature(of: baseline)
@@ -289,17 +299,31 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     }
 
     private func stringAttribute(of element: AXUIElement, _ attribute: String) -> String? {
-        var value: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
-        guard result == .success, let text = value as? String else { return nil }
+        guard let text = rawStringAttribute(of: element, attribute) else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
 
-    private static func context(
+    private func rawStringAttribute(of element: AXUIElement, _ attribute: String) -> String? {
+        var value: CFTypeRef?
+        let result = AXUIElementCopyAttributeValue(element, attribute as CFString, &value)
+        guard result == .success, let text = value as? String else { return nil }
+        return text
+    }
+
+    static func context(
         in value: String,
-        selectedRange: InsertionTargetTextRange
+        selectedRange: InsertionTargetTextRange,
+        applicationBundleIdentifier: String?,
+        role: String?,
+        help: String?
     ) -> InsertionTargetContext? {
+        // Ghostty's terminal AXValue is the rendered screen, and its range is a
+        // terminal selection. Only this confirmed surface uses opaque focus checks.
+        // Native fields and unconfirmed surfaces retain exact text validation.
+        guard applicationBundleIdentifier != "com.mitchellh.ghostty"
+                || role != (kAXTextAreaRole as String)
+                || help != "Terminal content area" else { return nil }
         guard selectedRange.location >= 0, selectedRange.length >= 0 else { return nil }
         let utf16 = value.utf16
         guard
