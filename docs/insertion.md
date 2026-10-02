@@ -88,7 +88,23 @@ marked range is unavailable, so Epos cannot prove composition ownership in that
 build and keeps preview in the overlay. Ghostty's direct `NSTextInputClient`
 implementation does not establish what its legacy IMK wrapper exposes. The
 terminal screen fix permits guarded final delivery without waiving preview
-safety. End-to-end delivery still needs a hold in the installed target app.
+safety. Steve confirmed final delivery into Ghostty's Claude Code prompt with the
+installed Release build, while preview remained in the overlay.
+
+An isolated native test on October 2 reproduced the legacy wrapper's unavailable
+marked range with both active foreign marked text and a cleared composition. A
+view matching Ghostty's separate preedit storage reported a concrete marked
+range directly, while its IMK wrapper returned the unavailable range. An empty
+selection therefore cannot establish that it is safe to begin or clear a mark.
+The companion safety checks cover this refusal. The fixture does not certify
+rendering or cancellation in Ghostty itself.
+
+The July 31 feasibility record describes successful inline preview in
+cmux/Ghostty, and retained companion logs contain accepted Ghostty mark calls.
+That implementation sent marks without the current selection and live ownership
+checks. Restoring direct preview requires a host bridge that can expose
+composition absence and exact live ownership. Removing those checks would
+restore the selection and foreign-composition failures reproduced in the audit.
 
 ## Delivery evidence
 

@@ -17,8 +17,9 @@ enum PreviewSafetyTests {
         preservesForeignCompositionWithUnreadableText()
         preservesHostStateWhenCancellingWithoutRecord()
         refusesUnreadableSelection()
+        refusesUnreadableCompositionWithEmptySelection()
         refusesSupersededCommands()
-        print("inline preview safety: 11 checks passed")
+        print("inline preview safety: 12 checks passed")
     }
 
     @MainActor
@@ -156,6 +157,28 @@ enum PreviewSafetyTests {
             markedRange: original.range, expected: original, readText: { _ in nil }
         )
         precondition(unreadableText == .unreadable, "an unreadable marked span was treated as owned")
+    }
+
+    private static func refusesUnreadableCompositionWithEmptySelection() {
+        let caret = NSRange(location: 0, length: 0)
+        let previous = (range: NSRange(location: 0, length: 21), text: "fixture preedit alpha")
+        // The live legacy IMK wrapper returned this range both with a foreign
+        // preedit and after clearing it. An empty selection cannot disambiguate it.
+        for expected in [nil, previous] {
+            let observed = ProbePreviewSafety.compositionState(
+                markedRange: replacementRange, expected: expected, readText: { _ in
+                    preconditionFailure("an unavailable range must not be read")
+                }
+            )
+            precondition(observed == .unreadable, "an unavailable composition was treated as absent or owned")
+            precondition(!ProbePreviewSafety.canWrite(
+                selectedRange: caret, compositionState: observed, continuingComposition: expected != nil
+            ), "an empty selection authorized a write with an unavailable composition")
+            precondition(ProbePreviewSafety.cancellationReplyWithoutComposition(
+                selectedRange: caret, compositionState: observed
+            ) == "err unsafe selection or composition before cancellation",
+            "an unavailable composition authorized cancellation")
+        }
     }
 
     @MainActor
