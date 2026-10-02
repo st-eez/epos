@@ -18,11 +18,14 @@ final class DictationHotkeyTests: XCTestCase {
     private let shift = CGEventFlags.maskShift.rawValue
     private let space: UInt16 = 49
 
-    private func makeHotkey(shortcut: DictationShortcut = .functionKey) -> DictationHotkey {
+    private func makeHotkey(
+        shortcut: DictationShortcut = .functionKey,
+        reconcileInterval: Duration = .seconds(60)
+    ) -> DictationHotkey {
         let hotkey = DictationHotkey(
             shortcut: shortcut,
             hardwareStateReader: { [state] in state.held },
-            reconcileInterval: .milliseconds(5),
+            reconcileInterval: reconcileInterval,
             keyStateReader: { [state] in state.heldKeys.contains($0) },
             installMonitor: { _ in NSNumber(value: 1) },
             removeMonitor: { _ in },
@@ -33,11 +36,16 @@ final class DictationHotkeyTests: XCTestCase {
         return hotkey
     }
 
-    private func waitUntil(_ condition: () -> Bool) async {
+    private func waitUntil(
+        _ condition: () -> Bool,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
         let deadline = ContinuousClock.now + .seconds(2)
         while !condition(), ContinuousClock.now < deadline {
             try? await Task.sleep(for: .milliseconds(5))
         }
+        XCTAssertTrue(condition(), "Expected hotkey callback within the wait budget", file: file, line: line)
     }
 
     private func flags(_ flags: UInt64) -> DictationKeyEvent {
@@ -189,7 +197,7 @@ final class DictationHotkeyTests: XCTestCase {
     }
 
     func testHardwareBackstopEndsALostReleaseAndAllowsTheNextPress() async {
-        let hotkey = makeHotkey()
+        let hotkey = makeHotkey(reconcileInterval: .milliseconds(5))
         state.held = true
         hotkey.handleFlagsChanged(pressed: true)
         await waitUntil { self.state.presses == 1 }
@@ -204,7 +212,7 @@ final class DictationHotkeyTests: XCTestCase {
     }
 
     func testAHeldShortcutSurvivesReconcileTicks() async {
-        let hotkey = makeHotkey()
+        let hotkey = makeHotkey(reconcileInterval: .milliseconds(5))
         state.held = true
         hotkey.handleFlagsChanged(pressed: true)
         await waitUntil { self.state.presses == 1 }
