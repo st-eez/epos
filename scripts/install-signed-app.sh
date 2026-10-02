@@ -38,6 +38,7 @@ staging_dir="$(mktemp -d "$install_app_parent/.Epos.app.install.XXXXXX")"
 staged_app_path="$staging_dir/new.app"
 previous_app_path="$staging_dir/previous.app"
 installation_verified=false
+new_app_placed=false
 
 cleanup_installation() {
   local status="$?"
@@ -49,6 +50,11 @@ cleanup_installation() {
     fi
     if ! mv "$previous_app_path" "$install_app_path"; then
       echo "error: could not restore the previous bundle; it remains at $previous_app_path" >&2
+      return "$status"
+    fi
+  elif [[ "$installation_verified" == false && "$new_app_placed" == true ]]; then
+    if ! mv "$install_app_path" "$staging_dir/failed.app"; then
+      echo "error: could not remove the rejected bundle; it remains at $install_app_path" >&2
       return "$status"
     fi
   fi
@@ -65,6 +71,7 @@ if [[ -e "$install_app_path" || -L "$install_app_path" ]]; then
   mv "$install_app_path" "$previous_app_path"
 fi
 mv "$staged_app_path" "$install_app_path"
+new_app_placed=true
 
 codesign --verify --deep --strict "$install_app_path"
 installation_verified=true
