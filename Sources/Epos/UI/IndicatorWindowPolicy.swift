@@ -10,9 +10,11 @@ import Foundation
 /// Both markers are checked because the toolchain's runner sets
 /// `SWIFT_TESTING_ENABLED` for the whole `swift test` process while
 /// `XCTestConfigurationFilePath` is only present under Xcode's runner — the
-/// same detection `EposLogger` uses to keep test bursts out of the dogfood log.
+/// direct `xctest` runner may set neither marker, so also check whether XCTest
+/// is loaded in the process.
 enum IndicatorWindowPolicy {
     nonisolated static let canPresentWindows =
         ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil
             && ProcessInfo.processInfo.environment["SWIFT_TESTING_ENABLED"] == nil
+            && NSClassFromString("XCTestCase") == nil
 }

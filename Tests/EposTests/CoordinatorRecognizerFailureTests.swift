@@ -122,7 +122,6 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
     func testRecordingThatCleansToNothingIsEmptyNotARefusedWrite() async throws {
         let log = try TemporaryDiagnosticLog()
         let coordinator = makeCoordinator(diagnostics: log.sink)
-        // Guard against a silent no-op if the cleaner's filler list ever changes.
 
         coordinator.startRecording()
         let session = coordinator.transcriptionTask
