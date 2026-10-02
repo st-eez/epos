@@ -83,5 +83,63 @@ The JSONL rows and adjacent summary preserve those settings and trial order.
 
 ## Results
 
-Pending the signed comparison. Production currently creates its analyzer when a
-hold begins and does not call preparation.
+The signed run completed on 2026-10-01 with 36 successful trials. It used six
+human-confirmed legacy clips, two repeats, and three arms. Clips ranged from 1.1
+to 7.5 seconds and contained 17.3 seconds of unique audio. Each arm consumed
+553,600 converted frames across its twelve trials. All expected, submitted, and
+consumed frame counts matched. Every trial produced identical raw and cleaned
+text to its matching unprepared trial. All 44 vocabulary terms matched the
+analyzer's context readback.
+
+| Arm | Median preparation ms | Median hold to first result ms | Paired first result delta ms | Median release to final ms | Paired release delta ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Unprepared | 0 | 1142.887 | 0 | 87.459 | 0 |
+| Inline | 29.769 | 1142.066 | +2.258 | 83.904 | +0.391 |
+| Advance | 28.651 | 1138.842 | -2.071 | 83.043 | -2.216 |
+
+Paired deltas compare the same clip and repeat. They are not differences between
+the aggregate medians. Negative values mean earlier results. Advance preparation
+also moved a median 28.815 ms of setup before the hold and retained the analyzer
+for two seconds before beginning input.
+
+Advance first-result deltas ranged from -6.795 to +8.372 ms. Their median was
+-0.883 ms in the first repeat and -2.887 ms in the second. Inline deltas ranged
+from -14.080 to +16.258 ms. Excluding the first trial's matched comparisons left
+advance at -2.169 ms and inline at +1.682 ms. The small differences also varied
+with arm order. The first unprepared trial took 1132.538 ms to its first result.
+
+Median evaluation RSS at readiness was 29.758 MiB unprepared, 29.852 MiB inline,
+and 29.875 MiB advance. Advance RSS after its two-second idle interval was
+29.781 MiB. The median readiness increase from each trial's own starting RSS was
+zero for every arm; the largest sampled advance increase was 0.047 MiB. These
+samples include the replay process and its framework state. They do not measure
+the normal menu bar app, Apple's Speech service, or five-minute standby retention.
+
+Preparation completed in roughly 29 ms while first input arrived about 93 ms
+after the hold. That timing is consistent with preparation finishing before the
+first simulated capture buffer, which would explain the small visible difference
+in this sample. It is an inference, not a cold-start measurement.
+
+The build was signed Debug with `-Onone`, a clean source tree at
+`f7118f7a5e59623eb275497e1696a54b2b02de60`, macOS 27 SDK, and macOS 27.0 build
+26A428 on arm64. A full accuracy evaluation ran before this comparison. The
+system Speech service's coldness is unknown. The sample contains legacy clips
+only and does not establish release-build, first-launch, microphone, or field
+delivery behavior.
+
+The private artifact is
+`.build/evals/analyzer-preparation-f7118f7-20261002.jsonl`. Its filename uses the
+UTC date. Its SHA-256 is
+`c9b87a967cac49905449e63a1cba0503c481ad1f7ee0f1bb62a909df1e13502f`.
+Every row carries the WAV, confirmed corpus, dictionary snapshot, and signed
+executable hashes. Private audio and reference text stay out of the repository.
+
+## Decision
+
+Retain fresh analyzer creation when each hold begins. The approximately 2.1 ms
+advance difference is less than 0.2% of the first-result time in this sample.
+Inline preparation's paired median is slightly slower. These results do not
+justify standby ownership, vocabulary and format invalidation, or additional
+cleanup paths in production. Keep the quiet comparison available for a measured
+startup problem. Cold first-hold delay, release builds, and longer idle retention
+remain outside this experiment's evidence.
