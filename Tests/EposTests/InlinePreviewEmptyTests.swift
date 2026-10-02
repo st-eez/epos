@@ -114,6 +114,57 @@ final class InlinePreviewEmptyTests: XCTestCase {
         await discardDuringClear(firstCancel: .success("ok cancelled"), expectedUnsafe: false)
     }
 
+    func testRevisionBackToSentTextDuringThrottleDropsThePendingMark() async {
+        let first = expectation(description: "original text acknowledged")
+        let throttle = PreviewGate(pauses: [first])
+        let transport = EmptyPreviewTransport()
+        let preview = makePreview(transport, throttle: throttle)
+        await preview.begin()
+        await preview.mark("original text")
+        await fulfillment(of: [first], timeout: 1)
+
+        await preview.mark("obsolete pending text")
+        await preview.mark("original text")
+        // Allow both intervals if a regression sends a redundant second mark.
+        await throttle.open()
+        await throttle.open()
+        await preview.awaitDrainCompletion()
+
+        let lines = await transport.lines
+        XCTAssertEqual(lines, [Self.begin, "mark original text"])
+        let report = await preview.report()
+        XCTAssertEqual(report.marksSent, 1)
+        XCTAssertNil(report.failure)
+        await preview.discard()
+    }
+
+    func testRevisionBackToInflightTextDropsThePendingMark() async {
+        let sent = expectation(description: "original mark awaiting its reply")
+        let commandGate = PreviewGate(pauses: [sent])
+        let first = expectation(description: "original text acknowledged")
+        let throttle = PreviewGate(pauses: [first])
+        let transport = EmptyPreviewTransport(heldLine: "mark original text", commandGate: commandGate)
+        let preview = makePreview(transport, throttle: throttle)
+        await preview.begin()
+        await preview.mark("original text")
+        await fulfillment(of: [sent], timeout: 1)
+
+        await preview.mark("obsolete pending text")
+        await preview.mark("original text")
+        await commandGate.open()
+        await fulfillment(of: [first], timeout: 1)
+        await throttle.open()
+        await throttle.open()
+        await preview.awaitDrainCompletion()
+
+        let lines = await transport.lines
+        XCTAssertEqual(lines, [Self.begin, "mark original text"])
+        let report = await preview.report()
+        XCTAssertEqual(report.marksSent, 1)
+        XCTAssertNil(report.failure)
+        await preview.discard()
+    }
+
     func testRevisionBackToPriorTextDuringAnInflightMarkIsSent() async {
         let first = expectation(description: "original text acknowledged")
         let intermediate = expectation(description: "intermediate text acknowledged")

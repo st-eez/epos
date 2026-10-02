@@ -162,8 +162,9 @@ actor InlinePreviewSession {
         let sanitized = text
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
-        guard sanitized != lastSentMark || pendingMark != nil else { return }
-        pendingMark = sanitized
+        // Matching the update already sent or awaiting its reply makes any
+        // queued revision obsolete.
+        pendingMark = sanitized == lastSentMark ? nil : sanitized
         startDrainIfNeeded()
     }
 
@@ -342,7 +343,7 @@ actor InlinePreviewSession {
     /// Suspends until no drain is in flight. The `draining` check and the
     /// continuation hand-off happen without an intervening suspension point, so a
     /// drain finishing in between cannot be missed.
-    private func awaitDrainCompletion() async {
+    func awaitDrainCompletion() async {
         guard draining else { return }
         await withCheckedContinuation { drainCompletions.append($0) }
     }

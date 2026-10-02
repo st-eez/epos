@@ -15,7 +15,9 @@ in the captured application's field. Updates are coalesced to at most one per
 
 Each update supplies the complete current provisional transcript to
 `setMarkedText`, replacing Epos's owned preview span. Existing text around that
-span is preserved. A repeated update is skipped when no newer revision is queued.
+span is preserved. An update matching the text already sent removes any obsolete
+queued revision. Commands awaiting a reply count as sent, so a newer revision
+still replaces them when needed.
 The native API treats the supplied string as the new composition; a payload
 containing only changed words
 does not portably preserve the rest of the provisional composition. A document
