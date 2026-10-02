@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Verify bundle replacement and rollback in disposable directories, without signing."""
+
+import os
+import pathlib
+import shutil
+import subprocess
+import tempfile
+
+source = pathlib.Path(__file__).resolve().parent / 'install-signed-app.sh'
+modes = ['success', 'fresh-parent', 'trailing-slash', 'lexical-parent', 'symlinked-parent', 'running',
+         'unsafe-directory', 'other-app', 'relative-path',
+         'staging-signature', 'replace', 'installed-signature', 'rollback']
+for mode in modes:
+    with tempfile.TemporaryDirectory(prefix='epos-installer-check-') as root_name:
+        root = pathlib.Path(root_name)
+        scripts = root / 'scripts'
+        stubs = root / 'bin'
+        probes = root / 'probes/inline-preview'
+        for directory in [scripts, stubs, probes]:
+            directory.mkdir(parents=True)
+        installed = root / 'destination/Epos.app'
+        installed.mkdir(parents=True)
+        (installed / 'old.txt').write_text('old bundle')
+        built = root / 'built.app'
+        built.mkdir()
+        (built / 'new.txt').write_text('fresh bundle')
+        shutil.copy2(source, scripts / 'install-signed-app.sh')
+        files = {
+            scripts / 'build-signed-app.sh': '#!/bin/bash\ntouch "$TEST_BUILD_MARKER"\nprintf "%s\\n" "$TEST_BUILT_APP"\n',
+            probes / 'install': '#!/bin/bash\nexit 0\n',
+            stubs / 'pgrep': '#!/bin/bash\n[[ "$TEST_MODE" == running ]] && exit 0\nexit 1\n',
+            stubs / 'codesign': '''#!/bin/bash
+target="${!#}"
+if [[ "$TEST_MODE" == staging-signature && "$target" == */new.app ]]; then exit 42; fi
+if [[ ( "$TEST_MODE" == installed-signature || "$TEST_MODE" == rollback ) && "$target" == */Epos.app ]]; then exit 43; fi
+exit 0
+''',
+            stubs / 'mv': '''#!/bin/bash
+if [[ "$TEST_MODE" == replace && "$1" == */new.app ]]; then exit 44; fi
+if [[ "$TEST_MODE" == rollback && "$1" == */previous.app ]]; then exit 45; fi
+exec /bin/mv "$@"
+''',
+        }
+        for path, content in files.items():
+            path.write_text(content)
+            path.chmod(0o755)
+        destination = str(installed)
+        if mode == 'fresh-parent':
+            installed = root / 'fresh-parent/deep/Epos.app'
+            destination = str(installed)
+        elif mode == 'trailing-slash':
+            destination += '/'
+        elif mode == 'lexical-parent':
+            destination += '/../Epos.app'
+        elif mode == 'symlinked-parent':
+            alias = root / 'alias'
+            alias.symlink_to(installed / '..')
+            destination = str(alias / 'Epos.app')
+        elif mode == 'unsafe-directory':
+            destination = str(installed.parent)
+        elif mode == 'other-app':
+            other_app = installed.parent / 'Other.app'
+            other_app.mkdir()
+            (other_app / 'unrelated.txt').write_text('unrelated app')
+            destination = str(other_app)
+        elif mode == 'relative-path':
+            destination = 'destination/Epos.app'
+        marker = root / 'build-ran'
+        env = dict(os.environ, PATH=str(stubs) + ':' + os.environ['PATH'],
+                   TEST_MODE=mode, TEST_BUILT_APP=str(built), INSTALL_APP_PATH=destination,
+                   TEST_BUILD_MARKER=str(marker))
+        result = subprocess.run(['/bin/bash', str(scripts / 'install-signed-app.sh')],
+                                env=env, capture_output=True, text=True)
+        staging = list(installed.parent.glob('.Epos.app.install.*'))
+        if mode in ['success', 'fresh-parent', 'trailing-slash', 'lexical-parent', 'symlinked-parent']:
+            assert result.returncode == 0 and (installed / 'new.txt').exists()
+            assert not (installed / 'old.txt').exists() and not staging
+        elif mode == 'running':
+            assert result.returncode == 66 and not marker.exists()
+            assert (installed / 'old.txt').exists() and not staging
+        elif mode in ['unsafe-directory', 'other-app', 'relative-path']:
+            assert result.returncode == 64 and not marker.exists()
+            assert (installed / 'old.txt').exists() and not staging
+            if mode == 'other-app':
+                assert (other_app / 'unrelated.txt').read_text() == 'unrelated app'
+        elif mode == 'rollback':
+            assert result.returncode == 43 and len(staging) == 1
+            assert (staging[0] / 'previous.app/old.txt').exists()
+            assert (staging[0] / 'failed.app/new.txt').exists()
+            assert str(staging[0] / 'previous.app') in result.stderr
+        else:
+            expected = {'staging-signature': 42, 'replace': 44, 'installed-signature': 43}[mode]
+            assert result.returncode == expected, (mode, result.returncode, result.stderr)
+            assert (installed / 'old.txt').exists() and not (installed / 'new.txt').exists()
+            assert not staging
+        print(f'{mode}: PASS')

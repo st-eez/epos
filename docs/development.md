@@ -13,6 +13,7 @@ swift build -Xswiftc -warnings-as-errors
 swift test
 swiftlint lint --quiet --no-cache
 scripts/audit --self-test
+scripts/verify-signed-installer
 probes/inline-preview/verify
 ```
 
@@ -24,6 +25,8 @@ disable diagnostic file logging and real indicator windows.
 The companion verification command builds that separate target with warnings as
 errors and runs native text-view safety checks. The corpus, confirmation,
 labeling, and migration CLIs expose deterministic checks through `--test`.
+The installer check uses disposable bundles and injected failures. It does not
+build, sign, install, or quit the user's app.
 
 ## Installed app
 
