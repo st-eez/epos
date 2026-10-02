@@ -13,6 +13,15 @@ Unix socket. It renders the same cleaned provisional transcript as marked text
 in the captured application's field. Updates are coalesced to at most one per
 100 ms. The normal keyboard layout remains the user's layout.
 
+Each update supplies the complete current provisional transcript to
+`setMarkedText`, replacing Epos's owned preview span. Existing text around that
+span is preserved. A repeated update is skipped when no newer revision is queued.
+The native API treats the supplied string as the new composition; a payload
+containing only changed words
+does not portably preserve the rest of the provisional composition. A document
+replacement range also requires host support, which Ghostty's current client
+does not provide.
+
 An empty provisional transcript clears Epos's owned composition while retaining
 the preview pass. Later text starts a new composition.
 
@@ -102,9 +111,10 @@ rendering or cancellation in Ghostty itself.
 The July 31 feasibility record describes successful inline preview in
 cmux/Ghostty, and retained companion logs contain accepted Ghostty mark calls.
 That implementation sent marks without the current selection and live ownership
-checks. Restoring direct preview requires a host bridge that can expose
-composition absence and exact live ownership. Removing those checks would
-restore the selection and foreign-composition failures reproduced in the audit.
+checks. The current preview path requires the bridge to expose composition
+absence and exact live ownership. A safe Epos-only alternative has not been
+verified. Removing those checks would restore the selection and foreign-composition
+failures reproduced in the audit.
 
 ## Delivery evidence
 
