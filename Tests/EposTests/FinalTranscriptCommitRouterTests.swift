@@ -16,23 +16,27 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         private let commitReply: String
         private let commitError: InlinePreviewTransportError?
         private let cancelReply: String
+        private let onSend: @Sendable (String) -> Void
 
         private(set) var lines: [String] = []
 
         init(
             commitReply: String = "ok committed 12",
             commitError: InlinePreviewTransportError? = nil,
-            cancelReply: String = "ok"
+            cancelReply: String = "ok",
+            onSend: @escaping @Sendable (String) -> Void = { _ in }
         ) {
             self.commitReply = commitReply
             self.commitError = commitError
             self.cancelReply = cancelReply
+            self.onSend = onSend
         }
 
         func open() async throws {}
 
         func send(_ line: String) async throws -> String {
             lines.append(line)
+            onSend(line)
             if line == "cancel" { return cancelReply }
             if line.hasPrefix("commit") {
                 if let commitError { throw commitError }
@@ -86,11 +90,13 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
 
     private func makeInsertion(
         backend: RecordingBackend,
-        observer: OpaqueTargetObserver = OpaqueTargetObserver()
+        observer: OpaqueTargetObserver = OpaqueTargetObserver(),
+        latency: RecordingLatencyDiagnostics? = nil
     ) -> FinalTranscriptInsertionSession {
         FinalTranscriptInsertionSession(
             insertionSession: backend.startInsertionSession(),
-            target: observer
+            target: observer,
+            latency: latency
         )
     }
 
@@ -104,9 +110,9 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         )
         await preview.begin()
         await preview.mark("hello there")
-        let deadline = Date().addingTimeInterval(3)
-        while await preview.report().marksSent == 0, Date() < deadline {
-            try? await Task.sleep(nanoseconds: 2_000_000)
+        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
+        while await preview.report().marksSent == 0, ContinuousClock().now < deadline {
+            await Task.yield()
         }
         let report = await preview.report()
         XCTAssertEqual(report.marksSent, 1)
@@ -114,6 +120,39 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
     }
 
     // MARK: - Tests
+
+    func testCommitTimingKeepsAcknowledgedAndAmbiguousResultsDistinct() async throws {
+        for error in [nil, InlinePreviewTransportError.replyTimedOut] {
+            let log = LatencyTestLog()
+            let clock = log.clock
+            let transport = ScriptedTransport(commitError: error, onSend: { line in
+                if line == "cancel" { clock.advance(.milliseconds(9)) }
+                if line.hasPrefix("commit ") { clock.advance(.milliseconds(21)) }
+            })
+            let preview = await makeHealthyPreview(transport: transport)
+            let backend = RecordingBackend()
+            let insertion = makeInsertion(backend: backend, latency: log.timing)
+            log.timing.begin(.releaseToWrite)
+
+            let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+                transcript: Self.transcript, preview: preview, insertion: insertion, latency: log.timing,
+                settle: { clock.advance(.milliseconds(30)) }
+            )
+
+            XCTAssertEqual(try log.row(.previewCancel)["durationMs"], "9.000")
+            XCTAssertEqual(try log.row(.baselineSettle)["durationMs"], "30.000")
+            XCTAssertEqual(try log.row(.imeCommit)["durationMs"], "21.000")
+            XCTAssertEqual(try log.row(.imeCommit)["outcome"], error == nil ? "completed" : "ambiguous")
+            XCTAssertTrue(backend.inserted.isEmpty)
+            if error == nil {
+                XCTAssertEqual(route, .completed(.accepted, viaIME: true))
+                XCTAssertEqual(try log.row(.releaseToWrite)["durationMs"], "60.000")
+            } else {
+                XCTAssertEqual(route, .imeAmbiguous)
+                XCTAssertFalse(try log.rows().contains { $0["stage"] == "release-to-write" })
+            }
+        }
+    }
 
     func testForeignCompositionDuringCancelBlocksBothDeliveryBackends() async {
         let transport = ScriptedTransport(cancelReply: "err unsafe composition")

@@ -33,12 +33,14 @@ enum FinalTranscriptCommitRouter {
         transcript: String,
         preview: InlinePreviewSession,
         insertion: FinalTranscriptInsertionSession?,
+        latency: RecordingLatencyDiagnostics? = nil,
         settle: () async -> Void = { try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay) }
     ) async -> Route? {
         guard let insertion, InlinePreviewSession.isCommittableText(transcript) else {
             return nil
         }
-        guard await preview.cancelCompositionForFinalCommit() else {
+        let cancelled = await preview.cancelCompositionForFinalCommit(latency: latency)
+        guard cancelled else {
             if await preview.hasUnsafeTarget() {
                 insertion.cancel()
                 return .completed(.targetRefused, viaIME: false)
@@ -51,10 +53,12 @@ enum FinalTranscriptCommitRouter {
         // Chromium hosts that reflect the removal into their AX value late. An
         // opaque target has nothing to poll, so it keeps the fixed settle the
         // keystroke path uses after its discard.
+        latency?.begin(.baselineSettle)
         let settledReadableBaseline = await insertion.settleReadableBaseline()
         if !settledReadableBaseline {
             await settle()
         }
+        latency?.end(.baselineSettle)
 
         switch insertion.authorizeFinalWrite(transcript) {
         case .refused(let result):
@@ -63,16 +67,24 @@ enum FinalTranscriptCommitRouter {
             break
         }
 
+        latency?.begin(.imeCommit)
         switch await preview.commitFinalTranscript(transcript) {
         case .targetUnsafe:
+            latency?.end(.imeCommit, outcome: .refused)
             insertion.cancel()
             return .completed(.targetRefused, viaIME: false)
         case .committed:
+            latency?.end(.imeCommit)
             insertion.recordExternalCommit(transcript)
             return .completed(.accepted, viaIME: true)
-        case .refused, .unavailable:
+        case .refused:
+            latency?.end(.imeCommit, outcome: .refused)
+            return .completed(insertion.insertFinalResult(transcript), viaIME: false)
+        case .unavailable:
+            latency?.end(.imeCommit, outcome: .unavailable)
             return .completed(insertion.insertFinalResult(transcript), viaIME: false)
         case .ambiguous:
+            latency?.end(.imeCommit, outcome: .ambiguous)
             insertion.cancel()
             return .imeAmbiguous
         }

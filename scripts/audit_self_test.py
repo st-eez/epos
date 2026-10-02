@@ -63,6 +63,29 @@ def run_self_test(root: Path) -> None:
          "reliability outcome schema=1 outcome=write-accepted-unverified "
          "writeAttempted=true writeAccepted=true latencyMs=130"),
     ]
+    lines.extend([
+        ("2026-07-29T00:00:00.080Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=target-authorization attempt=1 durationMs=10 elapsedMs=80 outcome=completed"),
+        ("2026-07-29T00:00:00.090Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=target-authorization attempt=2 durationMs=30 elapsedMs=90 outcome=completed"),
+        ("2026-07-29T00:00:00.100Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=target-authorization attempt=3 durationMs=100 elapsedMs=100 outcome=refused"),
+        ("2026-07-29T00:00:00.120Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=first-display-publication attempt=1 durationMs=-1 elapsedMs=120 outcome=unavailable"),
+        ("2026-07-29T00:00:00.121Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=delivery-readback attempt=1 durationMs=nan elapsedMs=121 outcome=completed"),
+        ("2026-07-29T00:00:00.122Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=keystroke-write attempt=1 durationMs=3 elapsedMs=122 outcome=completed"),
+        ("2026-07-29T00:00:00.123Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=keystroke-write attempt=1 durationMs=4 elapsedMs=123 outcome=completed"),
+        ("2026-07-29T00:00:00.124Z\tinfo\ttiming\trecordingID=a recording timing "
+         "schema=1 stage=ime-commit attempt=1 durationMs=-1 elapsedMs=124 outcome=completed"),
+        ("2026-07-29T00:01:00.125Z\tinfo\ttiming\trecordingID=b recording timing "
+         "schema=2 stage=target-authorization attempt=1 durationMs=20 elapsedMs=125 outcome=completed"),
+        ("2026-07-29T00:00:00.126Z\tinfo\tcoordinator\trecordingID=a transcript timing "
+         'eventText="recording timing schema=1 stage=ime-commit attempt=1 '
+         'durationMs=999 elapsedMs=999 outcome=completed"'),
+    ])
     (logs / "audit.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
     score = lambda errors, subs, ins, dels: {
         "wordErrors": errors, "substitutions": subs, "insertions": ins, "deletions": dels}
@@ -112,6 +135,17 @@ def run_self_test(root: Path) -> None:
     write_corpus(corpus, ledger_rows)
     report = build_report(logs, complete, None, corpus)
     operational = report["operational"]
+    stages = operational["stageTiming"]
+    assert stages["recordingsWithTiming"] == 1
+    assert stages["invalidEvents"] == 5
+    authorization = stages["stages"]["target-authorization"]["outcomes"]
+    assert authorization["completed"]["count"] == 2
+    assert authorization["completed"]["timing"] == {"count": 2, "p50Ms": 20.0, "p95Ms": 29.0}
+    assert authorization["refused"]["timing"]["p50Ms"] == 100
+    unavailable = stages["stages"]["first-display-publication"]["outcomes"]["unavailable"]
+    assert unavailable == {"count": 1, "durationlessCount": 1, "timing": None}
+    assert stages["stages"]["ime-commit"]["observations"] == 0
+    assert stages["stages"]["keystroke-write"]["observations"] == 0
     assert operational["recordingStarts"] == operational["classifiedRecordings"] == 9
     structured, legacy = operational["currentStructured"], operational["legacyInferred"]
     assert structured["recordingStarts"] == 5

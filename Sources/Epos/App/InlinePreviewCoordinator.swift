@@ -11,6 +11,7 @@ import Foundation
 final class InlinePreviewCoordinator {
     private let isEnabled: @MainActor () -> Bool
     private let log: EposLogger
+    private let latency: RecordingLatencyDiagnostics?
     /// Raised and lowered by the session as its channel becomes (or stops being)
     /// healthy enough to mirror. Generation-guarded, so a stale session can never
     /// speak for a later recording.
@@ -28,11 +29,13 @@ final class InlinePreviewCoordinator {
     init(
         isEnabled: @escaping @MainActor () -> Bool,
         log: EposLogger,
+        latency: RecordingLatencyDiagnostics? = nil,
         onMarkingActivityChange: @escaping @MainActor (Bool) -> Void,
         onFirstMarkRendered: @escaping @MainActor () -> Void
     ) {
         self.isEnabled = isEnabled
         self.log = log
+        self.latency = latency
         self.onMarkingActivityChange = onMarkingActivityChange
         self.onFirstMarkRendered = onFirstMarkRendered
     }
@@ -64,7 +67,8 @@ final class InlinePreviewCoordinator {
     /// recording — never a delayed or retried one.
     func makeSession(
         bundleIdentifier: String?,
-        transport: (any InlinePreviewTransport)? = nil
+        transport: (any InlinePreviewTransport)? = nil,
+        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) -> InlinePreviewSession? {
         generation += 1
         guard isEnabled(), let bundleIdentifier, !bundleIdentifier.isEmpty else {
@@ -74,6 +78,7 @@ final class InlinePreviewCoordinator {
         return InlinePreviewSession(
             transport: transport ?? UnixSocketInlinePreviewTransport(),
             bundleIdentifier: bundleIdentifier,
+            sleep: sleep,
             onMarkingActivityChange: { [weak self] active in
                 Task { @MainActor in
                     guard let self, self.generation == generation else { return }
@@ -104,7 +109,12 @@ final class InlinePreviewCoordinator {
 
     func startDiscard() {
         guard let session, discard == nil else { return }
-        discard = Task { await session.discard() }
+        latency?.begin(.previewDiscard)
+        discard = Task { [latency] in
+            await session.discard()
+            let report = await session.report()
+            latency?.end(.previewDiscard, outcome: report.cancelAcknowledged ? .completed : .unavailable)
+        }
     }
 
     /// Waits out the discard and emits the one per-recording diagnostic line. The
@@ -130,7 +140,9 @@ final class InlinePreviewCoordinator {
             // that is exactly the case keystrokes must not land on top of.
             // After an acked IME commit no keystrokes follow, so there is nothing
             // to settle for.
+            latency?.begin(.compositionSettle)
             try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay)
+            latency?.end(.compositionSettle)
         }
         log.info(report.logLine)
         self.session = nil

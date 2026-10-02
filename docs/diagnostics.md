@@ -33,6 +33,48 @@ empty speech, target refusal, backend refusal, delivery mismatch, verified
 delivery, and accepted but unverified delivery have distinct outcomes. A fully
 sent IME commit without acknowledgment is explicitly ambiguous.
 
+## Stage timing
+
+Each recording also emits metadata events such as
+`recording timing schema=1 stage=analyzer-startup attempt=1 durationMs=12.345 elapsedMs=45.678 outcome=completed`.
+Durations and elapsed time use `ContinuousClock`, with millisecond values to three
+decimal places. The timing schema is separate from the unchanged reliability
+schema. Recording IDs join the two.
+
+The stages cover microphone opening, target baseline capture, analyzer startup,
+the first recognizer result, the first nonempty cleaned display publication, the
+first acknowledged IME mark, release to recognizer stream completion, final
+transcript cleanup, preview cancellation and discard, composition and readable
+baseline waits, target authorization, IME commit, keystroke write, delivery
+readback, and session cleanup. Repeated authorizations after a safe IME refusal
+have distinct attempt numbers.
+
+The three first-result stages start at recording startup. A filler-only result
+can precede a useful display publication. Display publication measures the
+coordinator event, and IME acknowledgment includes its callback's handoff to the
+main actor. Neither measures a HUD paint or the host application's screen update.
+These timers exclude readiness checks and deferred fn presses, so they cannot
+establish physical fn-to-text or cold app startup latency.
+
+`release-to-write` ends when Unicode posting returns accepted or the IME commit
+acknowledgment is recorded. Readback runs separately and can finish after the
+session returns to idle. Accepted posting does not prove the field has displayed
+the text. Release during analyzer startup includes the remaining startup time in
+recognizer finalization. A recognizer that already ended before release records
+zero remaining finalization work.
+
+`scripts/audit` reports p50 and p95 durations for each stage and outcome, including
+sample counts. It counts unavailable first results with `durationMs=-1` and
+excludes them from percentiles. Unexecuted stages produce no sample. Failed,
+refused, ambiguous, and unavailable measurements stay separate from completed
+work. The parser rejects malformed measurements and conflicting duplicate
+attempts. A completed wait means the bounded wait returned; the authorization
+and reliability outcome determine whether delivery was safe and successful.
+Stages can overlap, so their percentiles cannot be added to produce total latency.
+
+The [timing contract](../specs/recording-stage-timing.md) defines the boundaries
+and limits. Instrumentation identifies costs; it does not establish a speed gain.
+
 ## Saved audio and correction evidence
 
 Save audio samples defaults off. When enabled for a recording, DogfoodTap copies
@@ -109,12 +151,18 @@ evidence and scoring contracts.
 Source is [EposLogger](../Sources/Epos/Diagnostics/EposLogger.swift),
 [TranscriptTimingDiagnostics](../Sources/Epos/Diagnostics/TranscriptTimingDiagnostics.swift),
 [ReliabilityDiagnostics](../Sources/Epos/Diagnostics/ReliabilityDiagnostics.swift),
+[RecordingLatencyDiagnostics](../Sources/Epos/Diagnostics/RecordingLatencyDiagnostics.swift),
 [DogfoodTap](../Sources/Epos/Audio/DogfoodTap.swift), and
 [SignedApplePresetEvalHost](../Sources/EposMacApp/SignedApplePresetEvalHost.swift).
 
 [DiagnosticsSmokeTests](../Tests/EposTests/DiagnosticsSmokeTests.swift) and
 [ReliabilityDiagnosticsTests](../Tests/EposTests/ReliabilityDiagnosticsTests.swift)
 cover log defaults and outcomes.
+[RecordingLatencyDiagnosticsTests](../Tests/EposTests/RecordingLatencyDiagnosticsTests.swift)
+and [RecordingLatencyPipelineTests](../Tests/EposTests/RecordingLatencyPipelineTests.swift)
+use an injected monotonic clock to check stage boundaries, missing results,
+refused writes, and readback separation. Commit routing tests cover acknowledged
+and ambiguous IME durations without another write.
 [SavedRecordingEvalSupportTests](../Tests/EposTests/SavedRecordingEvalSupportTests.swift)
 and [CanonicalizerCandidateEvalTests](../Tests/EposTests/CanonicalizerCandidateEvalTests.swift)
 cover artifact and candidate contracts. The Python command self-tests cover

@@ -65,6 +65,17 @@ def format_human(report: dict[str, Any]) -> str:
                      "reported outcome latency")
     append_partition(lines, "Legacy inferred", operational["legacyInferred"],
                      "finalizeToDone", "inferred finalize-to-done timing")
+    stage_timing = operational["stageTiming"]
+    lines.extend(["", "  Monotonic recording stage timing",
+                  f"    recordings with stages: {stage_timing['recordingsWithTiming']}",
+                  f"    invalid stage events excluded: {stage_timing['invalidEvents']}"])
+    for stage, measured in stage_timing["stages"].items():
+        for outcome, value in measured["outcomes"].items():
+            if value["count"]:
+                rendered = timing_line(f"{stage} [{outcome}]", value["timing"])
+                lines.append(rendered or f"    {stage} [{outcome}]: no measured duration")
+                lines.append(f"      observations={value['count']} "
+                             f"without-duration={value['durationlessCount']}")
     accuracy = report["labeledCorpusAccuracy"]
     lines.extend(["", "Corpus accuracy evidence"])
     if not accuracy["available"]:

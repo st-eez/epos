@@ -27,6 +27,7 @@ final class RecordingSession {
     private let settings: Settings
     private let canonicalizer: TranscriptCanonicalizer
     private let reliability: ReliabilityRecording?
+    private let latency: RecordingLatencyDiagnostics?
     private let evidenceRecorder: CorrectionEvidenceRecorder
     private let isFnKeyHeld: @MainActor () -> Bool
     private let isMicrophoneAccessMissing: @MainActor () -> Bool
@@ -38,6 +39,7 @@ final class RecordingSession {
     private var phase = Phase.held
     private var microphoneOpen = false
     private var analyzerReadyForAudio = false
+    private var recognizerCompletion: RecordingLatencyDiagnostics.Outcome?
     private var analyzerFinishTask: Task<Void, Never>?
     private var releaseWaiter: CheckedContinuation<Void, Never>?
     private var textInsertionSession: FinalTranscriptInsertionSession?
@@ -49,13 +51,16 @@ final class RecordingSession {
     private lazy var preview = InlinePreviewCoordinator(
         isEnabled: { [weak self] in self?.settings.inlinePreview ?? false },
         log: injectLog,
+        latency: latency,
         onMarkingActivityChange: { [weak self] active in
             guard let self, self.phase != .finished else { return }
             self.previewMirroring = active
             self.onEvent(self, .previewActivity(active))
         },
         onFirstMarkRendered: { [weak self] in
-            guard let self, self.phase == .held else { return }
+            guard let self, self.phase != .finished else { return }
+            self.latency?.end(.firstMarkAcknowledged)
+            guard self.phase == .held else { return }
             self.onEvent(self, .firstMarkRendered)
         }
     )
@@ -73,6 +78,7 @@ final class RecordingSession {
         isFnKeyHeld: @escaping @MainActor () -> Bool,
         isMicrophoneAccessMissing: @escaping @MainActor () -> Bool,
         includeTranscriptText: Bool,
+        latencyNow: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now },
         onEvent: @escaping @MainActor (RecordingSession, Event) -> Void
     ) {
         self.recordingID = recordingID
@@ -83,6 +89,9 @@ final class RecordingSession {
         self.settings = settings
         self.canonicalizer = canonicalizer
         self.reliability = recordingID.map { ReliabilityRecording(recordingID: $0, diagnostics: diagnostics) }
+        self.latency = recordingID.map {
+            RecordingLatencyDiagnostics(recordingID: $0, diagnostics: diagnostics, now: latencyNow)
+        }
         self.evidenceRecorder = evidenceRecorder
         self.isFnKeyHeld = isFnKeyHeld
         self.isMicrophoneAccessMissing = isMicrophoneAccessMissing
@@ -94,6 +103,9 @@ final class RecordingSession {
 
     /// Synchronous microphone open precedes the AX baseline and analyzer startup.
     func start(format: AVAudioFormat) {
+        latency?.begin(.firstRecognizerResult)
+        latency?.begin(.firstDisplayPublication)
+        if settings.inlinePreview { latency?.begin(.firstMarkAcknowledged) }
         audio.onBuffer = { [preRoll, reliability] buffer in
             reliability?.recordAudioBuffer(frameCount: Int(buffer.frameLength))
             preRoll.accept(buffer)
@@ -114,9 +126,15 @@ final class RecordingSession {
             self.onEvent(self, .captureFailed)
         }
         do {
+            latency?.begin(.microphoneOpen)
             try audio.start(targetFormat: format, echoCancellation: settings.echoCancellation)
+            latency?.end(.microphoneOpen)
             microphoneOpen = true
         } catch {
+            latency?.end(.microphoneOpen, outcome: .failed)
+            latency?.abandon(.firstRecognizerResult)
+            latency?.abandon(.firstDisplayPublication)
+            latency?.abandon(.firstMarkAcknowledged)
             log.error("recording setup failed: capture start (\(String(describing: error)))")
             reliability?.emit(.setupFailed)
             stopMicrophone()
@@ -126,11 +144,14 @@ final class RecordingSession {
             return
         }
         RecordingCue.playStart()
+        latency?.begin(.targetBaseline)
         textInsertionSession = FinalTranscriptInsertionSession(
             insertionSession: textInsertion.startInsertionSession(),
             target: targetObserverFactory(),
-            recordingID: recordingID
+            recordingID: recordingID,
+            latency: latency
         )
+        latency?.end(.targetBaseline)
         preview.start(
             bundleIdentifier: textInsertionSession?.targetApplicationBundleIdentifier(),
             selectedRange: textInsertionSession?.baselineSelectedRange
@@ -144,6 +165,11 @@ final class RecordingSession {
         guard phase == .held else { return }
         phase = .released
         reliability?.markReleased()
+        latency?.begin(.recognizerFinalization)
+        latency?.begin(.releaseToWrite)
+        if let recognizerCompletion {
+            latency?.end(.recognizerFinalization, outcome: recognizerCompletion)
+        }
         releaseWaiter?.resume()
         releaseWaiter = nil
         if !previewMirroring { preview.startDiscard() }
@@ -161,15 +187,22 @@ final class RecordingSession {
     private func run() async {
         let events: AsyncStream<TranscriptEvent>
         do {
+            latency?.begin(.analyzerStartup)
             events = try await transcriber.start(
                 contextualStrings: ["Epos"] + canonicalizer.speechContextualStrings
             )
+            latency?.end(.analyzerStartup)
             let transcriber = transcriber
             let buffers = preRoll.attach { buffer in transcriber.accept(buffer) }
             analyzerReadyForAudio = true
             log.info("capture pre-roll handed to the analyzer (buffers=\(buffers))")
             if phase == .released { finishAnalyzer() }
         } catch {
+            latency?.end(.analyzerStartup, outcome: .failed)
+            latency?.end(.recognizerFinalization, outcome: .failed)
+            latency?.end(.releaseToWrite, outcome: .failed)
+            latency?.abandon(.firstRecognizerResult)
+            latency?.abandon(.firstDisplayPublication)
             log.error("recording setup failed: \(String(describing: error))")
             reliability?.emit(.setupFailed)
             await cleanup()
@@ -181,9 +214,11 @@ final class RecordingSession {
         transcriptEvents: for await event in events {
             switch event {
             case .partial(let text):
+                latency?.end(.firstRecognizerResult)
                 handlePartialTranscript(text)
                 logTranscriptTiming(kind: .partial, eventText: text)
             case .final(let text):
+                latency?.end(.firstRecognizerResult)
                 handleFinalTranscriptSegment(text)
                 logTranscriptTiming(kind: .final, eventText: text)
             case .failed(let message):
@@ -192,6 +227,9 @@ final class RecordingSession {
                 break transcriptEvents
             }
         }
+        let completion: RecordingLatencyDiagnostics.Outcome = recognizerFailed ? .failed : .completed
+        recognizerCompletion = completion
+        latency?.end(.recognizerFinalization, outcome: completion)
         stopMicrophone()
         promotePartialTranscriptAsFallbackFinalIfNeeded()
         if recognizerFailed, phase == .held, isFnKeyHeld() {
@@ -199,8 +237,12 @@ final class RecordingSession {
             onEvent(self, .recognitionFailedWhileHeld)
             await withCheckedContinuation { releaseWaiter = $0 }
         }
+        latency?.begin(.transcriptCleanup)
         let correctionResult = canonicalizer.canonicalizeWithProvenance(finalText)
         let finalTranscript = TranscriptDeterministicCleaner.streamClean(correctionResult.output)
+        latency?.end(.transcriptCleanup)
+        latency?.abandon(.firstRecognizerResult)
+        latency?.abandon(.firstDisplayPublication)
         var microphoneDenied = false
         if !finalTranscript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             onEvent(self, .inserting)
@@ -210,6 +252,7 @@ final class RecordingSession {
                 recognizerFailed: recognizerFailed
             )
         } else {
+            latency?.abandon(.releaseToWrite)
             microphoneDenied = !recognizerFailed && isMicrophoneAccessMissing()
             if microphoneDenied {
                 log.error("recording produced no transcript: microphone access is not granted")
@@ -246,6 +289,9 @@ final class RecordingSession {
             canonicalizer.canonicalize(finalText + partial)
         )
         onEvent(self, .transcript(final: finalText, partial: partial, display: displayText))
+        if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            latency?.end(.firstDisplayPublication)
+        }
     }
 
     func promotePartialTranscriptAsFallbackFinalIfNeeded() {
@@ -268,9 +314,10 @@ final class RecordingSession {
 
     func makeInlinePreviewSession(
         bundleIdentifier: String?,
-        transport: (any InlinePreviewTransport)?
+        transport: (any InlinePreviewTransport)?,
+        sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) -> InlinePreviewSession? {
-        preview.makeSession(bundleIdentifier: bundleIdentifier, transport: transport)
+        preview.makeSession(bundleIdentifier: bundleIdentifier, transport: transport, sleep: sleep)
     }
 
     func stageFinalizationSessions(
@@ -300,6 +347,7 @@ final class RecordingSession {
         switch await commitFinalTranscript(finalTranscript) {
         case .completed(let insertionResult, let viaIME):
             let applied = insertionResult == .accepted
+            if !applied { latency?.end(.releaseToWrite, outcome: .refused) }
             if !applied {
                 // A refusal caused by revoked Accessibility is not the user
                 // having clicked away, and "Not inserted" would send them
@@ -339,6 +387,7 @@ final class RecordingSession {
             )
             finishTextInsertionSession()
         case .imeAmbiguous:
+            latency?.end(.releaseToWrite, outcome: .ambiguous)
             // The IME may have inserted the text before its acknowledgement was
             // lost. Ask the user to inspect the field and suppress another write.
             onEvent(self, .insertionUnavailable("Check the field"))
@@ -367,7 +416,8 @@ final class RecordingSession {
            let route = await FinalTranscriptCommitRouter.attemptIMECommit(
                transcript: transcript,
                preview: session,
-               insertion: textInsertionSession
+               insertion: textInsertionSession,
+               latency: latency
            ) {
             await finishInlinePreview()
             return route
@@ -380,11 +430,14 @@ final class RecordingSession {
         // marked has nothing to wait for, and its refusals stay instant.
         let compositionMayLinger = await finishInlinePreview()
         if await previewSession?.hasUnsafeTarget() == true {
+            latency?.end(.releaseToWrite, outcome: .refused)
             cancelTextInsertionSession()
             return .completed(.targetRefused, viaIME: false)
         }
         if compositionMayLinger {
-            await textInsertionSession?.settleReadableBaseline()
+            latency?.begin(.baselineSettle)
+            let polledBaseline = await textInsertionSession?.settleReadableBaseline()
+            latency?.end(.baselineSettle, outcome: polledBaseline == true ? .completed : .unavailable)
         }
         return .completed(insertFinalTranscriptResult(transcript), viaIME: false)
     }
@@ -438,14 +491,17 @@ final class RecordingSession {
 
     /// Every exit closes this hold's resources before its completion reaches the UI.
     private func cleanup() async {
+        latency?.begin(.sessionCleanup)
         stopMicrophone()
         clearAudioCallbacks()
         dogfood.stop(keeping: settings.saveAudioSamples)
         await finishInlinePreview()
+        latency?.abandon(.firstMarkAcknowledged)
         cancelTextInsertionSession()
         finishAnalyzer()
         await analyzerFinishTask?.value
         transcriptTiming.finish()
+        latency?.end(.sessionCleanup)
     }
 
     private func stopMicrophone() {

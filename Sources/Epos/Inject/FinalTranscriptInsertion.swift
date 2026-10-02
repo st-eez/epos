@@ -37,6 +37,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     private let insertionSession: any TextInsertionSession
     private let target: any InsertionTargetObserver
     private let recordingID: String?
+    private let latency: RecordingLatencyDiagnostics?
     private let isAccessibilityTrusted: @Sendable () -> Bool
     private let log = EposLogger(category: "inject")
 
@@ -50,11 +51,13 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         insertionSession: any TextInsertionSession,
         target: any InsertionTargetObserver = NullInsertionTargetObserver(),
         recordingID: String? = nil,
+        latency: RecordingLatencyDiagnostics? = nil,
         isAccessibilityTrusted: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() }
     ) {
         self.insertionSession = insertionSession
         self.target = target
         self.recordingID = recordingID
+        self.latency = latency
         self.isAccessibilityTrusted = isAccessibilityTrusted
         target.captureBaseline()
     }
@@ -64,7 +67,9 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             return result
         }
 
+        latency?.begin(.keystrokeWrite)
         guard insertionSession.insert(text) else {
+            latency?.end(.keystrokeWrite, outcome: .refused)
             log.error(
                 "final insertion refused: keystroke backend unavailable",
                 recordingID: recordingID
@@ -73,6 +78,8 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             return .backendRefused
         }
         insertedTranscript = text
+        latency?.end(.keystrokeWrite)
+        latency?.end(.releaseToWrite)
         log.info(
             "final insertion wrote chars=\(text.utf16.count)",
             recordingID: recordingID
@@ -84,6 +91,9 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     /// path's: a changed target cancels the session, after which no write of any
     /// kind can ever be issued.
     public func authorizeFinalWrite(_ text: String) -> FinalWriteAuthorization {
+        latency?.begin(.targetAuthorization)
+        var outcome = RecordingLatencyDiagnostics.Outcome.refused
+        defer { latency?.end(.targetAuthorization, outcome: outcome) }
         guard !didClose,
               insertedTranscript == nil,
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -112,6 +122,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             cancel()
             return .refused(.targetRefused)
         }
+        outcome = .completed
         return .authorized
     }
 
@@ -122,6 +133,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     public func recordExternalCommit(_ text: String) {
         guard !didClose, insertedTranscript == nil else { return }
         insertedTranscript = text
+        latency?.end(.releaseToWrite)
         log.info(
             "final insertion committed via ime chars=\(text.utf16.count)",
             recordingID: recordingID
@@ -203,6 +215,9 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         expected text: String,
         retryDelaysNanoseconds: [UInt64] = [20_000_000, 60_000_000, 120_000_000]
     ) async -> FinalInsertionDeliveryVerification {
+        latency?.begin(.deliveryReadback)
+        var timingOutcome = RecordingLatencyDiagnostics.Outcome.unavailable
+        defer { latency?.end(.deliveryReadback, outcome: timingOutcome) }
         guard insertedTranscript == text,
               let context = target.baselineInsertionContext(),
               context.selectedText != text else {
@@ -222,6 +237,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             observations.append(observed)
             if let observed {
                 if observed == text {
+                    timingOutcome = .completed
                     logDeliveryReadback(
                         expected: text,
                         observations: observations,
@@ -236,6 +252,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             observations: observations,
             baselineSelectedText: context.selectedText
         )
+        timingOutcome = outcome == .mismatched ? .failed : .unavailable
         logDeliveryReadback(
             expected: text,
             observations: observations,

@@ -10,6 +10,7 @@ import re
 from typing import Any, Iterable
 
 from audit_common import OPERATIONAL_BUCKETS, OUTCOME_ALIASES, numeric, percentage, timing
+from audit_timing import stage_timing_report
 
 ID_RE = re.compile(r"(?:^|\s)recordingID=([A-Za-z0-9._-]+)(?:\s|$)")
 START_RE = re.compile(r"(?:^|\s)recordingID=[A-Za-z0-9._-]+ recording start$")
@@ -176,7 +177,8 @@ def partition(items: list[dict[str, Any]], terminal_name: str) -> dict[str, Any]
 
 def operational_report(path: Path) -> dict[str, Any]:
     files = log_files(path)
-    classified = [classify(session) for session in sessions(events(files))]
+    recordings = sessions(events(files))
+    classified = [classify(session) for session in recordings]
     structured = [item for item in classified if item["source"] == "structured"]
     unsupported = [item for item in classified if item["source"] == "unsupported"]
     inferred = [item for item in classified if item["source"] == "inferred"]
@@ -187,4 +189,5 @@ def operational_report(path: Path) -> dict[str, Any]:
         "currentStructured": partition(structured, "releaseToOutcome"),
         "unsupportedStructured": partition(unsupported, "releaseToOutcome"),
         "legacyInferred": partition(inferred, "finalizeToDone"),
+        "stageTiming": stage_timing_report(recordings),
     }

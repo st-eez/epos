@@ -226,8 +226,11 @@ actor InlinePreviewSession {
     /// part of the AX-readable value, so it has to be gone before the guard runs.
     /// Returns true only on a positive ack. Unconfirmed cleanup blocks both
     /// final backends because a composition may still occupy the field.
-    func cancelCompositionForFinalCommit() async -> Bool {
+    func cancelCompositionForFinalCommit(latency: RecordingLatencyDiagnostics? = nil) async -> Bool {
         guard isEligibleForFinalCommit() else { return false }
+        latency?.begin(.previewCancel)
+        var outcome = RecordingLatencyDiagnostics.Outcome.failed
+        defer { latency?.end(.previewCancel, outcome: outcome) }
         transition(to: .committing)
         pendingMark = nil
         // Reply alignment is load-bearing: the transport pairs each request
@@ -238,22 +241,26 @@ actor InlinePreviewSession {
         await awaitDrainCompletion()
         guard phase == .committing else { return false }
         guard !unsafeTarget else {
+            outcome = .refused
             degrade("unsafeTarget")
             return false
         }
         do {
             let reply = try await transport.send("cancel")
             if recordUnsafeTarget(reply) {
+                outcome = .refused
                 degrade("unsafeTarget")
                 return false
             }
             guard reply.hasPrefix("ok") else {
+                outcome = .refused
                 unsafeTarget = true
                 degrade("commitCancelRefused")
                 return false
             }
             cancelAcknowledged = true
             compositionCancelled = true
+            outcome = .completed
             return true
         } catch {
             unsafeTarget = true
