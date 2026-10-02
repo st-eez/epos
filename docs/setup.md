@@ -8,9 +8,13 @@ Use an Apple Development certificate for development. One can be obtained with a
 free Apple ID in Xcode. Quit the running Epos app and run from the repository root:
 
 ```sh
-scripts/install-signed-app.sh
+CONFIGURATION=Release scripts/install-signed-app.sh
 open /Applications/Epos.app
 ```
+
+Release enables compiler optimizations for daily use. The build script defaults
+to Debug for development; the signed saved-audio evaluation hosts require that
+configuration. Use `CONFIGURATION=Debug` when running those evaluations.
 
 The installer builds and verifies a signature with a team identifier, copies the
 bundle into `/Applications`, and installs the inline preview companion. First

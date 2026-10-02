@@ -10,6 +10,7 @@ enum PreviewSafetyTests {
         preservesSelectedText()
         preservesForeignComposition()
         cancelsPreviewAtCaret()
+        clearsAndRestartsPreviewAtCaret()
         preservesUnmarkedOtherField()
         preservesSelectionAfterHostEndsComposition()
         preservesForeignCompositionAfterHostEndsOurMark()
@@ -17,7 +18,7 @@ enum PreviewSafetyTests {
         preservesHostStateWhenCancellingWithoutRecord()
         refusesUnreadableSelection()
         refusesSupersededCommands()
-        print("inline preview safety: 10 checks passed")
+        print("inline preview safety: 11 checks passed")
     }
 
     @MainActor
@@ -55,6 +56,25 @@ enum PreviewSafetyTests {
             compositionState: state(of: view, expected: expected),
             continuingComposition: expected != nil
         )
+    }
+
+    @MainActor
+    private static func clearsAndRestartsPreviewAtCaret() {
+        let view = NSTextView(frame: .zero)
+        view.string = "prefix suffix"
+        let original = view.string
+        let caret = NSRange(location: 7, length: 0)
+        view.setSelectedRange(caret)
+        for text in ["first preview", "next preview"] {
+            precondition(canWrite(to: view), "cleared preview could not restart")
+            mark(text, in: view)
+            let owned = (range: NSRange(location: caret.location, length: (text as NSString).length), text: text)
+            precondition(canWrite(to: view, expected: owned), "restarted preview lost composition ownership")
+            discard(view)
+            precondition(state(of: view) == .absent, "cleared preview left marked text")
+            precondition(view.string == original, "clearing preview altered surrounding text")
+            precondition(view.selectedRange() == caret, "clearing preview moved the caret")
+        }
     }
 
     @MainActor
