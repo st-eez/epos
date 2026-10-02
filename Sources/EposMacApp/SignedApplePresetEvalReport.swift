@@ -17,6 +17,10 @@ struct ApplePresetEvalRow: Codable {
     let elapsedSeconds: Double
     let rtfX: Double?
     let error: String?
+    let correctionDictionaryFingerprint: String?
+    let contextualStrings: [String]?
+    let contextReadback: [String]?
+    let evalProvenance: ApplePresetEvalProvenance?
 
     var isEmpty: Bool {
         transcript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -37,11 +41,28 @@ enum ApplePresetEvalReport {
                 .filter { $0.arm == .baseline }
                 .map { ($0.file, $0) }
         )
+        let hasContextMetadata = rows.contains { $0.contextualStrings != nil }
         var lines = [
             "Apple on-device transcriber preset eval:",
             "  recordings: \(expectedRowsPerArm)",
             "  arm order: rotated once per recording",
+            "  baseline context: " + (hasContextMetadata
+                ? "canonical vocabulary from the frozen persisted dictionary" : "unrecorded in legacy artifact"),
+            "  control context: " + (hasContextMetadata ? "none" : "unrecorded in legacy artifact"),
         ]
+        if let row = rows.first, let provenance = row.evalProvenance {
+            lines.append("  dictionary SHA-256: \(row.correctionDictionaryFingerprint ?? "unknown")")
+            lines.append("  corpus SHA-256: \(provenance.corpusSHA256)")
+            lines.append("  source revision: \(provenance.sourceRevision ?? "unknown")")
+            lines.append("  source tree dirty: \(provenance.sourceTreeDirty.map(String.init) ?? "unknown")")
+            lines.append(
+                "  build: \(provenance.buildConfiguration ?? "unknown") "
+                    + "optimization=\(provenance.compilerOptimization ?? "unknown") "
+                    + "sdk=\(provenance.sdk ?? "unknown")"
+            )
+            lines.append("  runtime: \(provenance.osVersion) \(provenance.architecture)")
+            lines.append("  executable SHA-256: \(provenance.executableSHA256)")
+        }
         for arm in enabledArms {
             let armRows = rows.filter { $0.arm == arm }
             let rawErrors = armRows.reduce(0) { $0 + $1.transcriptScore.wordErrors }
@@ -58,12 +79,17 @@ enum ApplePresetEvalReport {
             let audio = armRows.reduce(0) { $0 + $1.audioDurationSeconds }
             let elapsed = armRows.reduce(0) { $0 + $1.elapsedSeconds }
             let comparison = compare(armRows, baseline: baseline)
+            let matchedContext = armRows.filter { row in
+                guard let expected = row.contextualStrings, let actual = row.contextReadback else { return false }
+                return expected == actual
+            }.count
             lines.append(
                 "  \(arm.rawValue): rows=\(armRows.count)/\(expectedRowsPerArm) "
                     + "rawWER=\(format(Double(rawErrors) / Double(max(totalWords, 1)), 6)) "
                     + "outputWER=\(format(Double(outputErrors) / Double(max(totalWords, 1)), 6)) "
                     + "exactRaw/output=\(rawExact)/\(outputExact) "
                     + "failed=\(failed) empty=\(empty) "
+                    + "contextReadbackMatched=\(matchedContext) "
                     + "outputWins/losses/ties-vs-current="
                     + "\(comparison.wins)/\(comparison.losses)/\(comparison.ties) "
                     + "RTFx=\(elapsed > 0 ? format(audio / elapsed, 2) : "n/a")"

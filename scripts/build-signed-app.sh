@@ -87,6 +87,12 @@ app_path="$symroot/$configuration/Epos.app"
 
 cd "$repo_root"
 
+epos_source_revision="$(git rev-parse HEAD)"
+epos_source_tree_dirty=0
+if [[ -n "$(git status --porcelain --untracked-files=normal -- . ':!Resources/Info.plist' ':!Resources/Epos.entitlements')" ]]; then
+  epos_source_tree_dirty=1
+fi
+
 if command -v xcodegen >/dev/null 2>&1; then
   xcodegen generate >&2
 fi
@@ -97,6 +103,8 @@ xcodebuild \
   -configuration "$configuration" \
   -destination 'platform=macOS' \
   SYMROOT="$symroot" \
+  EPOS_SOURCE_REVISION="$epos_source_revision" \
+  EPOS_SOURCE_TREE_DIRTY="$epos_source_tree_dirty" \
   DEVELOPMENT_TEAM="$DEVELOPMENT_TEAM" \
   CODE_SIGN_IDENTITY="$code_sign_identity" \
   build >&2

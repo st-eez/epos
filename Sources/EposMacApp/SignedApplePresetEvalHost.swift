@@ -1,6 +1,5 @@
 #if DEBUG
 import AVFoundation
-import CryptoKit
 import Darwin
 import Epos
 import Foundation
@@ -38,6 +37,7 @@ enum SignedApplePresetEvalHost {
             isDirectory: false
         )
         let corpus = try ConfirmedEvalCorpus.load(from: corpusURL)
+        let provenance = try ApplePresetEvalProvenance(corpusURL: corpusURL)
         let entries = selectedEntries(corpus, environment: environment)
         guard !entries.isEmpty else {
             throw EvalError.noRecordings(recordingsDirectory.path)
@@ -69,7 +69,7 @@ enum SignedApplePresetEvalHost {
         let enabledArms = ApplePresetArm.allCases.filter {
             availability.available[$0] != nil
         }
-        let canonicalizer = TranscriptCanonicalizer.load()
+        let snapshot = try ApplePresetEvalSnapshot(dictionary: CorrectionDictionary.load())
         var rows: [ApplePresetEvalRow] = []
         for (recordingIndex, entry) in entries.enumerated() {
             let recording = recordingsDirectory.appendingPathComponent(entry.file)
@@ -78,22 +78,26 @@ enum SignedApplePresetEvalHost {
                 let armLocale = availability.available[arm]!
                 let started = ContinuousClock.now
                 let transcript: String
+                let contextReadback: [String]?
                 let error: String?
                 do {
-                    transcript = try await ApplePresetTranscriber.transcribe(
+                    let transcription = try await snapshot.transcribe(
                         recording: recording,
                         locale: armLocale,
                         arm: arm
                     )
+                    transcript = transcription.text
+                    contextReadback = transcription.contextReadback
                     error = nil
                 } catch let caught {
                     transcript = ""
+                    contextReadback = nil
                     error = String(describing: caught)
                 }
                 let elapsed = seconds(from: started.duration(to: .now))
                 let intended = entry.reference
                 let productionOutput = TranscriptDeterministicCleaner.streamClean(
-                    canonicalizer.canonicalize(transcript)
+                    snapshot.canonicalizer.canonicalize(transcript)
                 )
                 let row = ApplePresetEvalRow(
                     arm: arm,
@@ -113,7 +117,11 @@ enum SignedApplePresetEvalHost {
                     ),
                     elapsedSeconds: elapsed,
                     rtfX: elapsed > 0 ? duration / elapsed : nil,
-                    error: error
+                    error: error,
+                    correctionDictionaryFingerprint: snapshot.dictionaryFingerprint,
+                    contextualStrings: snapshot.context(for: arm),
+                    contextReadback: contextReadback,
+                    evalProvenance: provenance
                 )
                 rows.append(row)
                 try appendJSONL(row, to: outputURL)
@@ -155,7 +163,7 @@ enum SignedApplePresetEvalHost {
             guard FileManager.default.fileExists(atPath: recording.path) else {
                 throw EvalError.recordingMissing(recording.path)
             }
-            let digest = try audioSHA256(recording)
+            let digest = try ApplePresetEvalProvenance.fileSHA256(recording)
             guard digest == entry.audioSHA256 else {
                 throw EvalError.audioDigestMismatch(
                     file: entry.file,
@@ -183,16 +191,6 @@ enum SignedApplePresetEvalHost {
         try handle.seekToEnd()
         try handle.write(contentsOf: data)
         try handle.write(contentsOf: Data("\n".utf8))
-    }
-
-    private static func audioSHA256(_ recording: URL) throws -> String {
-        let handle = try FileHandle(forReadingFrom: recording)
-        defer { try? handle.close() }
-        var digest = SHA256()
-        while let chunk = try handle.read(upToCount: 1024 * 1024), !chunk.isEmpty {
-            digest.update(data: chunk)
-        }
-        return digest.finalize().map { String(format: "%02x", $0) }.joined()
     }
 
     private static func durationSeconds(_ recording: URL) throws -> Double {

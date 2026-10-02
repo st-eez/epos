@@ -73,6 +73,21 @@ to `.build/evals/apple-presets-signed-confirmed75.jsonl`, whose expected shape i
 development or holdout regressions and at least one holdout improvement. That
 artifact name and contract do not prove the artifact exists or is current.
 
+The `speech-progressive-fast` arm now reuses the production preset, including
+confidence attributes, and the production context builder. One persisted
+dictionary snapshot supplies its canonical vocabulary and every arm's final
+cleanup. The other four arms remain unhinted controls. Context readback must
+match the requested terms before a replay can become a scored baseline.
+Historical preset artifacts omitted vocabulary context, so retain their dated
+results as unhinted evidence.
+
+New rows record the dictionary and corpus SHA-256 digests, requested context and
+actual readback, compiled source revision, source dirty flag, Debug or Release
+configuration, compiler optimization, SDK, OS, architecture, and executable
+SHA-256. The dirty flag excludes generated Info.plist and entitlements, whose
+inputs live in `project.yml`. Older rows remain readable, but absent metadata
+cannot establish current build or context provenance.
+
 The audit keeps schema-1 logs distinct from legacy inferred sessions and reports
 incomplete or ambiguous outcomes. Delivery success and recognition accuracy have
 separate denominators. Verified accuracy requires explicit human-confirmed

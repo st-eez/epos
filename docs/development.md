@@ -35,8 +35,11 @@ InputMethodKit, and delivery require installed-app checks.
 
 ## Build topology
 
-- [Package.swift](../Package.swift) defines the Epos library and EposTests only.
-  An executable target would collide with the Xcode application target.
+- [Package.swift](../Package.swift) defines the Epos library and EposTests.
+  EposEval compiles the app's evaluation helpers, excluding `main.swift`, so
+  EposEvalTests can verify replay configuration without starting the app or
+  accessing Speech. No executable target is declared, because it would collide
+  with the Xcode application target.
 - [project.yml](../project.yml) defines the app target, Info.plist properties,
   entitlements, deployment target, and hardened runtime. Edit it and regenerate
   with `xcodegen generate`; the files in `Resources/` are generated artifacts.

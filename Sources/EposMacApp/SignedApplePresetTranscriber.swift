@@ -1,5 +1,6 @@
 #if DEBUG
 import AVFoundation
+import Epos
 import Foundation
 import Speech
 
@@ -15,15 +16,15 @@ enum ApplePresetArm: String, CaseIterable, Codable {
     var configuration: String {
         switch self {
         case .speechProgressiveFast:
-            "SpeechTranscriber volatileResults + fastResults (current production)"
+            "Production SpeechTranscriber preset with frozen canonical vocabulary"
         case .speechProgressiveQuality:
-            "SpeechTranscriber volatileResults"
+            "Unhinted SpeechTranscriber volatileResults"
         case .speechFinal:
-            "SpeechTranscriber.Preset.transcription"
+            "Unhinted SpeechTranscriber.Preset.transcription"
         case .dictationShort:
-            "DictationTranscriber.Preset.shortDictation"
+            "Unhinted DictationTranscriber.Preset.shortDictation"
         case .dictationLong:
-            "DictationTranscriber.Preset.longDictation"
+            "Unhinted DictationTranscriber.Preset.longDictation"
         }
     }
 }
@@ -93,18 +94,15 @@ enum ApplePresetTranscriber {
     static func transcribe(
         recording: URL,
         locale: Locale,
-        arm: ApplePresetArm
-    ) async throws -> String {
+        arm: ApplePresetArm,
+        contextualStrings: [String] = []
+    ) async throws -> ApplePresetTranscription {
         switch arm {
         case .speechProgressiveFast:
-            let preset = SpeechTranscriber.Preset(
-                transcriptionOptions: [],
-                reportingOptions: [.volatileResults, .fastResults],
-                attributeOptions: [.transcriptionConfidence]
-            )
             return try await transcribe(
                 recording: recording,
-                module: SpeechTranscriber(locale: locale, preset: preset)
+                module: SpeechTranscriber(locale: locale, preset: Transcriber.speechPreset),
+                analysisContext: Transcriber.analysisContext(contextualStrings: contextualStrings)
             ) { String($0.text.characters) }
         case .speechProgressiveQuality:
             let preset = SpeechTranscriber.Preset(
@@ -137,8 +135,9 @@ enum ApplePresetTranscriber {
     private static func transcribe<Module: SpeechModule>(
         recording: URL,
         module: Module,
+        analysisContext: AnalysisContext? = nil,
         resultText: @escaping @Sendable (Module.Result) -> String
-    ) async throws -> String {
+    ) async throws -> ApplePresetTranscription {
         guard let format = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [module]) else {
             throw ApplePresetTranscriberError.noCompatibleFormat
         }
@@ -163,7 +162,12 @@ enum ApplePresetTranscriber {
             }
         }
 
+        let contextReadback: [String]
         do {
+            if let analysisContext {
+                try await analyzer.setContext(analysisContext)
+            }
+            contextReadback = await analyzer.context.contextualStrings[.general] ?? []
             try await analyzer.start(inputSequence: stream)
             try feed(recording: recording, targetFormat: format) {
                 continuation.yield(AnalyzerInput(buffer: $0))
@@ -177,8 +181,10 @@ enum ApplePresetTranscriber {
             throw error
         }
 
-        return try await collector.value.get()
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return ApplePresetTranscription(
+            text: try await collector.value.get().trimmingCharacters(in: .whitespacesAndNewlines),
+            contextReadback: contextReadback
+        )
     }
 
     static func feed(
@@ -225,6 +231,11 @@ enum ApplePresetTranscriber {
             }
         }
     }
+}
+
+struct ApplePresetTranscription {
+    let text: String
+    let contextReadback: [String]
 }
 
 private final class AudioInputBox: @unchecked Sendable {

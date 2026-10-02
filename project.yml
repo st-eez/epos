@@ -26,6 +26,10 @@ targets:
         CFBundleIconName: AppIcon
         CFBundleShortVersionString: "2.0.0"
         CFBundleVersion: "1"
+        EposSourceRevision: "$(EPOS_SOURCE_REVISION)"
+        EposSourceTreeDirty: "$(EPOS_SOURCE_TREE_DIRTY)"
+        EposBuildConfiguration: "$(CONFIGURATION)"
+        EposCompilerOptimization: "$(SWIFT_OPTIMIZATION_LEVEL)"
         LSMinimumSystemVersion: "26.0"
         LSUIElement: true
         NSHighResolutionCapable: true

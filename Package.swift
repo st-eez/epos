@@ -18,6 +18,17 @@ let package = Package(
             name: "EposTests",
             dependencies: ["Epos"],
             path: "Tests/EposTests"
+        ),
+        .target(
+            name: "EposEval",
+            dependencies: ["Epos"],
+            path: "Sources/EposMacApp",
+            exclude: ["main.swift"]
+        ),
+        .testTarget(
+            name: "EposEvalTests",
+            dependencies: ["EposEval"],
+            path: "Tests/EposEvalTests"
         )
     ]
 )

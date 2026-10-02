@@ -32,7 +32,7 @@ public protocol SpeechTranscribing: Sendable {
 public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
     public let locale: Locale
 
-    static let speechPreset = SpeechTranscriber.Preset(
+    public static let speechPreset = SpeechTranscriber.Preset(
         transcriptionOptions: [],
         reportingOptions: [.volatileResults, .fastResults],
         attributeOptions: [.transcriptionConfidence]
@@ -212,7 +212,7 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
 
     /// Build an `AnalysisContext` from a bias list, trimming and de-duplicating.
     /// Returns nil for an empty list so the caller skips `setContext` entirely.
-    static func analysisContext(contextualStrings: [String]) -> AnalysisContext? {
+    public static func analysisContext(contextualStrings: [String]) -> AnalysisContext? {
         var seen: Set<String> = []
         let strings = contextualStrings.compactMap { string -> String? in
             let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
