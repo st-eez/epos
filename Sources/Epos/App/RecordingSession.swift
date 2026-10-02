@@ -28,7 +28,6 @@ final class RecordingSession {
     private let canonicalizer: TranscriptCanonicalizer
     private let reliability: ReliabilityRecording?
     private let evidenceRecorder: CorrectionEvidenceRecorder
-    private let correctionEvidence: CorrectionEvidenceStore
     private let isFnKeyHeld: @MainActor () -> Bool
     private let isMicrophoneAccessMissing: @MainActor () -> Bool
     private let onEvent: @MainActor (RecordingSession, Event) -> Void
@@ -71,7 +70,6 @@ final class RecordingSession {
         canonicalizer: TranscriptCanonicalizer,
         diagnostics: DiagnosticLogSink,
         evidenceRecorder: CorrectionEvidenceRecorder,
-        correctionEvidence: CorrectionEvidenceStore,
         isFnKeyHeld: @escaping @MainActor () -> Bool,
         isMicrophoneAccessMissing: @escaping @MainActor () -> Bool,
         includeTranscriptText: Bool,
@@ -86,7 +84,6 @@ final class RecordingSession {
         self.canonicalizer = canonicalizer
         self.reliability = recordingID.map { ReliabilityRecording(recordingID: $0, diagnostics: diagnostics) }
         self.evidenceRecorder = evidenceRecorder
-        self.correctionEvidence = correctionEvidence
         self.isFnKeyHeld = isFnKeyHeld
         self.isMicrophoneAccessMissing = isMicrophoneAccessMissing
         self.onEvent = onEvent
@@ -327,15 +324,11 @@ final class RecordingSession {
                 recordingID: recordingID,
                 session: textInsertionSession
             ) {
-                if let finalInsertedTranscript = correctionEvidence.evidence.last(
-                    where: { $0.id == evidenceID }
-                )?.finalInsertedTranscript {
-                    evidenceRecorder.scheduleObservedUserEditCapture(
-                        evidenceID: evidenceID,
-                        finalInsertedTranscript: finalInsertedTranscript,
-                        session: textInsertionSession
-                    )
-                }
+                evidenceRecorder.scheduleObservedUserEditCapture(
+                    evidenceID: evidenceID,
+                    finalInsertedTranscript: finalTranscript,
+                    session: textInsertionSession
+                )
             }
             emitFinalReliabilityOutcome(
                 recognizerFailed: recognizerFailed,

@@ -80,7 +80,7 @@ final class CoordinatorDisplayAndGlowTests: XCTestCase {
 
     func testStreamedPartialIsCleanedNotRaw() {
         let coordinator = makeCoordinator()
-        let cleaned = coordinator.makeFinalTranscriptCleaner()(Self.disfluentRaw)
+        let cleaned = "the build is broken"
 
         coordinator.handlePartialTranscript(Self.disfluentRaw)
 
@@ -92,18 +92,14 @@ final class CoordinatorDisplayAndGlowTests: XCTestCase {
     }
 
     /// The display accumulates finals plus the in-progress partial and cleans the
-    /// whole thing, so the text on screen at release is character-for-character
-    /// what `makeFinalTranscriptCleaner()` will write.
-    func testDisplayAtReleaseEqualsTheFinalWriteTransform() {
+    /// whole thing while retaining the raw recognizer segments for evidence.
+    func testDisplayCleansAssembledFinalAndPartialText() {
         let coordinator = makeCoordinator()
 
         coordinator.handleFinalTranscriptSegment("the the uh build ")
         coordinator.handlePartialTranscript("is broken")
 
-        XCTAssertEqual(
-            coordinator.displayText,
-            coordinator.makeFinalTranscriptCleaner()(Self.disfluentRaw)
-        )
+        XCTAssertEqual(coordinator.displayText, "the build is broken")
         // The raw accumulation stays raw: correction evidence and the final
         // transform both need the recognizer's own text.
         XCTAssertEqual(coordinator.finalText + coordinator.partial, Self.disfluentRaw)

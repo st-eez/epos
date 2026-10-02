@@ -260,20 +260,6 @@ public final class AppCoordinator: ObservableObject {
         }
     }
 
-    /// The authoritative final-transcript transform, built once per recording so a
-    /// mid-session correction-rule edit cannot alter the finalization behavior of an
-    /// already-running dictation. RecordingSession freezes the same canonicalizer
-    /// for every streamed partial (`displayText`), so the one final write
-    /// cannot re-type text differently from what the user watched on screen.
-    func makeFinalTranscriptCleaner() -> @Sendable (String) -> String {
-        let canonicalizer = corrections.canonicalizer
-        return { TranscriptDeterministicCleaner.streamClean(canonicalizer.canonicalize($0)) }
-    }
-
-    func speechContextualStrings() -> [String] {
-        ["Epos"] + corrections.canonicalizer.speechContextualStrings
-    }
-
     // MARK: - Start readiness
 
     /// Synchronous read of current permission grants (no prompts).
@@ -587,7 +573,6 @@ public final class AppCoordinator: ObservableObject {
             canonicalizer: canonicalizer,
             diagnostics: reliabilityDiagnostics,
             evidenceRecorder: evidenceRecorder,
-            correctionEvidence: correctionEvidence,
             isFnKeyHeld: isFnKeyHeld,
             isMicrophoneAccessMissing: { [weak self] in self?.snapshotPermissions().microphone != .granted },
             includeTranscriptText: includeTranscriptTextInDiagnostics,
