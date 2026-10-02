@@ -80,9 +80,15 @@ and other applications.
 
 Inline preview still requires a readable empty selection and provable composition
 ownership through the companion. A first refused mark uses the overlay and
-guarded final delivery. Current Ghostty preview refusals need live IMK range
-evidence; the terminal screen fix does not establish streaming support or waive
-composition safety.
+guarded final delivery.
+
+On October 2, the live IMK client for installed Ghostty revision `33da6848d`
+reported selection `{0, 0}` and marked range `{NSNotFound, NSNotFound}`. The
+marked range is unavailable, so Epos cannot prove composition ownership in that
+build and keeps preview in the overlay. Ghostty's direct `NSTextInputClient`
+implementation does not establish what its legacy IMK wrapper exposes. The
+terminal screen fix permits guarded final delivery without waiving preview
+safety. End-to-end delivery still needs a hold in the installed target app.
 
 ## Delivery evidence
 
@@ -118,6 +124,7 @@ attempts to expose Electron's focused accessibility tree.
 
 Tests cover [target guards](../Tests/EposTests/InsertionTargetGuardTests.swift),
 [focus signatures](../Tests/EposTests/InsertionTargetFocusSignatureTests.swift),
+[Ghostty terminal delivery](../Tests/EposTests/GhosttyInsertionTargetTests.swift),
 [preview lifecycle](../Tests/EposTests/InlinePreviewSessionTests.swift),
 [empty preview updates](../Tests/EposTests/InlinePreviewEmptyTests.swift),
 [preview callback isolation](../Tests/EposTests/InlinePreviewCoordinatorTests.swift),

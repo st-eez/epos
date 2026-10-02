@@ -84,6 +84,8 @@ Epos uses one configured language, US English by default, without a language
 switcher. Inline preview and text insertion
 depend on the destination app and its accessibility support. See
 [insertion](docs/insertion.md) for selection, focus, and delivery behavior.
+The verified Ghostty build uses overlay preview and guarded final delivery; see
+[terminal input](docs/insertion.md#terminal-input) for the version and cause.
 
 Tests cover app logic and native text view safety checks. Daily use still needs
 verification with the installed app in your target applications. Latency and
