@@ -8,7 +8,8 @@ import subprocess
 import tempfile
 
 source = pathlib.Path(__file__).resolve().parent / 'install-signed-app.sh'
-modes = ['success', 'fresh-parent', 'trailing-slash', 'lexical-parent', 'symlinked-parent', 'running',
+modes = ['success', 'fresh-parent', 'trailing-slash', 'lexical-parent', 'symlinked-parent',
+         'running', 'alias-running',
          'unsafe-directory', 'other-app', 'relative-path',
          'staging-signature', 'replace', 'installed-signature', 'rollback']
 for mode in modes:
@@ -29,7 +30,11 @@ for mode in modes:
         files = {
             scripts / 'build-signed-app.sh': '#!/bin/bash\ntouch "$TEST_BUILD_MARKER"\nprintf "%s\\n" "$TEST_BUILT_APP"\n',
             probes / 'install': '#!/bin/bash\nexit 0\n',
-            stubs / 'pgrep': '#!/bin/bash\n[[ "$TEST_MODE" == running ]] && exit 0\nexit 1\n',
+            stubs / 'pgrep': '''#!/bin/bash
+[[ "$TEST_MODE" == running ]] && exit 0
+if [[ "$TEST_MODE" == alias-running && "$2" == "$TEST_REQUESTED_EXECUTABLE" ]]; then exit 0; fi
+exit 1
+''',
             stubs / 'codesign': '''#!/bin/bash
 target="${!#}"
 if [[ "$TEST_MODE" == staging-signature && "$target" == */new.app ]]; then exit 42; fi
@@ -53,7 +58,7 @@ exec /bin/mv "$@"
             destination += '/'
         elif mode == 'lexical-parent':
             destination += '/../Epos.app'
-        elif mode == 'symlinked-parent':
+        elif mode in ['symlinked-parent', 'alias-running']:
             alias = root / 'alias'
             alias.symlink_to(installed / '..')
             destination = str(alias / 'Epos.app')
@@ -69,14 +74,15 @@ exec /bin/mv "$@"
         marker = root / 'build-ran'
         env = dict(os.environ, PATH=str(stubs) + ':' + os.environ['PATH'],
                    TEST_MODE=mode, TEST_BUILT_APP=str(built), INSTALL_APP_PATH=destination,
-                   TEST_BUILD_MARKER=str(marker))
+                   TEST_BUILD_MARKER=str(marker),
+                   TEST_REQUESTED_EXECUTABLE=destination + '/Contents/MacOS/Epos')
         result = subprocess.run(['/bin/bash', str(scripts / 'install-signed-app.sh')],
                                 env=env, capture_output=True, text=True)
         staging = list(installed.parent.glob('.Epos.app.install.*'))
         if mode in ['success', 'fresh-parent', 'trailing-slash', 'lexical-parent', 'symlinked-parent']:
             assert result.returncode == 0 and (installed / 'new.txt').exists()
             assert not (installed / 'old.txt').exists() and not staging
-        elif mode == 'running':
+        elif mode in ['running', 'alias-running']:
             assert result.returncode == 66 and not marker.exists()
             assert (installed / 'old.txt').exists() and not staging
         elif mode in ['unsafe-directory', 'other-app', 'relative-path']:
