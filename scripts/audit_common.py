@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 import math
+import re
 from typing import Any, Iterable
+
+KV_RE = re.compile(r"(?<!\S)([A-Za-z][A-Za-z0-9]*)=([^\s]+)")
+
+
+def fields(message: str) -> dict[str, str]:
+    return dict(KV_RE.findall(message))
 
 OPERATIONAL_BUCKETS = (
     "setup_failure", "permission_failure", "cancelled_before_audio",

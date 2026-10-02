@@ -9,12 +9,11 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-from audit_common import OPERATIONAL_BUCKETS, OUTCOME_ALIASES, numeric, percentage, timing
+from audit_common import OPERATIONAL_BUCKETS, OUTCOME_ALIASES, fields, numeric, percentage, timing
 from audit_timing import stage_timing_report
 
 ID_RE = re.compile(r"(?:^|\s)recordingID=([A-Za-z0-9._-]+)(?:\s|$)")
 START_RE = re.compile(r"(?:^|\s)recordingID=[A-Za-z0-9._-]+ recording start$")
-KV_RE = re.compile(r"(?<!\S)([A-Za-z][A-Za-z0-9]*)=([^\s]+)")
 FINAL_RE = re.compile(r"\bfinalChars=(\d+)\b")
 INPUT_RE = re.compile(r"\bhadInput=(true|false)\b")
 STAMP_RE = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z$")
@@ -74,10 +73,6 @@ def sessions(parsed: Iterable[Event]) -> list[Session]:
         elif event.recording_id in active:
             active[event.recording_id].events.append(event)
     return result
-
-
-def fields(message: str) -> dict[str, str]:
-    return dict(KV_RE.findall(message))
 
 
 def first_result(messages: list[str]) -> float | None:

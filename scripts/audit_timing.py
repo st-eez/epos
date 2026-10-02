@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any, Iterable, TYPE_CHECKING
 
-from audit_common import numeric, timing
+from audit_common import fields, numeric, timing
 
 if TYPE_CHECKING:
     from audit_operational import Session
@@ -21,8 +21,6 @@ OUTCOMES = ("completed", "failed", "refused", "ambiguous", "unavailable")
 
 
 def stage_timing_report(recordings: Iterable[Session]) -> dict[str, Any]:
-    from audit_operational import fields
-
     grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
     invalid, with_timing = 0, 0
     for recording in recordings:
