@@ -64,14 +64,14 @@ advance preparation does not establish that inline preparation benefits Epos.
 ## Reproduction
 
 Build and install the current signed Debug app using the development workflow,
-then run its executable in the evaluation mode. The parent task serializes this
-with other signed evaluations.
+then quit the ordinary app before running its executable in evaluation mode.
+Run evaluations sequentially to avoid competing recognition workloads.
 
 ```sh
-EPOS_RUN_ANALYZER_PREPARATION_EVAL=1 \
+SWIFT_TESTING_ENABLED=1 EPOS_RUN_ANALYZER_PREPARATION_EVAL=1 \
 EPOS_DIAGNOSTIC_LOGS=0 \
-EPOS_EVAL_CORPUS="$PWD/.build/evals/evaluation-corpus-v2.jsonl" \
-EPOS_EVAL_OUTPUT="$PWD/.build/evals/analyzer-preparation.jsonl" \
+EPOS_EVAL_CORPUS="$PWD/.build/evals/evaluation-corpus-v2-20261002.jsonl" \
+EPOS_EVAL_OUTPUT="$PWD/.build/evals/analyzer-preparation-new.jsonl" \
 EPOS_EVAL_LIMIT=6 EPOS_PREPARE_REPEATS=2 EPOS_PREPARE_IDLE_SECONDS=2 \
   /Applications/Epos.app/Contents/MacOS/Epos
 ```
@@ -80,6 +80,8 @@ EPOS_EVAL_LIMIT=6 EPOS_PREPARE_REPEATS=2 EPOS_PREPARE_IDLE_SECONDS=2 \
 `EPOS_PREPARE_IDLE_SECONDS=300` for a sampled five-minute retention experiment.
 Use `EPOS_PREPARE_FIRST_ARM` to choose which arm starts a new evaluation process.
 The JSONL rows and adjacent summary preserve those settings and trial order.
+Use a unique output filename for another run. The measured original is
+`.build/evals/analyzer-preparation-f7118f7-20261002.jsonl`.
 
 ## Results
 
@@ -117,7 +119,7 @@ the normal menu bar app, Apple's Speech service, or five-minute standby retentio
 
 Preparation completed in roughly 29 ms while first input arrived about 93 ms
 after the hold. That timing is consistent with preparation finishing before the
-first simulated capture buffer, which would explain the small visible difference
+first simulated capture buffer, which would explain the small timing difference
 in this sample. It is an inference, not a cold-start measurement.
 
 The build was signed Debug with `-Onone`, a clean source tree at

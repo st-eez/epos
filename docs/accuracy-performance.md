@@ -1,7 +1,7 @@
 # Current accuracy and performance evidence
 
-The signed saved-audio replay on 2026-10-02 UTC verifies 67 exact production
-outputs across 75 human-confirmed recordings, with 9 word errors across 963
+The signed saved-audio replay on October 1, 2026 (October 2 UTC) verifies 67 exact
+production outputs across 75 human-confirmed recordings, with 9 word errors across 963
 reference words. Production micro WER is **0.9346%**. It establishes recognition
 and deterministic cleanup accuracy for this frozen corpus and dictionary.
 Microphone capture, live release latency, screen paint, and insertion into daily
@@ -30,6 +30,20 @@ correction was added. Holdout residual text remained unread; only aggregate
 holdout scores were inspected. Labels and the existing promotion gate remain
 unchanged: zero development or holdout regressions and at least one holdout
 improvement after a candidate is frozen.
+
+## Performance measurements
+
+The [preparation experiment](../specs/analyzer-preparation-experiment.md) compared
+three fresh-analyzer strategies across six recordings and two repeats. All 36
+paced trials produced identical cleaned output. Preparing ahead improved the
+paired median first-result time by 2.1 ms while preparation itself took about
+29 ms. The result does not justify a standby analyzer lifecycle, so production
+continues to create an analyzer for each hold.
+
+[Stage timing](diagnostics.md#stage-timing) now separates startup, useful display
+publication, acknowledged preview, accepted final writes, and delivery readback.
+The saved-audio hosts bypass recording sessions and target fields. Current live
+release-to-field latency remains unmeasured by these experiments.
 
 ## Replay fidelity and controls
 

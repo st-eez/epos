@@ -41,6 +41,7 @@ Search terms include common user wording and implementation names.
 | Recording stage durations and successful write timing | startup speed, first text, release latency, p95 | [Stage timing](diagnostics.md#stage-timing) |
 | Save audio samples and local evidence storage | WAV, recordings, dogfood samples | [Diagnostics](diagnostics.md#saved-audio-and-correction-evidence) |
 | Reliability audit, corpus labeling, confirmation, benchmarks | WER, accuracy, corpus quality | [Diagnostics](diagnostics.md#evaluation-tools) |
+| Current confirmed accuracy and correction assessment | word errors, exact transcripts, verified baseline | [Accuracy and performance evidence](accuracy-performance.md) |
 | Paced analyzer preparation comparison | prewarming, prepareToAnalyze, recognition speed, memory | [Preparation experiment](../specs/analyzer-preparation-experiment.md) |
 
 ## Replacement readiness
