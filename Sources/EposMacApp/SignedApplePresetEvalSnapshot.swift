@@ -9,9 +9,11 @@ struct ApplePresetEvalSnapshot {
 
     let canonicalizer: TranscriptCanonicalizer
     let dictionaryFingerprint: String
+    let dictionaryRecords: [CorrectionRecord]
     let contextualStrings: [String]
 
     init(dictionary: CorrectionDictionary) throws {
+        dictionaryRecords = dictionary.records
         canonicalizer = TranscriptCanonicalizer(rules: CorrectionRuleCompiler.compile(records: dictionary.records))
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]

@@ -81,9 +81,10 @@ match the requested terms before a replay can become a scored baseline.
 Historical preset artifacts omitted vocabulary context, so retain their dated
 results as unhinted evidence.
 
-New rows record the dictionary and corpus SHA-256 digests, requested context and
-actual readback, compiled source revision, source dirty flag, Debug or Release
-configuration, compiler optimization, SDK, OS, architecture, and executable
+New private rows preserve the dictionary records and its SHA-256 digest, the
+corpus digest, requested context and actual readback, compiled source revision,
+source dirty flag, Debug or Release configuration, compiler optimization, SDK,
+OS, architecture, and executable
 SHA-256. The dirty flag excludes generated Info.plist and entitlements, whose
 inputs live in `project.yml`. Older rows remain readable, but absent metadata
 cannot establish current build or context provenance.

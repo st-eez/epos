@@ -1,4 +1,5 @@
 #if DEBUG
+import Epos
 import Foundation
 
 struct ApplePresetEvalRow: Codable {
@@ -18,6 +19,7 @@ struct ApplePresetEvalRow: Codable {
     let rtfX: Double?
     let error: String?
     let correctionDictionaryFingerprint: String?
+    let correctionDictionaryRecords: [CorrectionRecord]?
     let contextualStrings: [String]?
     let contextReadback: [String]?
     let evalProvenance: ApplePresetEvalProvenance?
@@ -52,6 +54,7 @@ enum ApplePresetEvalReport {
         ]
         if let row = rows.first, let provenance = row.evalProvenance {
             lines.append("  dictionary SHA-256: \(row.correctionDictionaryFingerprint ?? "unknown")")
+            lines.append("  dictionary snapshot records: \(row.correctionDictionaryRecords?.count ?? 0)")
             lines.append("  corpus SHA-256: \(provenance.corpusSHA256)")
             lines.append("  source revision: \(provenance.sourceRevision ?? "unknown")")
             lines.append("  source tree dirty: \(provenance.sourceTreeDirty.map(String.init) ?? "unknown")")

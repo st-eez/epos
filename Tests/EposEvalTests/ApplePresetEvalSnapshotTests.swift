@@ -22,6 +22,13 @@ final class ApplePresetEvalSnapshotTests: XCTestCase {
         }
 
         XCTAssertEqual(snapshot.canonicalizer.canonicalize(transcript.text), "open WidgetPro")
+        let savedRecords = try JSONEncoder().encode(snapshot.dictionaryRecords)
+        let restored = try ApplePresetEvalSnapshot(
+            dictionary: CorrectionDictionary(records: JSONDecoder().decode([CorrectionRecord].self, from: savedRecords))
+        )
+        XCTAssertEqual(restored.dictionaryFingerprint, snapshot.dictionaryFingerprint)
+        XCTAssertEqual(restored.contextualStrings, snapshot.contextualStrings)
+        XCTAssertEqual(restored.canonicalizer.canonicalize(transcript.text), "open WidgetPro")
         XCTAssertNotEqual(
             snapshot.dictionaryFingerprint,
             try ApplePresetEvalSnapshot(dictionary: dictionary).dictionaryFingerprint
@@ -64,6 +71,7 @@ final class ApplePresetEvalSnapshotTests: XCTestCase {
         let row = try JSONDecoder().decode(ApplePresetEvalRow.self, from: Data(body.utf8))
         XCTAssertNil(row.evalProvenance)
         XCTAssertNil(row.contextualStrings)
+        XCTAssertNil(row.correctionDictionaryRecords)
         XCTAssertEqual(row.productionOutput, "hello")
         let report = ApplePresetEvalReport.render(
             rows: [row], enabledArms: [.baseline], unavailable: [:], expectedRowsPerArm: 1,

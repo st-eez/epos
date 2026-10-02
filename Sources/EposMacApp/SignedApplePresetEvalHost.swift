@@ -119,6 +119,7 @@ enum SignedApplePresetEvalHost {
                     rtfX: elapsed > 0 ? duration / elapsed : nil,
                     error: error,
                     correctionDictionaryFingerprint: snapshot.dictionaryFingerprint,
+                    correctionDictionaryRecords: snapshot.dictionaryRecords,
                     contextualStrings: snapshot.context(for: arm),
                     contextReadback: contextReadback,
                     evalProvenance: provenance
