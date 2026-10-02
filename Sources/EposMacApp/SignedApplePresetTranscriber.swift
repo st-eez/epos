@@ -181,7 +181,7 @@ enum ApplePresetTranscriber {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    private static func feed(
+    static func feed(
         recording: URL,
         targetFormat: AVAudioFormat,
         accept: (AVAudioPCMBuffer) -> Void
