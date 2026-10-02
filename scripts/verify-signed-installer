@@ -11,7 +11,8 @@ source = pathlib.Path(__file__).resolve().parent / 'install-signed-app.sh'
 modes = ['success', 'fresh-parent', 'trailing-slash', 'lexical-parent', 'symlinked-parent',
          'running', 'alias-running',
          'unsafe-directory', 'other-app', 'relative-path',
-         'staging-signature', 'replace', 'installed-signature', 'rollback']
+         'staging-signature', 'replace', 'installed-signature', 'rollback', 'rollback-quarantine',
+         'first-install-signature', 'first-install-rename', 'first-install-cleanup']
 for mode in modes:
     with tempfile.TemporaryDirectory(prefix='epos-installer-check-') as root_name:
         root = pathlib.Path(root_name)
@@ -38,12 +39,13 @@ exit 1
             stubs / 'codesign': '''#!/bin/bash
 target="${!#}"
 if [[ "$TEST_MODE" == staging-signature && "$target" == */new.app ]]; then exit 42; fi
-if [[ ( "$TEST_MODE" == installed-signature || "$TEST_MODE" == rollback ) && "$target" == */Epos.app ]]; then exit 43; fi
+if [[ ( "$TEST_MODE" == installed-signature || "$TEST_MODE" == rollback* || "$TEST_MODE" == first-install-* ) && "$target" == */Epos.app ]]; then exit 43; fi
 exit 0
 ''',
             stubs / 'mv': '''#!/bin/bash
-if [[ "$TEST_MODE" == replace && "$1" == */new.app ]]; then exit 44; fi
+if [[ ( "$TEST_MODE" == replace || "$TEST_MODE" == first-install-rename ) && "$1" == */new.app ]]; then exit 44; fi
 if [[ "$TEST_MODE" == rollback && "$1" == */previous.app ]]; then exit 45; fi
+if [[ ( "$TEST_MODE" == first-install-cleanup || "$TEST_MODE" == rollback-quarantine ) && "$2" == */failed.app ]]; then exit 46; fi
 exec /bin/mv "$@"
 ''',
         }
@@ -51,7 +53,7 @@ exec /bin/mv "$@"
             path.write_text(content)
             path.chmod(0o755)
         destination = str(installed)
-        if mode == 'fresh-parent':
+        if mode == 'fresh-parent' or mode.startswith('first-install-'):
             installed = root / 'fresh-parent/deep/Epos.app'
             destination = str(installed)
         elif mode == 'trailing-slash':
@@ -95,6 +97,17 @@ exec /bin/mv "$@"
             assert (staging[0] / 'previous.app/old.txt').exists()
             assert (staging[0] / 'failed.app/new.txt').exists()
             assert str(staging[0] / 'previous.app') in result.stderr
+        elif mode == 'rollback-quarantine':
+            assert result.returncode == 43 and len(staging) == 1
+            assert (installed / 'new.txt').exists() and (staging[0] / 'previous.app/old.txt').exists()
+            assert str(staging[0] / 'previous.app') in result.stderr
+        elif mode == 'first-install-signature':
+            assert result.returncode == 43 and not installed.exists() and not staging
+        elif mode == 'first-install-rename':
+            assert result.returncode == 44 and not installed.exists() and not staging
+        elif mode == 'first-install-cleanup':
+            assert result.returncode == 43 and (installed / 'new.txt').exists() and len(staging) == 1
+            assert str(installed.resolve()) in result.stderr
         else:
             expected = {'staging-signature': 42, 'replace': 44, 'installed-signature': 43}[mode]
             assert result.returncode == expected, (mode, result.returncode, result.stderr)
