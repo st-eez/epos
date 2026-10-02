@@ -20,6 +20,14 @@
 	<string>2.0.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>EposBuildConfiguration</key>
+	<string>$(CONFIGURATION)</string>
+	<key>EposCompilerOptimization</key>
+	<string>$(SWIFT_OPTIMIZATION_LEVEL)</string>
+	<key>EposSourceRevision</key>
+	<string>$(EPOS_SOURCE_REVISION)</string>
+	<key>EposSourceTreeDirty</key>
+	<string>$(EPOS_SOURCE_TREE_DIRTY)</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>LSUIElement</key>
