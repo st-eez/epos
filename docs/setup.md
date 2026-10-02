@@ -16,9 +16,10 @@ Release enables compiler optimizations for daily use. The build script defaults
 to Debug for development; the signed saved-audio evaluation hosts require that
 configuration. Use `CONFIGURATION=Debug` when running those evaluations.
 
-The installer builds and verifies a signature with a team identifier, copies the
-bundle into `/Applications`, and installs the inline preview companion. First
-registration of the companion can require a logout or input source consent.
+The installer builds with a team signature, verifies a fresh staged bundle,
+replaces the installed app, and installs the inline preview companion. It restores
+the prior bundle if replacement fails. First registration of the companion can
+require a logout or input source consent.
 The app can use its recording pill while the companion is unavailable.
 
 The free source install command is `scripts/install-local-app.sh`. It prefers an
