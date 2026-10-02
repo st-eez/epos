@@ -1,6 +1,7 @@
 # Epos — Baseline Spec
 
 Date: 2026-05-22. Documentation reconciled with source on 2026-10-01.
+Configurable input controls added to scope on 2026-10-02.
 
 Start at [docs/readme.md](../docs/readme.md) for the current feature map, implementation, tests, and verification limits. This document governs product scope and design. Historical validation below does not establish the current installed app's behavior.
 
@@ -8,7 +9,7 @@ A clean-sheet rebuild of Epos as a minimal dictation app on top of Apple's `Spee
 
 ## Product
 
-Hold fn → record while the recording HUD previews the recognizer's volatile text → release → Epos canonicalizes and conservatively cleans the final transcript, then writes it once into the text field that was focused at fn press. If that target or its selection changed, Epos inserts nothing and says so visibly. That is the whole product.
+Hold the dictation shortcut, which defaults to fn, to record and preview volatile text. Release to finalize, canonicalize, conservatively clean, and write once into the field captured at press. If the target or its selection changed, Epos inserts nothing and reports the refusal. The menu offers a shortcut recorder and microphone picker.
 
 ## Constraints
 
@@ -72,7 +73,8 @@ Sources/Epos/
     AudioCapture.swift          # AVAudioEngine input tap -> AnalyzerInput stream
     DogfoodTap.swift            # opt-in per-recording .wav capture (Shipped Since Baseline)
   Hotkey/
-    FnHotkey.swift              # NSEvent global monitor for fn press/release
+    DictationHotkey.swift       # configurable press/release and lost-release recovery
+    DictationShortcut.swift     # persisted validated binding, fn default
   UI/
     RecordingIndicator.swift    # floating HUD: state + audio meter + volatile transcript preview
     MenuBarView.swift           # MenuBarExtra: status, quit, open permissions
@@ -97,7 +99,7 @@ A session completes cleanup before the coordinator returns to idle and replays a
 ### Data flow
 
 ```
-FnHotkey.press
+DictationHotkey.press
   -> AppCoordinator.startRecording
      -> RecordingIndicator.show (edge glow, or the pill)
      -> AudioCapture.start (16 kHz mono Float32 buffers) — first, so the start cue is
@@ -107,7 +109,7 @@ FnHotkey.press
      -> Transcriber.start (SpeechAnalyzer + SpeechTranscriber module, correction vocabulary as speech context)
         -> CapturePreRoll hands over everything captured while it was starting
   // volatile partials update transcript state, RecordingIndicator, and eligible marked-text preview
-FnHotkey.release
+DictationHotkey.release
   -> AppCoordinator.finishRecording
      -> AudioCapture.stop
      -> Transcriber.finalize -> String
@@ -139,17 +141,19 @@ Lifecycle:
 2. `AssetManager` checks `AssetInventory` for the install locale; if missing, downloads and reserves. Reservation is process-scoped, so reserve on every app launch.
 3. Per recording: build a fresh `SpeechAnalyzer` with one `SpeechTranscriber` module configured for the install locale, partial results on. Feed `AnalyzerInput` from the audio tap. Read `Result` stream for partial + final.
 
-### Hotkey: fn-only, push-to-talk
+### Hold-to-dictate shortcut
 
-Default and only binding in the baseline: hold fn to record, release to finalize.
+The default binding is fn. A menu recorder lets the user choose a supported modifier key or modifier-plus-key combination, and reset to fn. The binding persists across launches. Plain typing keys without a modifier are rejected. The recorder displays the candidate and applies it after its keys are released; Escape cancels. Recording a shortcut suspends dictation and clears deferred starts so the candidate cannot open a microphone session.
 
-Implementation: `NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged)`, watch `event.modifierFlags.contains(.function)`. Pattern already proven in `Sources/SteezFlow/Hotkey/HotkeyManager.swift:184` — port that single function, drop the rest of `HotkeyManager`.
+Use an active session keyboard event tap for modifier changes and key down/up. A matched combination consumes its key down, repeats, and corresponding key up, including a key up that follows modifier release, so the shortcut cannot type into the destination. Activation matches the configured modifiers; releasing the key or any required modifier ends the hold once. A 500 ms hardware check reconciles missed release events for the configured keys. Recover disabled taps and reinstall after Accessibility trust arrives. Deferred startup and recognizer-failure handling consult the configured binding's live held state. Input controls are disabled while a hold or finalization is active.
 
-Known collision: macOS system dictation also defaults to fn (single-press or double-press depending on user setting). The baseline does not try to suppress system dictation and does not detect it in-app. The install instructions tell the user to set System Settings → Keyboard → Dictation → Shortcut to "Off". No in-app remapping UI and no first-run detection in the baseline. (Primary developer machine: already disabled.)
+macOS Dictation also defaults to fn. Setup instructions explain how to disable that collision. Epos does not change system shortcut settings or promise that a chosen combination is free of conflicts with other applications. The initial binding and saved user choices are retained until the user changes them.
 
 ### Audio capture
 
 `AVAudioEngine` input node tap at native input format, converted to 16 kHz mono Float32 with `AVAudioConverter` for the analyzer input. The shipped capture layer observes audio-engine configuration changes, rebuilds the input tap and converter, and attempts to resume capture. If recovery fails, it ends recording, preserves already recognized text, and shows "Mic lost". Seamless device switching is not established by unit tests and requires installed-app verification.
+
+The menu microphone picker defaults to System default. Choosing an available input pins its persistent Core Audio UID for Epos, without changing the system-wide default. Resolve that UID to a live input device ID at every capture open and configuration-change recovery, then bind Epos's own I/O unit before installing the tap. A pinned input remains selected when another device, such as AirPods, becomes the system default. Reconnecting it may produce a new device ID, which must be resolved from the same UID. A missing pinned input blocks new capture with a visible unavailable state; loss during a hold follows the existing "Mic lost" path. It never falls back to another input. The picker retains the missing selection and offers System default and currently available inputs. The per-hold input choice is frozen alongside the capture mode. Enumeration and device binding preserve the long-lived audio engine.
 
 ### Recording indicator
 
@@ -188,7 +192,7 @@ Each recording also emits one parseable `reliability outcome` event. Outcomes di
 
 ### Settings
 
-A single `UserDefaults`-backed struct stores launch at login, install locale, opt-in audio samples and correction evidence, opt-in speaker-audio rejection, inline preview (default on), and edge-glow styling. The menu bar exposes these settings except locale switching. See [settings.md](../docs/settings.md) for current defaults and application timing. Final-transcript cleanup has no setting: it is always on and deliberately conservative. Correction rules persist separately under their own `UserDefaults` key and are edited in the Corrections window.
+A single `UserDefaults`-backed struct stores the dictation shortcut, optional pinned microphone UID, launch at login, install locale, opt-in audio samples and correction evidence, opt-in speaker-audio rejection, inline preview (default on), and edge-glow styling. Missing or invalid shortcut data loads fn; an unset microphone follows System default. The menu bar exposes these settings except locale switching. See [settings.md](../docs/settings.md) for current defaults and application timing. Final-transcript cleanup has no setting: it is always on and deliberately conservative. Correction rules persist separately under their own `UserDefaults` key and are edited in the Corrections window.
 
 ## Build & Project Layout
 
@@ -211,6 +215,7 @@ Test what would silently break, skip the rest.
 - Deterministic cleanup: hard fillers, stutter collapse, and numeric ordinals are pinned by behavior, including everything the pass must leave alone.
 - Opt-in dogfood evals: replay saved wavs for recognition-context checks, raw recognizer scoring, and correction-candidate scoring against the signed corpus. When a human transcript manifest is present, the saved-recording harnesses log the intended transcript and WER/accuracy for raw, canonicalized raw, and final output.
 - Hotkey reconciliation, audio conversion and buffering, indicator policy, and coordinator behavior have unit tests. Actual microphone, Speech, Accessibility, InputMethodKit, hotkey delivery, and target-app behavior require the installed signed app.
+- Configurable input controls cover persistence, shortcut suppression and release ordering, deferred replay, recorder suspension, chosen microphone forwarding, missing pinned inputs, and UID resolution on recovery. Native device checks must establish binding/readback and an unchanged system default. Synthetic tests do not establish physical shortcut delivery or real device reconnection.
 
 Keep tests tied to observable behavior and regression risk. A test count alone does not establish quality; opt-in corpus harnesses also do not prove current live delivery.
 
@@ -242,9 +247,9 @@ Tracked here so we do not lose them, in rough priority order:
 5. Locale switching UI + multi-asset management.
 6. ~~LLM polish (local MLX) as opt-in per-recording.~~ **Closed — shipped then removed.** Built as an opt-in global toggle, benchmarked against local models, and deleted 2026-07-29 because no model beat the deterministic cleanup safely (`specs/polish-model-benchmark.md`). Not open work; reopening needs new evidence.
 7. Filler-word detection.
-8. Audio device switching. Basic configuration-change recovery is shipped; seamless switching remains unverified.
+8. Audio device switching. Basic configuration-change recovery is shipped. A persistent input picker is in the 2026-10-02 scope; seamless switching remains unverified.
 9. Agent-specific modes (Codex / Claude Code / Cursor).
-10. Custom hotkey binding UI.
+10. Custom hotkey binding UI. Included in the 2026-10-02 scope as a hold-to-dictate recorder, with fn retained as the default.
 11. ~~Target-aware insertion guard: capture the fn-press target and refuse final insertion if focus, field value, caret, or selection changes before release.~~ **Shipped** (see "Shipped Since Baseline").
 12. ~~Built-in correction re-seed on upgrade.~~ **Shipped** with versioned introduction metadata. An upgrade appends only built-ins introduced after the saved dictionary version, so a rule intentionally removed from that saved version stays removed.
 

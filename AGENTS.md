@@ -11,8 +11,9 @@ changing architecture or adding a feature, and update it first when the work
 changes that scope. Verify behavior in `Sources/` and `Tests/`; specs and old
 review reports are evidence to check, not proof of current behavior.
 
-The dictation path is fn hold, microphone capture, Apple SpeechTranscriber,
-deterministic corrections and cleanup, then one guarded final insertion.
+The dictation path is a shortcut hold (fn by default), microphone capture,
+Apple SpeechTranscriber, deterministic corrections and cleanup, then one guarded
+final insertion.
 Inline preview uses the companion input method's marked text. Final delivery
 uses an acknowledged IME commit when eligible, otherwise Unicode keystrokes.
 
@@ -30,7 +31,7 @@ uses an acknowledged IME commit when eligible, otherwise Unicode keystrokes.
 - Keep these instructions concise. Put feature details in `docs/` and design
   decisions in `specs/`, and update the index when either changes.
 - Keep push-to-talk, one locale, on-device transcription, and current scope.
-  History, toggle mode, custom bindings, model selection, and cloud fallback
+  History, toggle mode, model selection, and cloud fallback
   require an updated spec. LLM polish was removed after benchmarking.
 
 ## Git
