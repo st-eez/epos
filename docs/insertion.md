@@ -114,9 +114,21 @@ The July 31 feasibility record describes successful inline preview in
 cmux/Ghostty, and retained companion logs contain accepted Ghostty mark calls.
 That implementation sent marks without the current selection and live ownership
 checks. The current preview path requires the bridge to expose composition
-absence and exact live ownership. A safe Epos-only alternative has not been
-verified. Removing those checks would restore the selection and foreign-composition
-failures reproduced in the audit.
+absence and exact live ownership. The selection guard independently prevents the
+native selected-text deletion reproduced in the audit. Relaxing unavailable
+ownership metadata while retaining that guard does not remove selection protection.
+
+An October 2 native English comparison relaxed only the unavailable marked-range
+state, retaining the readable empty selection requirement. It used real
+`NSTextView` writes with simulated bridge readback. A deliberately staged
+different English mark was overwritten and discarded. Ordinary typing and
+Backspace ended the original draft; a later update, cancellation, and final
+insertion left old draft text beside the final transcript. These checks excluded
+the companion's host callbacks and do not establish the same behavior in Ghostty.
+
+The live Ghostty attempts stopped at foreground window checks or Cua setup and
+sent zero marks. Direct preview rendering, cleanup, and English typing
+interruption with relaxed readback remain unverified in the current Ghostty build.
 
 ## Delivery evidence
 

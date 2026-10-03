@@ -32,7 +32,7 @@ Search terms include common user wording and implementation names.
 | Final cleanup of fillers, stutters, and ordinals | filler removal, um and uh, repeated words | [Dictation](dictation.md#transcript-cleanup) |
 | Stream into field, marked text, companion input method | live preview, inline dictation, provisional text | [Insertion](insertion.md#stream-into-field) |
 | Captured target guard, final IME commit, Unicode keystrokes | paste, text injection, focus protection | [Insertion](insertion.md#final-delivery) |
-| Terminal screen redraws and guarded prompt delivery | Ghostty, Claude CLI, terminal dictation | [Terminal input](insertion.md#terminal-input) |
+| Terminal delivery, preview evidence and limitations | Ghostty, Claude CLI, terminal dictation | [Terminal input](insertion.md#terminal-input) |
 | Refused and unconfirmed writes, delivery verification | not inserted, check the field, missing text | [Insertion](insertion.md#delivery-evidence) |
 | Corrections editor, Literal and Name modes, developer tokens | custom words, names, spoken symbols | [Corrections](corrections.md#dictionary-and-editor) |
 | Dictionary upgrades and protected storage | migration, saved corrections, data protection | [Corrections](corrections.md#persistence) |
