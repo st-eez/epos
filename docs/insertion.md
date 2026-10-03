@@ -126,9 +126,21 @@ Backspace ended the original draft; a later update, cancellation, and final
 insertion left old draft text beside the final transcript. These checks excluded
 the companion's host callbacks and do not establish the same behavior in Ghostty.
 
-The live Ghostty attempts stopped at foreground window checks or Cua setup and
-sent zero marks. Direct preview rendering, cleanup, and English typing
-interruption with relaxed readback remain unverified in the current Ghostty build.
+A bounded live Ghostty probe then allowed only the unavailable marked-range state
+in a disposable English prompt. The first underlined draft rendered directly in
+the terminal and delivered zero input bytes. After that mark, the IMK wrapper
+reported a concrete range `{0, 16}`, but its text readback remained unreadable.
+The same narrow relaxation refused the next update and cancellation; the first
+draft remained visible after restoring the original companion. Cua Escape later
+removed it without delivering input bytes. This verifies initial rendering and
+that explicit Escape action.
+
+A further scratch policy permits unreadable content only when the concrete range
+matches the recorded Epos range and pinned client. Its live retries sent zero
+marks: one had no newly activated IMK client, and the next stopped during Cua
+focus setup before creating a fresh terminal tab. Continued streaming, companion
+cleanup, final commit, and English typing interruption remain unverified in the
+current Ghostty build.
 
 ## Delivery evidence
 
