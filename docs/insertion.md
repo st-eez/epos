@@ -142,6 +142,25 @@ focus setup before creating a fresh terminal tab. Continued streaming, companion
 cleanup, final commit, and English typing interruption remain unverified in the
 current Ghostty build.
 
+## Session ownership prototype
+
+The [October 7 prototype](../specs/preview-session-prototype.md) tests ownership
+through an uninterrupted input session. Its
+[controlled runner](../probes/inline-preview/SESSION.md) is compiled only with
+`EPOS_SESSION_PROTOTYPE` and accepts explicit experimental socket commands.
+It pins the client and target, checks the reported draft range, and retires before
+ordinary input passes through a synchronous event tap. Fn press and release are
+exempt. Host callbacks, focus changes and connection loss also retire the pass;
+a retired pass cannot send another draft or final text.
+
+The first unavailable range requires a controlled empty fixture. Cancellation
+can return to an unavailable marked range, so its acknowledgement establishes
+the ordered native discard operation only. Native lifecycle checks exercise real
+`NSTextView` updates, discards and English key events with simulated wrapper
+readback. Actual Ghostty updates, cancellation, event coverage and final delivery
+require a separate Cua run with terminal byte evidence. Normal companion commands
+retain their exact range and text ownership checks.
+
 ## Delivery evidence
 
 The October 1 review reproduced selection deletion using native NSTextView and

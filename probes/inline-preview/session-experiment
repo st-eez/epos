@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""Prepare or briefly swap a signed, explicitly gated developer companion."""
+import argparse
+import hashlib
+import json
+import os
+from pathlib import Path
+import shutil
+import signal
+import stat
+import subprocess
+import tempfile
+import time
+
+PROBE = Path(__file__).resolve().parent
+INSTALLED = Path.home() / "Library/Input Methods/EposProbe.app"
+EPOS = Path("/Applications/Epos.app")
+BACKUP = INSTALLED.with_name(".EposProbe-session-original")
+INCOMING = INSTALLED.with_name(".EposProbe-session-incoming")
+
+
+def run(*arguments):
+    return subprocess.run([str(item) for item in arguments], check=True, capture_output=True).stdout
+
+
+def save(path, value):
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(json.dumps(value, sort_keys=True, indent=2) + "\n")
+    os.chmod(temporary, 0o600)
+    temporary.replace(path)
+
+
+def manifest(bundle):
+    result = {}
+    for item in sorted(bundle.rglob("*")):
+        mode = item.lstat().st_mode
+        value = {"mode": stat.S_IMODE(mode)}
+        if item.is_symlink():
+            value["link"] = os.readlink(item)
+        elif item.is_file():
+            value["sha256"] = hashlib.sha256(item.read_bytes()).hexdigest()
+        else:
+            value["directory"] = True
+        result[str(item.relative_to(bundle))] = value
+    return result
+
+
+def parse_requirement(stdout, stderr):
+    prefix = "designated =>"
+    lines = [line.strip()[len(prefix):].strip() for line in (stdout + "\n" + stderr).splitlines()
+             if line.strip().startswith(prefix)]
+    if len(lines) != 1 or not lines[0]:
+        raise RuntimeError("codesign did not return exactly one designated requirement")
+    return lines[0]
+
+
+def requirement(bundle):
+    result = subprocess.run(["/usr/bin/codesign", "-dr", "-", str(bundle)],
+                            check=True, capture_output=True, text=True)
+    return parse_requirement(result.stdout, result.stderr)
+
+
+def pids_for(bundle):
+    executable = bundle / "Contents/MacOS" / bundle.stem
+    result = subprocess.run(["/usr/bin/pgrep", "-x", bundle.stem], capture_output=True)
+    if result.returncode not in [0, 1]:
+        raise RuntimeError("owned process enumeration failed")
+    found = []
+    for raw in result.stdout.splitlines():
+        pid = int(raw)
+        details = subprocess.run(["/bin/ps", "-p", str(pid), "-o", "comm="], capture_output=True)
+        if details.returncode == 1:
+            continue  # The owned process exited after pgrep's snapshot.
+        if details.returncode != 0:
+            raise RuntimeError("owned process path inspection failed")
+        observed = details.stdout.decode().strip()
+        if observed == str(executable):
+            found.append(pid)
+    return found
+
+
+def stop(bundle, force=False):
+    for pid in pids_for(bundle):
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass  # Exit after the validated path snapshot is already stopped.
+    # One bounded grace period, followed by an exact installed-path check.
+    time.sleep(0.5)
+    remaining = pids_for(bundle)
+    if remaining and force:
+        for pid in remaining:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        time.sleep(0.2)
+        remaining = pids_for(bundle)
+    if remaining:
+        raise RuntimeError("owned installed process did not stop")
+
+
+def fingerprints(directory):
+    settings = {}
+    for key in ["settings.dictationShortcut", "settings.inputDeviceUID", "settings.inlinePreview"]:
+        result = subprocess.run(["/usr/bin/defaults", "read", "com.steez.Epos", key], capture_output=True)
+        settings[key] = hashlib.sha256(bytes([result.returncode & 255]) + result.stdout).hexdigest()
+    executable = EPOS / "Contents/MacOS/Epos"
+    return {
+        "settingsHashes": settings,
+        "mainBinarySHA256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+        "inputSources": json.loads(run(directory / "SourceMetadata")),
+        "eposRunning": bool(pids_for(EPOS)),
+    }
+
+
+def prepare():
+    if BACKUP.exists() or INCOMING.exists():
+        raise RuntimeError("unfinished prior swap must be restored first")
+    run("/usr/bin/codesign", "--verify", "--strict", INSTALLED)
+    directory = Path(tempfile.mkdtemp(prefix="epos-session-prototype-"))
+    os.chmod(directory, 0o700)
+    original = directory / "original/EposProbe.app"
+    staged = directory / "staged/EposProbe.app"
+    original.parent.mkdir()
+    staged.parent.mkdir()
+    run("/usr/bin/ditto", INSTALLED, original)
+    run("/usr/bin/ditto", INSTALLED, staged)
+    save(directory / "original-manifest.json", manifest(INSTALLED))
+    sdk = run("/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path").decode().strip()
+    run("/usr/bin/xcrun", "swiftc", "-sdk", sdk, "-target", "arm64-apple-macos26.0", "-O",
+        "-warnings-as-errors", "-D", "EPOS_SESSION_PROTOTYPE", "-module-cache-path", directory / "ModuleCache",
+        "-o", staged / "Contents/MacOS/EposProbe", *sorted((PROBE / "Sources").glob("*.swift")))
+    run("/usr/bin/xcrun", "swiftc", "-sdk", sdk, "-target", "arm64-apple-macos26.0", "-O",
+        "-warnings-as-errors", "-module-cache-path", directory / "ModuleCache", "-o", directory / "SourceMetadata",
+        PROBE / "Tools/session-metadata.swift")
+    # Match the installed leaf certificate, rather than taking an arbitrary
+    # Apple Development certificate when several identities exist.
+    certificate = directory / "certificate"
+    # codesign's optional argument must use '='; a separate prefix is parsed as
+    # another code path rather than the destination for public certificates.
+    run("/usr/bin/codesign", "-d", f"--extract-certificates={certificate}", INSTALLED)
+    leaf = Path(str(certificate) + "0")
+    identity = hashlib.sha1(leaf.read_bytes()).hexdigest().upper()
+    identities = run("/usr/bin/security", "find-identity", "-v", "-p", "codesigning").decode()
+    if identity not in identities:
+        raise RuntimeError("installed signing certificate has no matching private identity")
+    before_requirement = requirement(INSTALLED)
+    run("/usr/bin/codesign", "--force", "--sign", identity, "--timestamp=none",
+        "--preserve-metadata=identifier,entitlements,requirements,flags,runtime", staged)
+    run("/usr/bin/codesign", "--verify", "--strict", staged)
+    after_requirement = requirement(staged)
+    if after_requirement != before_requirement:
+        raise RuntimeError("designated requirement changed")
+    save(directory / "prepared.json", {"sameRequirement": True, "identitySHA1": identity,
+                                       "prototypeSHA256": hashlib.sha256((staged / "Contents/MacOS/EposProbe").read_bytes()).hexdigest()})
+    print(directory, flush=True)
+
+
+def restore(directory):
+    report = {"bundleRestored": False}
+    try:
+        if BACKUP.exists():
+            stop(INSTALLED, force=True)
+            if INSTALLED.exists():
+                archive = directory / "used/EposProbe.app"
+                archive.parent.mkdir(exist_ok=True)
+                if archive.exists():
+                    raise RuntimeError("used-bundle archive already exists")
+                INSTALLED.rename(archive)
+            BACKUP.rename(INSTALLED)
+        if INCOMING.exists():
+            # It is an owned staging copy. Keep it as evidence rather than delete.
+            INCOMING.rename(directory / "unused-incoming.app")
+        run("/usr/bin/codesign", "--verify", "--strict", INSTALLED)
+        report["bundleRestored"] = manifest(INSTALLED) == json.loads((directory / "original-manifest.json").read_text())
+        run("/usr/bin/open", "-g", INSTALLED)
+        time.sleep(0.5)
+        report["companionRunning"] = bool(pids_for(INSTALLED))
+        after = fingerprints(directory)
+        save(directory / "after.json", after)
+        before = json.loads((directory / "before.json").read_text()) if (directory / "before.json").exists() else None
+        report["fingerprintsMatch"] = before is not None and all(before[key] == after[key] for key in
+                                                                 ["settingsHashes", "mainBinarySHA256", "inputSources"])
+        report["eposWasRunning"] = before and before["eposRunning"]
+        report["eposRunning"] = after["eposRunning"]
+        # A GUI controller separately reopens the installed app and verifies it.
+        # Keep bundle and process restoration distinct in the saved evidence.
+    finally:
+        save(directory / "restoration.json", report)
+    if not report["bundleRestored"]:
+        raise RuntimeError("original companion manifest mismatch")
+    print(json.dumps(report, sort_keys=True), flush=True)
+
+
+def execute(directory):
+    # A run owns one evidence directory. Claim it atomically before stopping any
+    # process; reusing its archive or fingerprints would compromise restoration.
+    marker = directory / "run-started"
+    if marker.exists() or (directory / "used").exists() or (directory / "unused-incoming.app").exists():
+        raise RuntimeError("prepared directory is single use; prepare a fresh experiment")
+    if BACKUP.exists() or INCOMING.exists() or manifest(INSTALLED) != json.loads((directory / "original-manifest.json").read_text()):
+        raise RuntimeError("installed companion changed or previous swap unfinished")
+    staged = directory / "staged/EposProbe.app"
+    prepared = json.loads((directory / "prepared.json").read_text())
+    if hashlib.sha256((staged / "Contents/MacOS/EposProbe").read_bytes()).hexdigest() != prepared["prototypeSHA256"]:
+        raise RuntimeError("prepared prototype changed")
+    run("/usr/bin/codesign", "--verify", "--strict", staged)
+    with marker.open("x") as handle:
+        handle.write("single use experiment started\n")
+    os.chmod(marker, 0o600)
+    before = fingerprints(directory)
+    save(directory / "before.json", before)
+    if not before["inputSources"].get("enabled") or not before["inputSources"].get("selected"):
+        raise RuntimeError("existing companion must already be enabled and selected")
+    try:
+        stop(EPOS)
+        stop(INSTALLED)
+        run("/usr/bin/ditto", directory / "staged/EposProbe.app", INCOMING)
+        INSTALLED.rename(BACKUP)
+        INCOMING.rename(INSTALLED)
+        run("/usr/bin/codesign", "--verify", "--strict", INSTALLED)
+        run("/usr/bin/open", "-g", INSTALLED)
+        print("prototype installed; 360-second restoration deadline", flush=True)
+        deadline = time.monotonic() + 360
+        while time.monotonic() < deadline and not (directory / "finish").exists():
+            time.sleep(0.2)
+    finally:
+        # Also report/reopen the original helper if a failure happened after
+        # stopping Epos but before the bundle rename. Main Epos is reopened by
+        # the sole GUI controller after it verifies the original bundle.
+        for signum in [signal.SIGTERM, signal.SIGINT, signal.SIGHUP]:
+            signal.signal(signum, signal.SIG_IGN)
+        restore(directory)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("action", choices=["prepare", "run", "restore", "fingerprint"])
+    parser.add_argument("directory", nargs="?", type=Path)
+    args = parser.parse_args()
+    if args.action == "prepare":
+        prepare()
+        return
+    if args.directory is None or args.directory.stat().st_mode & 0o077:
+        parser.error("private prepared directory required")
+    directory = args.directory.resolve(strict=True)
+    if args.action == "run":
+        def interrupted(*_):
+            raise InterruptedError("experiment interrupted")
+        for signum in [signal.SIGTERM, signal.SIGINT, signal.SIGHUP]:
+            signal.signal(signum, interrupted)
+        execute(directory)
+    elif args.action == "restore":
+        restore(directory)
+    else:
+        print(json.dumps(fingerprints(directory), sort_keys=True))
+
+
+if __name__ == "__main__":
+    main()

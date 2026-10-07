@@ -195,6 +195,12 @@ final class ProbeCommandSocket {
     }
 
     private static func dispatch(_ verb: String, argument: String, connection: UInt64) -> String {
+#if EPOS_SESSION_PROTOTYPE
+        if let reply = ProbeSessionPrototype.command(verb, argument: argument, connection: connection) { return reply }
+        if ProbeSessionPrototype.hasPass && verb != "ping" && verb != "quit" {
+            return "err normal commands unavailable during session experiment"
+        }
+#endif
         switch verb {
         case "ping":
             return "pong"

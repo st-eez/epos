@@ -49,6 +49,9 @@ final class EposProbeInputController: IMKInputController {
     }
 
     override func deactivateServer(_ sender: Any!) {
+#if EPOS_SESSION_PROTOTYPE
+        ProbeSessionPrototype.hostCallback(self, reason: "deactivate")
+#endif
         ProbeLog.write("deactivateServer client=\(Self.describe(sender))")
         // The host is tearing this session down. Anything of ours still marked in
         // it comes off now: once the session is gone the composition is no longer
@@ -64,15 +67,31 @@ final class EposProbeInputController: IMKInputController {
     }
 
     // A palette input method must never swallow typing.
-    override func inputText(_ string: String!, client sender: Any!) -> Bool { false }
+    override func inputText(_ string: String!, client sender: Any!) -> Bool {
+#if EPOS_SESSION_PROTOTYPE
+        ProbeSessionPrototype.hostCallback(self, reason: "input-text")
+#endif
+        return false
+    }
 
-    override func handle(_ event: NSEvent!, client sender: Any!) -> Bool { false }
+    override func handle(_ event: NSEvent!, client sender: Any!) -> Bool {
+#if EPOS_SESSION_PROTOTYPE
+        if !ProbeSessionOwnership.ignoresControllerEvent(isFlagsChange: event?.type == .flagsChanged,
+                                                         keyCode: event?.keyCode) {
+            ProbeSessionPrototype.hostCallback(self, reason: "handle")
+        }
+#endif
+        return false
+    }
 
     /// The host asking a session to finalize. We never insert preview text on a
     /// host's schedule, so this drops the composition instead — and only when the
     /// receiving session is the one holding it: a background app finalizing must
     /// not touch a composition live in another app.
     override func commitComposition(_ sender: Any!) {
+#if EPOS_SESSION_PROTOTYPE
+        ProbeSessionPrototype.hostCallback(self, reason: "host-commit")
+#endif
         guard Self.composition?.controller === self else {
             ProbeLog.write("commitComposition ignored (not the composition owner) client=\(Self.describe(sender))")
             return
@@ -157,6 +176,9 @@ final class EposProbeInputController: IMKInputController {
     /// have asked us to remove the composition is gone. Clear it best-effort and
     /// release the lock it took, rather than leaving either for nobody.
     static func releaseConnection(_ connection: UInt64, reason: String) {
+#if EPOS_SESSION_PROTOTYPE
+        ProbeSessionPrototype.disconnect(connection)
+#endif
         if composition?.connection == connection {
             clearComposition(reason: "connection \(connection) \(reason)")
         }
@@ -441,6 +463,14 @@ final class EposProbeInputController: IMKInputController {
     }
 
     // MARK: - Helpers
+
+#if EPOS_SESSION_PROTOTYPE
+    static var sessionNormalIdle: Bool { lockedConnection == nil && composition == nil }
+
+    static func sessionCandidates(_ bundle: String) -> [EposProbeInputController] {
+        controllers.allObjects.filter { $0.client()?.bundleIdentifier() == bundle }
+    }
+#endif
 
     private static func performUnmarkText(on target: NSObjectProtocol?) -> Bool {
         guard let target, target.responds(to: unmarkTextSelector) else { return false }

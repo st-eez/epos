@@ -33,6 +33,7 @@ Search terms include common user wording and implementation names.
 | Stream into field, marked text, companion input method | live preview, inline dictation, provisional text | [Insertion](insertion.md#stream-into-field) |
 | Captured target guard, final IME commit, Unicode keystrokes | paste, text injection, focus protection | [Insertion](insertion.md#final-delivery) |
 | Terminal delivery, preview evidence and limitations | Ghostty, Claude CLI, terminal dictation | [Terminal input](insertion.md#terminal-input) |
+| Experimental ownership of an uninterrupted draft session | Ghostty prototype, session lifecycle, typing interruption | [Session ownership prototype](../specs/preview-session-prototype.md) |
 | Refused and unconfirmed writes, delivery verification | not inserted, check the field, missing text | [Insertion](insertion.md#delivery-evidence) |
 | Corrections editor, Literal and Name modes, developer tokens | custom words, names, spoken symbols | [Corrections](corrections.md#dictionary-and-editor) |
 | Dictionary upgrades and protected storage | migration, saved corrections, data protection | [Corrections](corrections.md#persistence) |

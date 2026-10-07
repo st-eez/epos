@@ -179,6 +179,12 @@ The preview is memory-only and clears with the recording session. No persistent 
 
 ### Text injection
 
+An isolated [session ownership prototype](preview-session-prototype.md) may test
+marked-text updates without exact draft readback in a disposable input session.
+It must remain outside the normal dictation path until actual host checks cover
+updates, cancellation, final delivery, typing, and focus changes. The experiment
+does not change the shipped ownership checks or authorize irreversible streaming.
+
 Backend: synthesized Unicode keyboard events (`KeystrokeTextInjector` → `CGEventKeyboardSetUnicodeString`), behind `TextInsertionBackend`. The authoritative final transcript is sent once without a shared clipboard. The Unicode payload is set on keyDown only (carrying it on keyUp double-types in Chromium/Electron); events come from a private-state source with cleared flags so the held fn modifier can't leak; long text is chunked on grapheme boundaries within the length the API carries reliably. Requires Accessibility permission.
 
 The insertion session captures its target at shortcut press, before recording or asynchronous finalization can move focus. At release it verifies the same application and focused element. Where Accessibility exposes an editable text context, it also verifies the original value, caret, or selection. It then inserts once or refuses completely. Epos never restores focus and never issues corrective backspaces. Long writes remain a sequence of ordered Unicode events rather than a transactional system edit, so signed-app verification must cover long text in Teams, terminals, and editors. A confirmed Ghostty terminal surface (`com.mitchellh.ghostty`, `AXTextArea`, help `Terminal content area`) exposes rendered screen contents and terminal selection rather than the command editor's input buffer. It uses the opaque focus, window, and target-identity guard, so screen redraws cannot masquerade as input edits. Ghostty search and rename fields, unconfirmed surfaces, and other editable fields keep exact text-context validation. Preview still requires readable selection and provable composition ownership; this terminal distinction does not waive those checks. The signed installer also installs the companion palette input method for preview and optional IME delivery. When it is unavailable, Epos uses the recording HUD and guarded keystroke delivery. Palette selection is additive and does not replace the user's keyboard layout.
