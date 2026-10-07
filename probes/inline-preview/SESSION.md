@@ -83,3 +83,24 @@ Retain failed or unavailable checks alongside successful checks. A draft can
 remain visible when the barrier or ownership readback becomes ambiguous; the
 prototype then refuses its final text. This experiment does not provide daily
 dictation or justify replacing the production ownership check.
+
+## October 7 host preflight
+
+The signed prototype returned `ok session preflight trusted=false`. Existing
+input-source registration, enablement and selection did not supply the companion
+process's required Accessibility trust. The persistent client sent exactly one
+read-only preflight command. It sent no snapshot, begin, draft, cancellation or
+final commands, and no GUI or foreground actions ran.
+
+The operator immediately ended the bounded run. Restoration verified the original
+companion's exact file hashes and modes, and confirmed that its installed process
+was running. Before and after fingerprints matched for the shortcut, microphone
+and inline-preview settings, input-source metadata and main Epos executable.
+Main Epos was stopped before the experiment and remained stopped afterward.
+The run preserved its private local `before.json`, `after.json`,
+`restoration.json` and `protocol.jsonl` evidence.
+
+This run established the permission prerequisite and restoration behavior.
+Actual Ghostty draft updates, cleanup, typing interruption, event coverage,
+held fn and final delivery remain unverified. Native lifecycle checks do not
+settle those host outcomes.
