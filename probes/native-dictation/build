@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+artifact_dir="$(mktemp -d "${TMPDIR:-/tmp}/epos-native-dictation.XXXXXX")"
+chmod 700 "$artifact_dir"
+sdk_path="$(xcrun --sdk macosx --show-sdk-path)"
+bundle="$artifact_dir/EposNativeDictation.app"
+mkdir -p "$bundle/Contents/MacOS"
+
+xcrun swiftc -sdk "$sdk_path" -target arm64-apple-macos26.0 -warnings-as-errors \
+  -module-cache-path "$artifact_dir/ModuleCache" -o "$bundle/Contents/MacOS/EposNativeDictation" \
+  "$probe_dir/Sources/CallbackTrace.swift" "$probe_dir/Sources/main.swift"
+xcrun swiftc -sdk "$sdk_path" -target arm64-apple-macos26.0 -warnings-as-errors \
+  -module-cache-path "$artifact_dir/ModuleCache" -o "$artifact_dir/CallbackTests" \
+  "$probe_dir/Sources/CallbackTrace.swift" "$probe_dir/Tests/CallbackTests.swift"
+"$artifact_dir/CallbackTests" >&2
+cat > "$bundle/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>com.steez.EposNativeDictationFixture</string>
+<key>CFBundleName</key><string>EposNativeDictation</string>
+<key>CFBundleExecutable</key><string>EposNativeDictation</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>26.0</string>
+</dict></plist>
+PLIST
+codesign --force --sign - --timestamp=none "$bundle" >&2
+codesign --verify --strict "$bundle"
+printf '%s\n' "$artifact_dir"

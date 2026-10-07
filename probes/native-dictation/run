@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+artifact_dir="${1:?usage: run BUILT_ARTIFACT_DIRECTORY}"
+[[ -d "$artifact_dir" && -f "$artifact_dir/EposNativeDictation.app/Contents/MacOS/EposNativeDictation" ]]
+if [[ -e "$artifact_dir/callbacks.jsonl" ]]; then
+  echo "use a fresh build directory for each trial" >&2
+  exit 1
+fi
+exec kosmos open "$artifact_dir/EposNativeDictation.app" --args "$artifact_dir"

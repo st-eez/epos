@@ -174,6 +174,17 @@ unverified in this prototype. See the
 
 ## Delivery evidence
 
+The [native F5 comparison](../probes/native-dictation/README.md) measures Steve's
+reported Apple Dictation streaming through a disposable AppKit callback trace and
+a separate Ghostty raw prompt with timed byte counts. The former traces public
+`setMarkedText`, `insertText` and `unmarkText` calls; the latter distinguishes
+visible words from bytes delivered while Dictation remains active. Both save
+metadata only. The native trial requires Steve to operate Dictation. Its actual
+callback model and Ghostty commit timing remain unverified until that run.
+The operator must keep Dictation active until the raw fixture records its paused
+phase and the byte count settles, then stop. One zero-count snapshot cannot
+establish provisional rendering; raw timestamps measure receiver reads.
+
 The October 1 review reproduced selection deletion using native NSTextView and
 added selection, ownership, and superseded-connection safeguards. Run
 `probes/inline-preview/verify` to compile the companion and exercise its native

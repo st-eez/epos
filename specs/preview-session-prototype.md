@@ -43,3 +43,33 @@ Review the final implementation independently. Live testing uses Cua and a
 disposable Ghostty prompt; restore the signed companion and Epos afterward.
 Report unavailable checks separately from passing checks. Promotion into normal
 dictation requires a new scope decision and real host evidence.
+
+## Native Dictation comparison
+
+Added 2026-10-07. Steve reports that F5 Apple Dictation streams directly into
+Ghostty. Establish this user-operated baseline separately from the synthetic
+session prototype, whose commands use no microphone.
+
+Build a disposable AppKit text fixture using an `NSTextView` subclass. Record only
+public text-input callback names, UTF-16 lengths, selection and marked ranges,
+and relative timestamps for `setMarkedText`, `insertText` and `unmarkText`.
+Display the input and metadata trace locally so Steve can dictate a known
+synthetic phrase. Do not retain phrase text or audio in evidence, inspect arbitrary
+preferences, install an app or change the production companion. Launch the
+temporary fixture through `kosmos open` only when the GUI operator runs it.
+
+For Ghostty, reuse the disposable raw terminal fixture with byte-count and fixed
+phrase-equality metadata. Add manual phase markers if needed to distinguish
+visible provisional text from bytes delivered before dictation ends. Steve starts
+and speaks native Dictation; the agent does not run microphone capture itself.
+Keep Dictation active until the raw fixture records the paused phase and its byte
+count settles across successive reads, then stop Dictation. Writing the phase
+file alone does not establish that ordering. Raw timestamps measure when the
+fixture reads queued input, not native commit or recognition timing.
+
+The AppKit callback trace describes that fixture's public boundary. It cannot
+prove the exact Ghostty callback path or Apple's internal delivery architecture.
+Combine its trace with independent Ghostty screenshots and timed terminal counts.
+Keep observed native behavior, synthetic callback checks and source research
+separate. Actual native Dictation, Ghostty timing and interruption remain
+unverified until the controlled user-operated run completes.

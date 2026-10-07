@@ -24,7 +24,11 @@ def main():
     final = b"EPOS final token"
     alpha = b"EPOS draft alpha"
     beta = b"EPOS draft beta"
-    deadline = time.monotonic() + 900
+    started = time.monotonic()
+    deadline = started + 900
+    first_input = None
+    last_input = None
+    last_phase = None
     alive = True
 
     def stop(*_):
@@ -39,11 +43,20 @@ def main():
             "containsBeta": beta in received, "xCount": received.count(b"x"),
             "backspaceCount": received.count(b"\x7f") + received.count(b"\x08"),
             "leftCount": received.count(b"\x1b[D"),
+            "elapsedMilliseconds": round((time.monotonic() - started) * 1000, 3),
+            "firstInputMilliseconds": first_input, "lastInputMilliseconds": last_input,
+            "nativePhraseMatches": bytes(received).lower().strip(b" \r\n\t.,!?") == final.lower(),
         }
         temporary = state_file.with_suffix(".tmp")
         temporary.write_text(json.dumps(value, sort_keys=True) + "\n")
         os.chmod(temporary, 0o600)
         temporary.replace(state_file)
+
+    def event(kind):
+        value = {"kind": kind, "milliseconds": round((time.monotonic() - started) * 1000, 3),
+                 "byteCount": len(received)}
+        with (directory / "terminal-events.jsonl").open("a") as log:
+            log.write(json.dumps(value, sort_keys=True) + "\n")
 
     for signum in [signal.SIGTERM, signal.SIGINT, signal.SIGHUP]:
         signal.signal(signum, stop)
@@ -59,12 +72,22 @@ def main():
                                      + sys.argv[2] + "\r\nSynthetic input: ").encode())
         save(True)
         while alive and time.monotonic() < deadline and not stop_file.exists():
+            phase_file = directory / "native-phase"
+            phase = phase_file.read_text().strip() if phase_file.exists() else None
+            if phase in ["listening", "paused", "finished"] and phase != last_phase:
+                last_phase = phase
+                event(phase)
             readable, _, _ = select.select([descriptor], [], [], 0.2)
             if readable:
                 chunk = os.read(descriptor, 4096)
                 if not chunk:
                     break
                 received.extend(chunk)
+                elapsed = round((time.monotonic() - started) * 1000, 3)
+                if first_input is None:
+                    first_input = elapsed
+                last_input = elapsed
+                event("input")
                 if len(received) > 4096:
                     break
                 # Render only our exact known payload, never arbitrary input.
@@ -74,6 +97,7 @@ def main():
     finally:
         termios.tcsetattr(descriptor, termios.TCSANOW, original)
         save(False)
+        event("stopped")
         os.write(sys.stdout.fileno(), b"\r\nSynthetic fixture ended.\r\n")
 
 
