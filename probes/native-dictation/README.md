@@ -3,7 +3,11 @@
 Steve reports that his F5 Apple Dictation shortcut streams into Ghostty. This
 [comparison scope](../../specs/preview-session-prototype.md#native-dictation-comparison)
 measures that behavior separately from Epos's marked-text session prototype.
-The native trial is user operated. The fixture calls no speech or microphone API.
+The fixture calls no speech or microphone API. An automated attempt can use Cua
+and one short, locally synthesized English phrase played through the speakers
+into the physical microphone. Record that route separately from human speech;
+do not treat it as a recognition accuracy test. Delete the synthesized input
+file after the trial. Evidence retains no dictated text or microphone audio.
 
 ## AppKit callback trace
 
@@ -88,10 +92,26 @@ The source research verified Ghostty's installed revision
 [AppKit text input client](https://github.com/ghostty-org/ghostty/blob/33da6848d63b3bba2b4f31ab1531d618f2795192/macos/Sources/Ghostty/Surface%20View/SurfaceView_AppKit.swift)
 stores temporary marked text separately and sends nonempty inserted text as typed
 key events. [The Dictation fix](https://github.com/ghostty-org/ghostty/pull/13817)
-is related primary source evidence. A user-operated F5 trial still needs to
+is related primary source evidence. A controlled native trial still needs to
 establish the actual callback order, commit timing and interruption behavior.
 
 The synthetic checks validate callback capture and metadata privacy in a native
 text view, and byte timing in an isolated pseudo-terminal. They produce no
 recording cues and do not start Dictation. Epos's installed companion, settings
 and final delivery behavior are outside this comparison's edits.
+
+### October 8 automation preflight
+
+A fresh fixture build passed its native check and signature verification. Cua
+opened the fixture on the agent workspace and activated Start trial through its
+background Accessibility route. The input remained empty.
+
+The host reported MacBook Pro Microphone and MacBook Pro Speakers as its default
+input and output. Local speech synthesis produced the fixed English phrase as a
+1.49-second temporary audio file. The file was not played.
+
+Cua refused the background F5 attempt with `same_pid_keyboard_ambiguity` because
+it observed another eligible window in that process. It sent no F5 event, and the
+trace contained only fixture readiness and the trial start marker. The automated
+trial needs foreground control before another shortcut attempt. This establishes
+the control restriction, not native Dictation behavior.

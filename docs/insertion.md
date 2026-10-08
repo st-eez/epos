@@ -179,7 +179,8 @@ reported Apple Dictation streaming through a disposable AppKit callback trace an
 a separate Ghostty raw prompt with timed byte counts. The former traces public
 `setMarkedText`, `insertText` and `unmarkText` calls; the latter distinguishes
 visible words from bytes delivered while Dictation remains active. Both save
-metadata only. The native trial requires Steve to operate Dictation. Its actual
+metadata only. The native trial can use human speech or one short synthesized
+English phrase through the physical speaker and microphone route. Its actual
 callback model and Ghostty commit timing remain unverified until that run.
 The operator must keep Dictation active until the raw fixture records its paused
 phase and the byte count settles, then stop. One zero-count snapshot cannot
