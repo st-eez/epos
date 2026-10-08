@@ -17,7 +17,7 @@ socket, native text input operations, and existing target guards. Keep the norma
 protocol and installed app behavior unchanged unless the experiment is explicitly
 selected. Do not add a Ghostty patch or another runtime dependency.
 
-The prototype must pin the controller, client, connection, and target. It must
+The ownership test must pin the controller, client, connection, and target. It must
 retire a pass on ordinary typing, caret or mouse interaction, focus movement,
 controller teardown, connection loss, or ambiguous cleanup. Retired passes must
 not restart marking or authorize a final write. Keep readable selection and
@@ -29,6 +29,30 @@ Determine which events the actual IMK client supplies. Do not assume that host
 callbacks cover every edit, or that a saved client identity proves ownership.
 If event coverage or cleanup cannot be established, record the failed condition
 and retain the prototype as an experiment.
+
+## Background rendering test
+
+Added 2026-10-08. Steve requires the agent workspace to stay hidden. A separate
+explicit test may address a disposable Ghostty client in the background through
+the existing companion socket and native marked-text calls. It must not show the
+workspace, activate an app, restore focus or send foreground input.
+
+Pin one fresh client after a snapshot and one connection. Require a live empty
+raw fixture, its synthetic nonce in the owned AX window title, unchanged target
+geometry and readable empty selection. The client caret must intersect only the
+owned window among all Ghostty windows, including hidden windows. Refuse missing
+clients, overlap, stale fixture metadata, nonzero input bytes and controller
+teardown. The public IMK client supplies no process or window identifier, so
+bundle identity alone cannot authorize this test.
+
+Reuse the lifecycle policy for ordered draft replacement, cancellation and final
+delivery. Accept only the fixed alpha, beta and final tokens. This background
+test omits the foreground and global event barrier requirements. Its evidence
+can establish rendering, replacement, cancellation and exact delivery through
+the addressed client. It cannot establish keyboard interruption, held fn, focus
+changes or uninterrupted ownership. Keep the ownership test and production
+checks separate. If background interaction cannot establish the owned client,
+report that failed prerequisite.
 
 ## Verification
 

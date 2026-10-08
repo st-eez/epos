@@ -14,6 +14,8 @@ enum ProbeSessionPrototype {
         let pid: pid_t
         let window: CGWindowID
         let bundle: String
+        let renderingNonce: String?
+        let renderingBounds: CGRect?
         let policy: ProbeSessionOwnership
         var text = ""
     }
@@ -46,6 +48,7 @@ enum ProbeSessionPrototype {
             snapshot = (connection, argument, Set(EposProbeInputController.sessionCandidates(argument).map(ObjectIdentifier.init)))
             return "ok session snapshot"
         case "session-begin": return begin(argument, connection: connection)
+        case "session-begin-background": return begin(argument, connection: connection, renderingOnly: true)
         case "session-mark": return mark(argument, connection: connection)
         case "session-cancel": return cancel(connection: connection)
         case "session-final": return final(argument, connection: connection)
@@ -60,38 +63,55 @@ enum ProbeSessionPrototype {
         }
     }
 
-    private static func begin(_ argument: String, connection: UInt64) -> String {
+    private static func begin(_ argument: String, connection: UInt64, renderingOnly: Bool = false) -> String {
         let parts = argument.split(separator: " ").map(String.init)
-        guard parts.count == 4, parts[3] == "controlled-empty-fixture",
+        guard parts.count == (renderingOnly ? 5 : 4), parts[3] == "controlled-empty-fixture",
               let pid = pid_t(parts[1]), pid > 0, let window = CGWindowID(parts[2]), window > 0,
               let saved = snapshot, saved.connection == connection, saved.bundle == parts[0],
               pass == nil, EposProbeInputController.sessionNormalIdle else {
             return "err session requires snapshot and controlled empty fixture"
+        }
+        let renderingNonce = renderingOnly ? parts[4] : nil
+        if let renderingNonce {
+            guard parts[0] == "com.mitchellh.ghostty",
+                  renderingNonce.range(of: "^EPOS-SESSION-[A-Z0-9-]{1,64}$", options: .regularExpression) != nil else {
+                return "err session rendering requires Ghostty fixture nonce"
+            }
         }
         let fresh = EposProbeInputController.sessionCandidates(parts[0]).filter { !saved.controllers.contains(ObjectIdentifier($0)) }
         guard fresh.count == 1, let controller = fresh.first else {
             return "err session fresh-client-count fresh=\(fresh.count)"
         }
         guard let client = controller.client() else { return "err session fresh-client-unavailable fresh=1" }
-        guard targetMatches(pid: pid, window: window, bundle: parts[0], client: client) else {
+        guard let bounds = targetBounds(pid: pid, window: window, bundle: parts[0], client: client,
+                                        renderingNonce: renderingNonce) else {
             return "err session target gate=\(targetGate) windows=\(targetWindowCandidates) fresh=1"
         }
         guard let policy = ProbeSessionOwnership(controlledEmptyFixture: true, observation: observe(client, text: nil)) else {
             return "err session requires one fresh focused empty fixture client"
         }
-        guard startBarrier() else { return "err session event tap unavailable gate=\(barrierGate)" }
+        if renderingOnly {
+            stopBarrier()
+            barrierGate = "rendering-only"
+        } else {
+            guard startBarrier() else { return "err session event tap unavailable gate=\(barrierGate)" }
+        }
         eventCount = 0
         callbackCount = 0
         discardCount = 0
         finalCount = 0
         previousFlags = CGEventSource.flagsState(.combinedSessionState)
         pass = Pass(controller: controller, client: client, connection: connection,
-                    pid: pid, window: window, bundle: parts[0], policy: policy)
+                    pid: pid, window: window, bundle: parts[0], renderingNonce: renderingNonce,
+                    renderingBounds: renderingOnly ? bounds : nil, policy: policy)
         snapshot = nil
-        return "ok session begun controlled-fixture=true"
+        return "ok session begun controlled-fixture=true rendering-only=\(renderingOnly)"
     }
 
     private static func mark(_ text: String, connection: UInt64) -> String {
+        if pass?.renderingNonce != nil, text != "EPOS draft alpha", text != "EPOS draft beta" {
+            return "err session rendering requires fixed draft"
+        }
         guard !text.isEmpty, (text as NSString).length <= 256,
               !text.contains("\n"), !text.contains("\r") else { return "err session bounded single line required" }
         guard let current = operable(connection), let client = current.client,
@@ -129,6 +149,7 @@ enum ProbeSessionPrototype {
     }
 
     private static func final(_ text: String, connection: UInt64) -> String {
+        if pass?.renderingNonce != nil, text != "EPOS final token" { return "err session rendering requires fixed final" }
         guard !text.isEmpty, (text as NSString).length <= 256,
               !text.contains("\n"), !text.contains("\r"),
               let current = operable(connection), let client = current.client,
@@ -145,10 +166,11 @@ enum ProbeSessionPrototype {
     private static func operable(_ connection: UInt64) -> Pass? {
         guard let current = pass, current.connection == connection,
               !current.policy.isRetired, current.policy.state != .finished,
-              let tap, CGEvent.tapIsEnabled(tap: tap),
+              current.renderingNonce != nil || tap.map({ CGEvent.tapIsEnabled(tap: $0) }) == true,
               let controller = current.controller, let client = current.client,
               controller.client() === client,
-              targetMatches(pid: current.pid, window: current.window, bundle: current.bundle, client: client) else {
+              targetBounds(pid: current.pid, window: current.window, bundle: current.bundle, client: client,
+                           renderingNonce: current.renderingNonce, expectedBounds: current.renderingBounds) != nil else {
             interrupt("target-or-barrier", mayDiscard: false)
             return nil
         }
@@ -169,6 +191,7 @@ enum ProbeSessionPrototype {
         return "ok session state=\(state) selection=\(selected.location),\(selected.length) "
             + "marked=\(marked.location),\(marked.length) events=\(eventCount) callbacks=\(callbackCount) "
             + "discards=\(discardCount) finals=\(finalCount) tap=\(tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false) "
+            + "rendering-only=\(current.renderingNonce != nil) "
             + "target=\(targetGate) windows=\(targetWindowCandidates) barrier=\(barrierGate)"
     }
 
@@ -217,37 +240,59 @@ enum ProbeSessionPrototype {
                      })
     }
 
-    private static func targetMatches(pid: pid_t, window: CGWindowID, bundle: String, client: IMKTextInput) -> Bool {
+    private static func targetBounds(pid: pid_t, window: CGWindowID, bundle: String, client: IMKTextInput,
+                                     renderingNonce: String? = nil, expectedBounds: CGRect? = nil) -> CGRect? {
         targetWindowCandidates = 0
-        targetGate = "front-pid"
-        guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
+        targetGate = renderingNonce == nil ? "front-pid" : "rendering-target-frontmost"
+        if renderingNonce == nil {
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return nil }
+        } else {
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier != pid else { return nil }
+        }
         targetGate = "bundle"
         guard NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == bundle,
-              client.bundleIdentifier() == bundle else { return false }
+              client.bundleIdentifier() == bundle else { return nil }
         let app = AXUIElementCreateApplication(pid)
         var focused: CFTypeRef?
         targetGate = "focused-window-unavailable"
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focused) == .success,
-              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
+              let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
         let element = unsafeBitCast(focused, to: AXUIElement.self)
+        if let renderingNonce {
+            var title: CFTypeRef?
+            targetGate = "fixture-window-title"
+            guard AXUIElementCopyAttributeValue(element, kAXTitleAttribute as CFString, &title) == .success,
+                  title as? String == renderingNonce else { return nil }
+        }
         targetGate = "focused-frame-unavailable"
-        guard let focusedBounds = ProbeSessionWindow.focusedBounds(element, pid: pid) else { return false }
+        guard let focusedBounds = ProbeSessionWindow.focusedBounds(element, pid: pid) else { return nil }
         targetGate = "windows-unavailable"
-        guard let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else { return false }
-        let match = ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: focusedBounds, windows: windows)
+        guard let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let match = ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: focusedBounds, windows: windows,
+                                             requireOnScreen: renderingNonce == nil, expectedBounds: expectedBounds)
         targetGate = match.gate
         targetWindowCandidates = match.candidates
-        guard let rect = match.bounds else { return false }
+        guard let rect = match.bounds else { return nil }
         var caret = NSRect.zero
         _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &caret)
         targetGate = "caret-unavailable"
-        guard caret.origin.x.isFinite, caret.origin.y.isFinite, caret.height > 1 else { return false }
+        guard caret.origin.x.isFinite, caret.origin.y.isFinite, caret.height > 1 else { return nil }
         // IMK rectangles use bottom-left coordinates; CGWindow bounds use the
         // main screen's top-left origin. Keep the known fixture inside its window.
         let screenHeight = CGDisplayBounds(CGMainDisplayID()).height
         let flipped = CGRect(x: caret.minX, y: screenHeight - caret.maxY, width: max(caret.width, 1), height: caret.height)
+        if renderingNonce != nil {
+            let bundlePIDs = Set(windows.compactMap { info -> pid_t? in
+                guard let owner = info[kCGWindowOwnerPID as String] as? pid_t,
+                      NSRunningApplication(processIdentifier: owner)?.bundleIdentifier == bundle else { return nil }
+                return owner
+            })
+            targetGate = "rendering-caret-ambiguous"
+            guard ProbeSessionWindow.exclusiveCaret(flipped, pid: pid, window: window, bundlePIDs: bundlePIDs,
+                                                    windows: windows) else { return nil }
+        }
         targetGate = rect.intersects(flipped) ? "ready" : "caret-outside-window"
-        return targetGate == "ready"
+        return targetGate == "ready" ? rect : nil
     }
 
     private static func startBarrier() -> Bool {

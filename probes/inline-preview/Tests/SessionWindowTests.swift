@@ -36,6 +36,38 @@ enum SessionWindowTests {
         precondition(moved.bounds == nil && moved.gate == "window-frame-unmatched")
         let hidden = ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: frame, windows: [candidate(onScreen: false)])
         precondition(hidden.bounds == nil && hidden.gate == "window-offscreen")
+        let background = ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: frame,
+                                                  windows: [candidate(onScreen: false)], requireOnScreen: false)
+        precondition(background.bounds == frame, "rendering test required on-screen visibility")
+        for changed in [frame.offsetBy(dx: 50, dy: 0), CGRect(x: frame.minX, y: frame.minY, width: 1000, height: frame.height)] {
+            let coherent = ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: changed,
+                                                   windows: [candidate(bounds: changed)], requireOnScreen: false)
+            precondition(coherent.bounds == changed, "fixture failed to represent coherent AX and Quartz movement")
+            let pinned = ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: changed,
+                                                 windows: [candidate(bounds: changed)], requireOnScreen: false, expectedBounds: frame)
+            precondition(pinned.bounds == nil && pinned.gate == "window-frame-changed",
+                         "background pass adopted coherent movement or resize")
+        }
+        precondition(ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: frame,
+                                             windows: [own], requireOnScreen: false, expectedBounds: frame).bounds == frame)
+
+        let caret = CGRect(x: 20, y: 50, width: 1, height: 15)
+        precondition(ProbeSessionWindow.exclusiveCaret(caret, pid: pid, window: window, bundlePIDs: [pid], windows: [own]))
+        precondition(!ProbeSessionWindow.exclusiveCaret(caret, pid: pid, window: window + 1, bundlePIDs: [pid], windows: [own]))
+        for secondOwner in [pid, pid + 1] {
+            for visible in [false, true] {
+                let overlap = candidate(id: window + 1, owner: secondOwner, onScreen: visible)
+                precondition(!ProbeSessionWindow.exclusiveCaret(caret, pid: pid, window: window,
+                                                               bundlePIDs: [pid, pid + 1], windows: [own, overlap]))
+            }
+        }
+        let elsewhere = candidate(id: window + 1, owner: pid + 1, bounds: frame.offsetBy(dx: 3000, dy: 0))
+        precondition(ProbeSessionWindow.exclusiveCaret(caret, pid: pid, window: window,
+                                                      bundlePIDs: [pid, pid + 1], windows: [own, elsewhere]))
+        precondition(!ProbeSessionWindow.exclusiveCaret(caret.offsetBy(dx: 3000, dy: 0), pid: pid, window: window,
+                                                       bundlePIDs: [pid, pid + 1], windows: [own, elsewhere]))
+        precondition(!ProbeSessionWindow.exclusiveCaret(CGRect(x: 20, y: 50, width: CGFloat.infinity, height: 15),
+                                                       pid: pid, window: window, bundlePIDs: [pid], windows: [own]))
 
         let secondary = CGRect(x: -2000, y: -100, width: 1600, height: 900)
         precondition(ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: secondary,

@@ -161,6 +161,14 @@ readback. Actual Ghostty updates, cancellation, event coverage and final deliver
 require a separate Cua run with terminal byte evidence. Normal companion commands
 retain their exact range and text ownership checks.
 
+The separate background rendering test keeps the agent workspace hidden. It
+uses one fresh client, the disposable prompt's nonce and exclusive caret geometry
+to address that prompt without asserting global foreground. Fixed draft updates,
+cancellation and final delivery require screenshots and terminal byte evidence.
+It reuses the lifecycle policy but does not install the global input barrier.
+Its outcome cannot establish typing interruption or daily-use safety. See the
+[background workflow](../probes/inline-preview/SESSION.md#hidden-workspace-rendering-run).
+
 The October 7 and October 8 host preflights returned `trusted=false` for the
 signed companion.
 The experiment requires that process's Accessibility trust for its event tap.

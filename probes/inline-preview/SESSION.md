@@ -103,6 +103,48 @@ remain visible when the barrier or ownership readback becomes ambiguous; the
 prototype then refuses its final text. This experiment does not provide daily
 dictation or justify replacing the production ownership check.
 
+## Hidden workspace rendering run
+
+`background-begin` selects a separate rendering test within the same prepared
+prototype and persistent client. Keep the agent workspace hidden. Do not show
+it, activate Ghostty, restore focus or send foreground input. The foreground
+ownership steps above remain outside this background test.
+
+Prepare and start the bounded runner as above. Send `preflight` and `snapshot`,
+then create one owned disposable Ghostty raw prompt through `kosmos open`.
+Verify its nonce, process and window independently through background Cua state
+and the fixture metadata. The prompt must have received zero bytes. Configure
+`target PID WINDOW`, then send `background-begin` without activating the app.
+
+The client requires a running fixture heartbeat no older than two seconds,
+zero bytes and the expected synthetic nonce before begin and every text command.
+The companion requires the nonce as the owned AX window title, one fresh IMK
+client, unchanged geometry and readable empty selection. It refuses a foreground
+target. The client caret must intersect only the target among all Ghostty
+windows, including hidden windows and windows from other Ghostty processes.
+No fresh client, missing AX metadata or overlapping geometry ends this test at
+that prerequisite. Background interaction does not authorize a foreground retry.
+The pass pins the verified bounds at begin. Later commands refuse coherent window
+movement or resizing with `window-frame-changed`, even when AX and Quartz still
+agree with each other.
+
+Send `alpha`, screenshot the owned window, then `beta` and screenshot again.
+Send `cancel`, verify that the draft disappeared and the terminal still has zero
+bytes, then send `final`. Only `EPOS draft alpha`, `EPOS draft beta` and
+`EPOS final token` are allowed in this mode. Successful final delivery requires
+`exactFinal=true` and `byteCount=16`. Ghostty requires an associated native event
+for `insertText`; a companion acknowledgement cannot prove that requirement was
+satisfied in the background.
+
+The pass reuses the ordered lifecycle policy, client pin, selection checks,
+reported marked range, callback retirement and disconnection cleanup. It does
+not install a global event tap or observe global foreground changes. Inspection
+labels the pass `rendering-only=true`, `tap=false` and `barrier=rendering-only`.
+This run can establish visible replacement, cancellation and byte delivery in
+the addressed client. It does not establish keyboard interruption, held fn,
+focus protection or uninterrupted ownership. Finish and verify restoration,
+stop the raw fixture and close only its owned window as above.
+
 ## October 7 host preflight
 
 The signed prototype returned `ok session preflight trusted=false`. Existing
@@ -170,3 +212,29 @@ not a valid empty fixture. No begin or native text operation ran. Exact bundle
 restoration, companion liveness and unchanged fingerprints were confirmed.
 The operator had incorrectly treated workspace placement as authorization for
 foreground control. Future background probes must not repeat that assumption.
+
+## October 8 hidden workspace trials
+
+Two fresh signed runs recognized Accessibility trust and kept the agent
+workspace hidden. Each used an owned raw terminal with its verified synthetic
+nonce and zero received bytes. Both background begins refused with
+`fresh-client-count fresh=0`. No draft, cancellation or final operation ran.
+
+The second run included one Cua pixel click through its background per-process
+route. Cua reported the click as unverified; the helper still had no fresh active
+Ghostty client afterward. The AX tree exposed the fixture prompt, while the
+window captures showed the title and blank terminal canvas. These results do not
+establish that the click reached Ghostty's responder or that native draft
+rendering is unavailable. Obtaining an activated IMK client for this inactive
+fixture remains the failed prerequisite.
+
+Resolve the test window's owner through Cua's WindowServer metadata. The raw
+fixture's parent PID was a helper process rather than the window owner in these
+runs. A background frame request also returned an unverified result; do not
+treat that acknowledgement as the requested position.
+
+Both runs restored the exact original companion and confirmed unchanged
+settings, input-source and main executable fingerprints. Fixture shutdown
+reported zero bytes and `running=false`. Fresh Kosmos state confirmed the agent
+workspace remained hidden and the original terminal remained focused.
+Rendering, draft revision, cancellation and final delivery remain unverified.

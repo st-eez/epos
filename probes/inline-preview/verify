@@ -48,3 +48,4 @@ sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 "$verify_dir/SessionWindowTests"
 
 /usr/bin/python3 -I "$probe_dir/Tests/SessionRunnerTests.py"
+/usr/bin/python3 -I "$probe_dir/Tests/SessionClientTests.py"
