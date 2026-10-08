@@ -18,6 +18,7 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
             }
             let recorder = try CallbackTrace(file: directory.appendingPathComponent("callbacks.jsonl"))
             trace = recorder
+            installMenu()
             let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 840, height: 660),
                                   styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
             window.title = "Epos native Dictation comparison"
@@ -27,7 +28,8 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
             stack.spacing = 12
             stack.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
             let instructions = NSTextField(wrappingLabelWithString:
-                "Click Start trial, then the input below. Press your F5 Dictation shortcut and say only: "
+                "Click Start trial, then the input below. Start Dictation from the Edit menu if offered, "
+                + "or use your configured Dictation shortcut. Say only: "
                 + "\"\(CallbackTrace.syntheticPhrase)\". Pause while recording so the operator can inspect the draft. "
                 + "Stop Dictation, then click Finish trial. The saved trace contains callback names, lengths, ranges "
                 + "and timing. This fixture saves no text or audio. Use a new app launch for each trial.")
@@ -85,6 +87,29 @@ final class FixtureDelegate: NSObject, NSApplicationDelegate {
         } catch {
             NSApp.terminate(nil)
         }
+    }
+
+    private func installMenu() {
+        let name = Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String
+            ?? ProcessInfo.processInfo.processName
+        let menu = NSMenu()
+        let applicationItem = NSMenuItem(title: name, action: nil, keyEquivalent: "")
+        let applicationMenu = NSMenu(title: name)
+        applicationMenu.addItem(withTitle: "Quit \(name)", action: #selector(NSApplication.terminate(_:)),
+                                keyEquivalent: "q")
+        applicationItem.submenu = applicationMenu
+        menu.addItem(applicationItem)
+
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+        editItem.submenu = editMenu
+        menu.addItem(editItem)
+        NSApp.mainMenu = menu
     }
 
     @objc private func startTrial() {

@@ -26,8 +26,20 @@ nothing. Launch the reviewed app through Kosmos:
 probes/native-dictation/run ARTIFACT_DIRECTORY
 ```
 
-The operator uses Cua to inspect the exact fixture window. Steve clicks Start
-trial, focuses its input and presses his existing F5 shortcut. Speak only
+The fixture provides application and Edit menus with standard AppKit editing
+actions. Inspect the live Edit menu for macOS's Start Dictation item; its presence
+and availability require runtime verification. The fixture supplies no custom
+Dictation action.
+
+Cua Driver 0.32.0 maps `f5` to virtual keycode 96 and emits ordinary keyboard
+events, as shown in its [release source](https://github.com/trycua/cua/blob/cua-driver-rs-v0.32.0/libs/cua-driver/rust/crates/platform-macos/src/input/keyboard.rs).
+Apple distinguishes [function keys from their hardware features](https://support.apple.com/en-gb/102439)
+and documents [Edit > Start Dictation](https://support.apple.com/en-gb/guide/mac-help/mh40584/26/mac/26).
+A synthetic Cua F5 does not establish that the hardware microphone key was used.
+
+The operator uses Cua to inspect the exact fixture window, clicks Start trial and
+focuses its input. Start Dictation through the native Edit menu if offered, or use
+the existing Dictation shortcut. Speak only
 "EPOS final token", pause while Dictation remains active, then stop Dictation and
 click Finish trial. Confirm the displayed phrase and trace independently.
 
@@ -57,8 +69,9 @@ python3 -I probes/inline-preview/Tools/session-fixture.py \
 ```
 
 This fixture executes no input. The operator marks listening by writing
-`listening` to `native-phase` in that directory, then Steve starts F5 Dictation
-and says the same phrase. While Dictation remains active, capture the synthetic
+`listening` to `native-phase` in that directory, starts Dictation through the
+native Edit menu or the existing shortcut, and supplies the same phrase. While
+Dictation remains active, capture the synthetic
 prompt and write `paused` to `native-phase`. Keep Dictation active until the
 fixture records that paused event and the byte count settles across successive
 reads. Capture the settled counts while Dictation remains active. Only then stop
@@ -100,18 +113,32 @@ text view, and byte timing in an isolated pseudo-terminal. They produce no
 recording cues and do not start Dictation. Epos's installed companion, settings
 and final delivery behavior are outside this comparison's edits.
 
-### October 8 automation preflight
+### October 8 automated attempt
 
-A fresh fixture build passed its native check and signature verification. Cua
-opened the fixture on the agent workspace and activated Start trial through its
-background Accessibility route. The input remained empty.
+A fresh fixture build passed its native check and signature verification. The
+GUI operator opened the owned AppKit and Ghostty windows on the agent workspace.
+Cua activated Start trial through its background Accessibility route. An initial
+background F5 attempt was refused with `same_pid_keyboard_ambiguity` because Cua
+observed another eligible window in that process. It sent no F5 event.
 
-The host reported MacBook Pro Microphone and MacBook Pro Speakers as its default
-input and output. Local speech synthesis produced the fixed English phrase as a
-1.49-second temporary audio file. The file was not played.
+Cua also refused menu activation while the windows were hidden. Showing the
+agent workspace allowed the native Edit > Start Dictation action. The AppKit
+fixture showed Stop Dictation and the microphone badge. Ghostty showed Stop
+Dictation, then Cancel Dictation. These observations establish activation of the
+native UI.
 
-Cua refused the background F5 attempt with `same_pid_keyboard_ambiguity` because
-it observed another eligible window in that process. It sent no F5 event, and the
-trace contained only fixture readiness and the trial start marker. The automated
-trial needs foreground control before another shortcut attempt. This establishes
-the control restriction, not native Dictation behavior.
+One synthetic phrase playback was attempted per fixture. Both `afplay` commands
+exited zero, but Steve reported hearing no test phrase and that starting Dictation
+interrupted his music. The acoustic trial is invalid. A successful playback
+process does not establish audible output or microphone input, so this attempt
+cannot establish recognition behavior, text callbacks or streaming timing.
+
+The AppKit trace contained only fixture readiness and trial start. The raw
+Ghostty receiver reported zero bytes at the acknowledged paused marker and a
+later state read. It later recorded four unidentified bytes, including one
+backspace, and the fixed phrase did not match. Those bytes cannot be attributed
+to Dictation.
+
+Both owned windows were closed. The raw fixture reported `running=false` and
+restored its terminal settings, and the synthetic audio file was deleted.
+The controlled native comparison remains unconfirmed.
