@@ -94,11 +94,12 @@ class SessionRunnerTests(unittest.TestCase):
         self.assertTrue(report["companionRunning"])
         self.assertFalse(report["eposRunning"])
         self.assertTrue(report["eposWasRunning"])
-        self.assertIn(("/usr/bin/open", "-g", self.installed), self.calls)
+        self.assertIn(("kosmos", "open", "-g", self.installed), self.calls)
 
     def test_interval_restores_exact_original_and_keeps_main_relaunch_separate(self):
         runner.execute(self.directory)
         self.assert_original_restored()
+        self.assertEqual(self.calls.count(("kosmos", "open", "-g", self.installed)), 2)
         self.assertEqual((self.directory / "used/EposProbe.app/Contents/MacOS/EposProbe").read_text(), "temporary prototype")
 
     def test_failure_after_stopping_main_before_swap_records_and_reopens_original(self):

@@ -161,16 +161,20 @@ readback. Actual Ghostty updates, cancellation, event coverage and final deliver
 require a separate Cua run with terminal byte evidence. Normal companion commands
 retain their exact range and text ownership checks.
 
-The October 7 host preflight returned `trusted=false` for the signed companion.
+The October 7 and October 8 host preflights returned `trusted=false` for the
+signed companion.
 The experiment requires that process's Accessibility trust for its event tap.
-It sent only the read-only preflight command, then immediately restored the
-original companion. Its bundle manifest, the three checked input settings,
+Each run sent only the read-only preflight command, then immediately restored the
+original companion. The bundle manifest, the three checked input settings,
 keyboard and input-source metadata, and main Epos binary fingerprint matched
 the initial state. The restored companion was running; main Epos was stopped
-both before and after. No target commands or GUI actions ran. Ghostty draft
+both before and after. No target commands or GUI actions ran in either experiment.
+On October 8, the operator separately opened the `Privacy_Accessibility` settings
+URL on the agent workspace. The pane was titled "Device Control and Data Access"
+and showed Epos on and EposProbe off. No toggle was pressed. Ghostty draft
 updates, cleanup, typing interruption, held fn and final delivery remain
 unverified in this prototype. See the
-[host preflight record](../probes/inline-preview/SESSION.md#october-7-host-preflight).
+[latest host preflight record](../probes/inline-preview/SESSION.md#october-8-host-preflight).
 
 ## Delivery evidence
 

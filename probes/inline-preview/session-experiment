@@ -174,7 +174,7 @@ def restore(directory):
             INCOMING.rename(directory / "unused-incoming.app")
         run("/usr/bin/codesign", "--verify", "--strict", INSTALLED)
         report["bundleRestored"] = manifest(INSTALLED) == json.loads((directory / "original-manifest.json").read_text())
-        run("/usr/bin/open", "-g", INSTALLED)
+        run("kosmos", "open", "-g", INSTALLED)
         time.sleep(0.5)
         report["companionRunning"] = bool(pids_for(INSTALLED))
         after = fingerprints(directory)
@@ -220,7 +220,7 @@ def execute(directory):
         INSTALLED.rename(BACKUP)
         INCOMING.rename(INSTALLED)
         run("/usr/bin/codesign", "--verify", "--strict", INSTALLED)
-        run("/usr/bin/open", "-g", INSTALLED)
+        run("kosmos", "open", "-g", INSTALLED)
         print("prototype installed; 360-second restoration deadline", flush=True)
         deadline = time.monotonic() + 360
         while time.monotonic() < deadline and not (directory / "finish").exists():

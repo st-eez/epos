@@ -25,10 +25,11 @@ terminal bytes before treating a live pass as successful.
 ## Controlled run
 
 Run these tools on the Mac host. A sandbox can hide running processes or the
-registered input source and invalidate process restoration evidence. Use Cua for
-every GUI operation, with a single operator. Never address an existing private
-terminal. The fixture runs Python in raw terminal mode and executes no received
-input. It persists counts and equality against fixed synthetic tokens only.
+registered input source and invalidate process restoration evidence. Launch apps
+with `kosmos open` onto the agent workspace and use Cua for GUI interaction, with
+a single operator. Never address an existing private terminal. The fixture runs
+Python in raw terminal mode and executes no received input. It persists counts
+and equality against fixed synthetic tokens only.
 
 1. Run `probes/inline-preview/verify`. It compiles normal and experimental
    companions with warnings as errors, then runs native safety and ordered
@@ -48,12 +49,14 @@ input. It persists counts and equality against fixed synthetic tokens only.
    then preserves the original companion by rename. It restores after 360 seconds,
    a `finish` file, or a caught interruption. It never registers, enables or selects
    input sources. Required existing consent must already be present.
+   The runner launches both the prototype and restored companion with
+   `kosmos open -g`.
 4. Run `python3 -I probes/inline-preview/Tools/session-client.py
    PREPARED_DIRECTORY` as one persistent interactive process. Send `preflight`
    and `snapshot` while Ghostty's new prompt does not yet exist. An untrusted
    companion refuses the event barrier. Report that failed gate rather than
    changing settings or repeatedly trying a mark.
-5. Through Cua create a separate Ghostty window running `python3 -I
+5. Use `kosmos open` to create a separate Ghostty window running `python3 -I
    ABSOLUTE_REPO_PATH/probes/inline-preview/Tools/session-fixture.py
    PREPARED_DIRECTORY EPOS-SESSION-NONCE`. Confirm its fresh PID/window, nonce,
    live fixture PID and zero byte count. Configure `target PID WINDOW` in the
@@ -71,7 +74,7 @@ input. It persists counts and equality against fixed synthetic tokens only.
    actual hold; a tap or native state test does not verify it.
 8. Create `finish` in the prepared directory. Verify `restoration.json`, including
    original manifest, source/settings fingerprints and companion process state.
-   Reopen installed Epos through the GUI operator if it was running before, and
+   Reopen installed Epos with `kosmos open` if it was running before, and
    verify its actual installed executable. The runner keeps bundle restoration
    and main app relaunch evidence separate. To recover a stopped wrapper, use
    `session-experiment restore PREPARED_DIRECTORY`.
@@ -104,3 +107,21 @@ This run established the permission prerequisite and restoration behavior.
 Actual Ghostty draft updates, cleanup, typing interruption, event coverage,
 held fn and final delivery remain unverified. Native lifecycle checks do not
 settle those host outcomes.
+
+## October 8 host preflight
+
+A fresh signed prototype again returned `ok session preflight trusted=false`.
+The protocol contains only that preflight command. The operator disconnected
+immediately and finished the bounded run. No target, draft, cancellation or final
+commands ran, and the experiment used no GUI or audio.
+
+Restoration confirmed `bundleRestored=true`, `companionRunning=true` and
+`fingerprintsMatch=true`. Main Epos was stopped before and after. The private
+prepared directory retains the protocol and restoration evidence.
+
+The operator separately opened the macOS `Privacy_Accessibility` settings URL
+with `kosmos open` on the agent workspace. The observed pane was titled
+"Device Control and Data Access" and showed Epos on and EposProbe off. No toggle
+was pressed. The live fixed-text test remains blocked on the companion process's
+own Accessibility trust. Ghostty rendering, revisions, cleanup, interruption and final delivery
+remain unverified by this prototype.
