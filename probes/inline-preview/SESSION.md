@@ -14,6 +14,15 @@ discard the draft. Ordinary keys, Backspace, arrows, other modifiers, mouse
 actions, focus changes, host callbacks and disconnection retire the pass. Fn press
 and release remain allowed. A disabled tap retires without guessing cleanup.
 
+The focused AX window must match exactly one layer-zero Quartz window belonging
+to the pinned process. Matching uses public AX position and size with Quartz
+bounds, which both use the main display's top-left origin. The match must carry
+the requested window ID and be on screen. Identical frames, including hidden
+windows, refuse the pass. Each command repeats this check and keeps the existing
+caret containment check. The prototype does not rely on the undocumented
+`AXWindowNumber` attribute. Refusals report the failed gate and matching window
+count; a missing or ambiguous fresh client reports its own count.
+
 The first mark requires one newly activated client after `session-snapshot` and
 the explicit `controlled-empty-fixture` assertion. This is an operator statement
 about a disposable raw prompt. An empty selection or fresh object identity does
@@ -30,6 +39,13 @@ with `kosmos open` onto the agent workspace and use Cua for GUI interaction, wit
 a single operator. Never address an existing private terminal. The fixture runs
 Python in raw terminal mode and executes no received input. It persists counts
 and equality against fixed synthetic tokens only.
+
+The agent workspace stays hidden for background work. This session prototype
+requires the target to be the actual foreground application, so it cannot run
+solely in that hidden workspace. An instruction to use the agent workspace does
+not authorize showing or focusing it. Run foreground checks only when Steve
+explicitly requests foreground control. A background rendering check must report
+its narrower evidence separately from foreground session and interruption checks.
 
 1. Run `probes/inline-preview/verify`. It compiles normal and experimental
    companions with warnings as errors, then runs native safety and ordered
@@ -123,5 +139,34 @@ The operator separately opened the macOS `Privacy_Accessibility` settings URL
 with `kosmos open` on the agent workspace. The observed pane was titled
 "Device Control and Data Access" and showed Epos on and EposProbe off. No toggle
 was pressed. The live fixed-text test remains blocked on the companion process's
-own Accessibility trust. Ghostty rendering, revisions, cleanup, interruption and final delivery
-remain unverified by this prototype.
+own Accessibility trust. Ghostty rendering, revisions, cleanup, interruption and
+final delivery remained unverified by that preflight.
+
+## October 8 permission and focused window trial
+
+After Steve enabled EposProbe, a fresh signed run returned
+`ok session preflight trusted=true`. The controlled Ghostty window had matching
+AX and Quartz frames. Begin reached the focused window check and refused with
+`gate=window-number-unavailable`, because that AX window did not expose
+`AXWindowNumber`. Earlier begin refusals returned the stale `uninspected` gate
+when no fresh client was available. The diagnostic now names that condition.
+
+No native mark ran and the terminal received zero bytes. Restoration confirmed
+the original companion, running process and unchanged fingerprints. This trial
+identified a defect in the experimental window check. Draft rendering, revision,
+cleanup, interruption and final delivery still require a new live run.
+
+The replacement uses the documented coordinate systems for
+[AX position](https://developer.apple.com/documentation/applicationservices/kaxpositionattribute)
+and [Quartz bounds](https://developer.apple.com/documentation/coregraphics/kcgwindowbounds).
+Native checks cover unique identity, wrong IDs, another process, other window
+layers, identical visible and hidden frames, moved frames, secondary display
+coordinates, invalid geometry and incomplete metadata.
+
+A following prepared run recognized trust and took a client snapshot, but was
+stopped after Steve clarified that the agent workspace must remain hidden.
+Its raw fixture already reported two bytes before any begin command, so it was
+not a valid empty fixture. No begin or native text operation ran. Exact bundle
+restoration, companion liveness and unchanged fingerprints were confirmed.
+The operator had incorrectly treated workspace placement as authorization for
+foreground control. Future background probes must not repeat that assumption.

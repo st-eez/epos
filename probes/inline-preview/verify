@@ -39,4 +39,12 @@ sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
   "$probe_dir/Tests/SessionOwnershipTests.swift"
 "$verify_dir/SessionOwnershipTests"
 
+/usr/bin/xcrun swiftc \
+  -sdk "$sdk_path" -target arm64-apple-macos26.0 \
+  -module-cache-path "$verify_dir/ModuleCache" -warnings-as-errors \
+  -D EPOS_SESSION_PROTOTYPE -o "$verify_dir/SessionWindowTests" \
+  "$probe_dir/Sources/ProbeSessionWindow.swift" \
+  "$probe_dir/Tests/SessionWindowTests.swift"
+"$verify_dir/SessionWindowTests"
+
 /usr/bin/python3 -I "$probe_dir/Tests/SessionRunnerTests.py"

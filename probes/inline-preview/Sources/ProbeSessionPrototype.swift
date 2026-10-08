@@ -31,6 +31,7 @@ enum ProbeSessionPrototype {
     private static var finalCount = 0
     private static var discarding = false
     private static var targetGate = "uninspected"
+    private static var targetWindowCandidates = 0
     private static var barrierGate = "uninspected"
 
     static var hasPass: Bool { pass != nil }
@@ -68,9 +69,12 @@ enum ProbeSessionPrototype {
             return "err session requires snapshot and controlled empty fixture"
         }
         let fresh = EposProbeInputController.sessionCandidates(parts[0]).filter { !saved.controllers.contains(ObjectIdentifier($0)) }
-        guard fresh.count == 1, let controller = fresh.first, let client = controller.client(),
-              targetMatches(pid: pid, window: window, bundle: parts[0], client: client) else {
-            return "err session fresh-client-or-target gate=\(targetGate)"
+        guard fresh.count == 1, let controller = fresh.first else {
+            return "err session fresh-client-count fresh=\(fresh.count)"
+        }
+        guard let client = controller.client() else { return "err session fresh-client-unavailable fresh=1" }
+        guard targetMatches(pid: pid, window: window, bundle: parts[0], client: client) else {
+            return "err session target gate=\(targetGate) windows=\(targetWindowCandidates) fresh=1"
         }
         guard let policy = ProbeSessionOwnership(controlledEmptyFixture: true, observation: observe(client, text: nil)) else {
             return "err session requires one fresh focused empty fixture client"
@@ -165,7 +169,7 @@ enum ProbeSessionPrototype {
         return "ok session state=\(state) selection=\(selected.location),\(selected.length) "
             + "marked=\(marked.location),\(marked.length) events=\(eventCount) callbacks=\(callbackCount) "
             + "discards=\(discardCount) finals=\(finalCount) tap=\(tap.map { CGEvent.tapIsEnabled(tap: $0) } ?? false) "
-            + "target=\(targetGate) barrier=\(barrierGate)"
+            + "target=\(targetGate) windows=\(targetWindowCandidates) barrier=\(barrierGate)"
     }
 
     static func hostCallback(_ controller: EposProbeInputController, reason: String) {
@@ -214,6 +218,7 @@ enum ProbeSessionPrototype {
     }
 
     private static func targetMatches(pid: pid_t, window: CGWindowID, bundle: String, client: IMKTextInput) -> Bool {
+        targetWindowCandidates = 0
         targetGate = "front-pid"
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return false }
         targetGate = "bundle"
@@ -225,20 +230,18 @@ enum ProbeSessionPrototype {
         guard AXUIElementCopyAttributeValue(app, kAXFocusedWindowAttribute as CFString, &focused) == .success,
               let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
         let element = unsafeBitCast(focused, to: AXUIElement.self)
-        var identifier: CFTypeRef?
-        targetGate = "window-number-unavailable"
-        guard AXUIElementCopyAttributeValue(element, "AXWindowNumber" as CFString, &identifier) == .success,
-              let actualWindow = (identifier as? NSNumber)?.uint32Value else { return false }
-        targetGate = "window-mismatch"
-        guard actualWindow == window else { return false }
+        targetGate = "focused-frame-unavailable"
+        guard let focusedBounds = ProbeSessionWindow.focusedBounds(element, pid: pid) else { return false }
+        targetGate = "windows-unavailable"
+        guard let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] else { return false }
+        let match = ProbeSessionWindow.match(pid: pid, window: window, focusedBounds: focusedBounds, windows: windows)
+        targetGate = match.gate
+        targetWindowCandidates = match.candidates
+        guard let rect = match.bounds else { return false }
         var caret = NSRect.zero
         _ = client.attributes(forCharacterIndex: 0, lineHeightRectangle: &caret)
         targetGate = "caret-unavailable"
         guard caret.origin.x.isFinite, caret.origin.y.isFinite, caret.height > 1 else { return false }
-        targetGate = "bounds-unavailable"
-        guard let windows = CGWindowListCopyWindowInfo(.optionIncludingWindow, window) as? [[String: Any]],
-              let bounds = windows.first?[kCGWindowBounds as String] as? NSDictionary,
-              let rect = CGRect(dictionaryRepresentation: bounds) else { return false }
         // IMK rectangles use bottom-left coordinates; CGWindow bounds use the
         // main screen's top-left origin. Keep the known fixture inside its window.
         let screenHeight = CGDisplayBounds(CGMainDisplayID()).height
