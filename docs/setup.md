@@ -20,6 +20,12 @@ The installer builds with a team signature, verifies a fresh staged bundle,
 replaces the installed app, and installs the inline preview companion. It restores
 the prior bundle if replacement fails. First registration of the companion can
 require a logout or input source consent.
+Companion upgrades use temporary staging and unregister the old generated build
+copy to avoid competing registered bundles. When input metadata is unchanged
+and the keyboard method is registered, the installer keeps that registration and skips
+input-agent restarts. It checks all matching sources for an enabled, selectable
+keyboard method before and after replacement. A registered but disabled source
+is reported as unavailable; the installer never enables it automatically.
 The app can use its recording pill while the companion is unavailable.
 The companion is a keyboard input method. Enable its input source when macOS
 requests consent. For native streaming in Ghostty, select Epos as your keyboard

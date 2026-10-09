@@ -105,12 +105,18 @@ companion and the per-app matrix below.
 probes/inline-preview/install
 ```
 
-Builds, signs with your Apple Development identity, copies to
-`~/Library/Input Methods/EposProbe.app`, runs `lsregister` +
-`TISRegisterInputSource`, restarts `TextInputMenuAgent TextInputSwitcher lsd
-cfprefsd`, then polls for the source. Prints `registered live` (exit 0) or tells
-you a logout is needed (exit 1; rerun `install --verify-only` after logging back
-in). **On this machine live registration worked — no logout was needed.**
+Builds and signs in temporary staging, then copies to
+`~/Library/Input Methods/EposProbe.app`. It unregisters the old persistent build
+copy and unregisters and removes temporary staging on success or failure.
+An upgrade with unchanged input metadata and an existing keyboard method retains
+its native registration and skips agent restarts. Missing keyboard registration
+or changed metadata runs `lsregister` and
+`TISRegisterInputSource`; unavailable registration can require a logout.
+Verification scans all matching sources for an enabled, selectable keyboard input
+method, including preservation of prior readiness. Exit 0 means registered and
+ready, exit 1 means unregistered, and exit 2 means registered but unavailable.
+The installer does not enable sources automatically. `install --verify-only`
+reads native registration and readiness without replacing bundles.
 
 ## Per-target test recipe
 

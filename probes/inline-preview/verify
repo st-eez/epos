@@ -9,6 +9,11 @@ sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 /usr/bin/xcrun swiftc \
   -sdk "$sdk_path" -target arm64-apple-macos26.0 \
   -module-cache-path "$verify_dir/ModuleCache" -warnings-as-errors \
+  -o "$verify_dir/tisctl" "$probe_dir/Tools/tisctl.swift"
+
+/usr/bin/xcrun swiftc \
+  -sdk "$sdk_path" -target arm64-apple-macos26.0 \
+  -module-cache-path "$verify_dir/ModuleCache" -warnings-as-errors \
   -o "$verify_dir/EposProbe" \
   "$probe_dir/Sources/main.swift" \
   "$probe_dir/Sources/ProbeSupport.swift" \
@@ -55,3 +60,4 @@ sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 
 /usr/bin/python3 -I "$probe_dir/Tests/SessionRunnerTests.py"
 /usr/bin/python3 -I "$probe_dir/Tests/SessionClientTests.py"
+/usr/bin/python3 -I "$probe_dir/Tests/InstallerTests.py"

@@ -28,6 +28,10 @@ errors and runs native text-view safety checks. The corpus, confirmation,
 labeling, and migration CLIs expose deterministic checks through `--test`.
 The installer check uses disposable bundles and injected failures. It does not
 build, sign, install, or quit the user's app.
+Companion verification also checks temporary staging cleanup, registration on
+metadata changes, retained upgrade readiness, and disabled-source reporting with
+mocked native tools. Those checks do not establish live source consent or cache
+behavior.
 
 The audio input probe binds an isolated, stopped engine to the current default
 and, when available, a different input. It checks device readback, restores the

@@ -1,20 +1,33 @@
 #!/usr/bin/env bash
 # Build, sign, install and LIVE-register the companion keyboard input method.
-# Exit 0 = registered live. Exit 1 = logout/login required, then rerun --verify-only.
+# Exit 0 = registered and ready. Exit 1 = not registered. Exit 2 = registered but not ready.
 set -euo pipefail
 
 probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 build_dir="$probe_dir/.build"
 bundle_name="EposProbe.app"
-staged_bundle="$build_dir/$bundle_name"
+legacy_staged_bundle="$build_dir/$bundle_name"
 installed_bundle="$HOME/Library/Input Methods/$bundle_name"
 source_id="com.steez.inputmethod.EposProbe"
 lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
 verify_only=false
+was_ready=false
+same_metadata=false
+staging_dir=""
 
 [[ "${1:-}" == "--verify-only" ]] && verify_only=true
 
 tisctl() { /usr/bin/xcrun swift "$probe_dir/Tools/tisctl.swift" "$@"; }
+
+cleanup_staging() {
+  local status="$?"
+  if [[ -n "$staging_dir" ]]; then
+    "$lsregister" -u "$staged_bundle" >/dev/null 2>&1 || true
+    rm -rf "$staging_dir"
+  fi
+  return "$status"
+}
+trap cleanup_staging EXIT
 
 resolve_identity() {
   # Same identity family as scripts/install-signed-app.sh: an Apple Development
@@ -31,7 +44,8 @@ resolve_identity() {
 poll_registration() {
   local deadline=$((SECONDS + ${1:-30}))
   while (( SECONDS < deadline )); do
-    if tisctl find "$source_id" 2>/dev/null; then
+    if { [[ "$was_ready" == true ]] && tisctl ready "$source_id"; } ||
+       { [[ "$was_ready" == false ]] && tisctl registered "$source_id"; }; then
       return 0
     fi
     sleep 2
@@ -40,8 +54,17 @@ poll_registration() {
 }
 
 if [[ "$verify_only" == false ]]; then
+  # The old persistent build bundle could compete with the installed IMK identity.
+  "$lsregister" -u "$legacy_staged_bundle" >/dev/null 2>&1 || true
+  rm -rf "$legacy_staged_bundle"
+  echo "== prior readiness =="
+  if tisctl ready "$source_id"; then was_ready=true; fi
+  if cmp -s "$installed_bundle/Contents/Info.plist" "$probe_dir/Info.plist" &&
+     tisctl registered "$source_id" >/dev/null 2>&1; then same_metadata=true; fi
   echo "== build =="
   mkdir -p "$build_dir"
+  staging_dir="$(mktemp -d "$build_dir/epos-companion-stage.XXXXXX")"
+  staged_bundle="$staging_dir/$bundle_name"
   sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 
   /usr/bin/xcrun swiftc \
@@ -90,30 +113,45 @@ if [[ "$verify_only" == false ]]; then
   echo "installed at $installed_bundle"
 
   echo "== live registration =="
-  "$lsregister" -f -R -trusted "$installed_bundle" || true
-  tisctl register "$installed_bundle" || echo "  TISRegisterInputSource reported failure (continuing)"
-  # Only the text-input agents are load-bearing for live registration. lsd and
-  # cfprefsd restarts are the escalation below, not the routine path: cfprefsd
-  # owns NSUserDefaults writes machine-wide, so killing it on every install can
-  # drop unsynchronized preference writes belonging to unrelated apps.
-  /usr/bin/killall TextInputMenuAgent TextInputSwitcher >/dev/null 2>&1 || true
+  if [[ "$same_metadata" == false ]]; then
+    "$lsregister" -f -R -trusted "$installed_bundle" || true
+    tisctl register "$installed_bundle" || echo "  TISRegisterInputSource reported failure (continuing)"
+    /usr/bin/killall TextInputMenuAgent TextInputSwitcher >/dev/null 2>&1 || true
+  else
+    echo "input metadata unchanged; retaining existing registration"
+  fi
+  cleanup_staging
+  staging_dir=""
 fi
 
 # Read-only. TISEnableInputSource raises a macOS consent dialog every call, so
 # nothing here or in run-stream enables a source that is already enabled.
 echo "== verify =="
 if poll_registration 10; then
-  echo "registered live"
-  exit 0
+  if tisctl ready "$source_id"; then
+    echo "registered live; keyboard source ready"
+    exit 0
+  fi
+  echo "registered, but keyboard source is not enabled and selectable; native input source consent is required" >&2
+  exit 2
 fi
 
-if [[ "$verify_only" == false ]]; then
+if [[ "$verify_only" == false && "$same_metadata" == false ]]; then
   echo "not visible yet; escalating with a launch-services daemon restart"
   /usr/bin/killall lsd cfprefsd >/dev/null 2>&1 || true
   if poll_registration 20; then
-    echo "registered live"
-    exit 0
+    if tisctl ready "$source_id"; then
+      echo "registered live; keyboard source ready"
+      exit 0
+    fi
+    echo "registered, but keyboard source is not enabled and selectable; native input source consent is required" >&2
+    exit 2
   fi
+fi
+
+if tisctl registered "$source_id"; then
+  echo "registered, but prior keyboard source readiness was not retained; native input source consent is required" >&2
+  exit 2
 fi
 
 cat <<MSG
