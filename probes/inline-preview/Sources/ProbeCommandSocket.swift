@@ -214,7 +214,15 @@ final class ProbeCommandSocket {
                 connection: connection
             )
             // Begin replies contain native acquisition metadata, never transcript text.
-            ProbeLog.write("begin connection=\(connection) reply=\(reply)")
+            let mode: String
+            switch argument.split(separator: " ").dropFirst().first {
+            case "acquire-layout": mode = "acquire-layout"
+            case "acquire-method": mode = "acquire-method"
+            case "adopt-layout": mode = "adopt-layout"
+            case nil: mode = "legacy"
+            default: mode = "invalid"
+            }
+            ProbeLog.write("begin connection=\(connection) mode=\(mode) reply=\(reply)")
             return reply
         case "end":
             return EposProbeInputController.end(connection: connection)
