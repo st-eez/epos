@@ -209,10 +209,13 @@ final class ProbeCommandSocket {
         case "ranges":
             return EposProbeInputController.ranges(expected: argument)
         case "begin":
-            return EposProbeInputController.begin(
+            let reply = EposProbeInputController.begin(
                 expected: argument.isEmpty ? "any" : argument,
                 connection: connection
             )
+            // Begin replies contain native acquisition metadata, never transcript text.
+            ProbeLog.write("begin connection=\(connection) reply=\(reply)")
+            return reply
         case "end":
             return EposProbeInputController.end(connection: connection)
         case "mark":
