@@ -23,7 +23,9 @@ require a logout or input source consent.
 The app can use its recording pill while the companion is unavailable.
 The companion is a keyboard input method. Enable its input source when macOS
 requests consent. Epos selects it temporarily during preview and restores the
-prior keyboard source afterward. EposProbe also needs Accessibility for the
+prior keyboard source afterward. Upgrading from the earlier palette companion
+can require input-source consent again; live registration does not mean the
+keyboard source is enabled. EposProbe also needs Accessibility for the
 event barrier that ends a draft before ordinary keyboard or mouse input.
 Without either prerequisite, Epos uses the recording pill and final delivery.
 
