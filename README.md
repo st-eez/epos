@@ -48,6 +48,10 @@ builds the app and installs the companion used for inline preview.
    registration may also require logging out and back in.
 5. Grant EposProbe Accessibility for inline preview interruption handling.
 
+For native streaming in Ghostty, select Epos in the keyboard input-source menu
+before dictation. Ordinary typing uses the existing keyboard layout, and Epos
+preserves that selected source after recording cleanup or failure.
+
 Epos uses the recording indicator while inline preview is unavailable. See
 [setup](docs/setup.md) for signing, permissions, and companion registration.
 

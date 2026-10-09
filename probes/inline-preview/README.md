@@ -44,7 +44,13 @@ client currently holds marked text* as its own record — bundle id, owning sess
 and the command connection that put it there — separately from the per-pass focus
 lock. Each pass pins a concrete client and command connection. A nonempty or
 unreadable selection refuses marked text, including updates after a host changed
-its selection. Ambiguous client sets also refuse the pass. Actual keyboard-source activation acquires an uninterrupted input session.
+its selection. Ambiguous client sets also refuse the pass. Actual keyboard-source activation
+acquires an uninterrupted input session. `begin BUNDLE adopt-layout EPOS_SOURCE_ID
+LAYOUT_ID` adopts an already selected Epos source with its underlying layout. It
+requires the same activated client, readable empty selection, and event barrier
+as temporary acquisition, while leaving the user-selected source unchanged. An
+unavailable initial marked range is accepted only with this native layout ownership
+or acquisition from a keyboard layout. Known foreign composition is refused.
 The recorded client and observed draft range must match before an update or
 cancellation. Readable text remains an additional veto; unreadable draft content
 is allowed while the session is uninterrupted. The companion reads the live span through
@@ -73,7 +79,9 @@ refuses delivery even on the first preview attempt. Initial nonempty or unreadab
 selections without an Epos composition degrade to the HUD and retain guarded
 final delivery. `end` releases the lock and restores the saved keyboard source only while Epos
 still owns the selection. A user-chosen source is preserved. Disconnect and
-retirement also restore the source after owned cleanup.
+retirement also restore a temporarily borrowed source after owned cleanup. An
+adopted Epos source has no restoration target and stays selected after normal
+cleanup, retirement, or disconnect.
 
 Exactly one client is legitimate, so **a new connection supersedes the current
 one**: the previous peer is shut down (which runs its teardown) and each

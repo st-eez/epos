@@ -84,11 +84,36 @@ final class PreviewKeyboardSourceTests: XCTestCase {
         XCTAssertEqual(access.selections, [PreviewKeyboardSource.companionIdentifier])
     }
 
-    func testMissingSourceOrLayoutAndAnAlreadySelectedCompanionAreNotBorrowed() {
+    func testAlreadySelectedCompanionIsAdoptedWithoutSourceChanges() throws {
+        let access = FakeKeyboardSourceAccess(current: PreviewKeyboardSource.companionIdentifier,
+                                              layout: Self.layout, isLayout: false)
+        let source = try XCTUnwrap(PreviewKeyboardSource(access: access))
+
+        XCTAssertEqual(source.acquisitionArgument,
+                       "adopt-layout \(PreviewKeyboardSource.companionIdentifier) \(Self.layout)")
+        source.release()
+        source.release()
+
+        XCTAssertEqual(access.current, PreviewKeyboardSource.companionIdentifier)
+        XCTAssertEqual(access.selections, [])
+    }
+
+    func testAdoptionPreservesALaterUserSourceChoice() throws {
+        let access = FakeKeyboardSourceAccess(current: PreviewKeyboardSource.companionIdentifier,
+                                              layout: Self.layout, isLayout: false)
+        let source = try XCTUnwrap(PreviewKeyboardSource(access: access))
+        access.current = Self.otherLayout
+        source.release()
+
+        XCTAssertEqual(access.current, Self.otherLayout)
+        XCTAssertEqual(access.selections, [])
+    }
+
+    func testMissingSourceOrLayoutCannotBeBorrowedOrAdopted() {
         let accesses = [
             FakeKeyboardSourceAccess(current: nil, layout: Self.layout),
             FakeKeyboardSourceAccess(current: Self.layout, layout: nil),
-            FakeKeyboardSourceAccess(current: PreviewKeyboardSource.companionIdentifier, layout: Self.layout)
+            FakeKeyboardSourceAccess(current: PreviewKeyboardSource.companionIdentifier, layout: nil)
         ]
         for access in accesses {
             XCTAssertNil(PreviewKeyboardSource(access: access))

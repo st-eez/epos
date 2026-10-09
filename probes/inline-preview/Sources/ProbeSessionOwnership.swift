@@ -25,13 +25,15 @@ final class ProbeSessionOwnership {
 
     convenience init?(controlledEmptyFixture: Bool, observation: Observation) {
         guard controlledEmptyFixture else { return nil }
-        self.init(acquiredFromLayout: true, observation: observation)
+        self.init(layoutSession: true, observation: observation)
     }
 
-    init?(acquiredFromLayout: Bool, observation: Observation) {
-        permitsUnavailableBaseline = acquiredFromLayout
+    init?(layoutSession: Bool, observation: Observation) {
+        // A selected Epos client or acquisition from a layout can own an
+        // unavailable baseline. Switching from another method cannot.
+        permitsUnavailableBaseline = layoutSession
         guard Self.emptySelection(observation.selection),
-              observation.composition == .absent || (acquiredFromLayout
+              observation.composition == .absent || (layoutSession
                 && observation.composition == .unreadable && observation.marked == unavailable) else { return nil }
         expectedSelection = observation.selection
         baselineSelection = observation.selection

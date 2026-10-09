@@ -185,15 +185,15 @@ enum SessionOwnershipTests {
     private static func productionAcquisition() {
         let caret = NSRange(location: 0, length: 0)
         let unknown = ProbeSessionOwnership.Observation(selection: caret, marked: unavailable, composition: .unreadable)
-        precondition(ProbeSessionOwnership(acquiredFromLayout: false, observation: unknown) == nil,
+        precondition(ProbeSessionOwnership(layoutSession: false, observation: unknown) == nil,
                      "another keyboard method authorized an unknown composition")
-        let acquired = ProbeSessionOwnership(acquiredFromLayout: true, observation: unknown)!
+        let acquired = ProbeSessionOwnership(layoutSession: true, observation: unknown)!
         precondition(acquired.canOperate(unknown), "exclusive acquisition from a layout was refused")
         let foreign = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .foreign)
-        precondition(ProbeSessionOwnership(acquiredFromLayout: true, observation: foreign) == nil,
+        precondition(ProbeSessionOwnership(layoutSession: true, observation: foreign) == nil,
                      "keyboard acquisition replaced a known foreign composition")
         let malformed = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: NSNotFound), composition: .unreadable)
-        precondition(ProbeSessionOwnership(acquiredFromLayout: true, observation: malformed) == nil,
+        precondition(ProbeSessionOwnership(layoutSession: true, observation: malformed) == nil,
                      "acquisition accepted arbitrary unreadable marked metadata")
         let marked = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .unreadable)
         precondition(acquired.didMark(marked, utf16Length: 5))
@@ -203,7 +203,7 @@ enum SessionOwnershipTests {
         precondition(acquired.requiresUnicodeFinal && !acquired.finishNativeCommit(),
                      "cancellation erased unreadable draft delivery policy")
         let absent = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 0), composition: .absent)
-        let readable = ProbeSessionOwnership(acquiredFromLayout: false, observation: absent)!
+        let readable = ProbeSessionOwnership(layoutSession: false, observation: absent)!
         let owned = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .owned)
         precondition(readable.didMark(owned, utf16Length: 5) && !readable.requiresUnicodeFinal)
         precondition(readable.didDiscard(absent) && readable.finishNativeCommit())

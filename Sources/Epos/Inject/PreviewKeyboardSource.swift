@@ -10,21 +10,27 @@ protocol PreviewKeyboardSourceAccess {
     func select(_ identifier: String) -> Bool
 }
 
-/// A recording borrows the keyboard source, rather than changing the user's
-/// preference. Teardown respects any source the user selected during the hold.
+/// A recording adopts an already selected companion or borrows it temporarily.
+/// Teardown preserves the user's selected source.
 @MainActor
 final class PreviewKeyboardSource {
     static let companionIdentifier = "com.steez.inputmethod.EposProbe"
     let acquisitionArgument: String
-    private let previousIdentifier: String
+    private let previousIdentifier: String?
     private let access: any PreviewKeyboardSourceAccess
     private var released = false
 
     init?(access: any PreviewKeyboardSourceAccess = NativePreviewKeyboardSourceAccess()) {
         guard access.companionIsAvailable(),
               let previous = access.currentIdentifier(),
-              previous != Self.companionIdentifier,
               let layout = access.layoutIdentifier() else { return nil }
+        if previous == Self.companionIdentifier {
+            guard access.currentIdentifier() == previous else { return nil }
+            self.access = access
+            previousIdentifier = nil
+            acquisitionArgument = "adopt-layout \(previous) \(layout)"
+            return
+        }
         let kind = access.currentIsLayout() ? "acquire-layout" : "acquire-method"
         guard access.select(Self.companionIdentifier),
               access.currentIdentifier() == Self.companionIdentifier else {
@@ -43,7 +49,7 @@ final class PreviewKeyboardSource {
     func release() {
         guard !released else { return }
         released = true
-        if access.currentIdentifier() == Self.companionIdentifier {
+        if let previousIdentifier, access.currentIdentifier() == Self.companionIdentifier {
             _ = access.select(previousIdentifier)
         }
     }

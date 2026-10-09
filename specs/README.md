@@ -2,7 +2,7 @@
 
 > Keyword lookup table. Search keywords to find the right spec.
 
-@baseline - fn key hotkey, SpeechTranscriber, push-to-talk, recording indicator, final-only guarded insertion, native keyboard preview acquisition, source restoration, baseline scope, post-baseline backlog
+@baseline - fn key hotkey, SpeechTranscriber, push-to-talk, recording indicator, final-only guarded insertion, native keyboard preview acquisition and adoption, source restoration, baseline scope, post-baseline backlog
 @preview-session-prototype - experimental marked text ownership, Ghostty live draft, typing interruption, session lifecycle, cleanup, native F5 Dictation comparison, public input callbacks
 @reliability-audit - scripts/audit, schema-1 recording outcomes, delivery readback, legacy log partition, signed-corpus error buckets, latency
 @recording-stage-timing - first recognizer result, cleaned display publication, acknowledged mark, startup stages, accepted write, readback, p50 and p95

@@ -147,7 +147,7 @@ final class EposProbeInputController: IMKInputController {
     static func begin(expected argument: String, connection: UInt64) -> String {
         let parts = argument.split(separator: " ").map(String.init)
         guard let expected = parts.first, parts.count == 1 || (4...6).contains(parts.count),
-              parts.count == 1 || ["acquire-layout", "acquire-method"].contains(parts[1]) else {
+              parts.count == 1 || ["acquire-layout", "acquire-method", "adopt-layout"].contains(parts[1]) else {
             return "err invalid acquisition"
         }
         let holdKey: UInt16?
@@ -163,15 +163,19 @@ final class EposProbeInputController: IMKInputController {
             shortcut = binding
         } else { shortcut = nil }
         let acquiredFromLayout = parts.count >= 4 && parts[1] == "acquire-layout"
+        let adoptsSelectedSource = parts.count >= 4 && parts[1] == "adopt-layout"
         let priorSource: TISInputSource?
         if parts.count >= 4 {
             guard let prior = keyboardSource(identifier: parts[2]),
-                  parts[2] != Bundle.main.bundleIdentifier,
                   keyboardSource(identifier: parts[3], layoutOnly: true) != nil,
                   !acquiredFromLayout || keyboardSource(identifier: parts[2], layoutOnly: true) != nil else {
                 return "err invalid saved keyboard source"
             }
-            priorSource = prior
+            guard adoptsSelectedSource == (parts[2] == Bundle.main.bundleIdentifier) else {
+                return "err invalid saved keyboard source"
+            }
+            // An adopted source belongs to the user and must survive teardown.
+            priorSource = adoptsSelectedSource ? nil : prior
         } else { priorSource = nil }
         let controller: EposProbeInputController?
         if expected == "any" {
@@ -196,7 +200,8 @@ final class EposProbeInputController: IMKInputController {
         }
         let observation = observe(client, expected: nil)
         if observation.composition == .foreign { return "err unsafe composition before acquisition" }
-        guard let policy = ProbeSessionOwnership(acquiredFromLayout: acquiredFromLayout, observation: observation) else {
+        guard let policy = ProbeSessionOwnership(layoutSession: acquiredFromLayout || adoptsSelectedSource,
+                                                observation: observation) else {
             return "err acquisition requires readable empty selection and composition absence"
         }
         guard let inputBarrier = ProbeInputBarrier(targetBundle: client.bundleIdentifier() ?? expected, holdKey: holdKey, shortcut: shortcut, interrupt: { reason, mayDiscard in

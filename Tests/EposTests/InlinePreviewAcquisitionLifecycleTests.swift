@@ -149,6 +149,80 @@ final class InlinePreviewAcquisitionLifecycleTests: XCTestCase {
         await fulfillment(of: [restored], timeout: 1)
     }
 
+    func testAdoptedSourceSurvivesDraftCleanupAndConsecutiveRecordings() async throws {
+        let recorder = AcquisitionEventRecorder()
+        let access = LifecycleKeyboardAccess(recorder: recorder, current: PreviewKeyboardSource.companionIdentifier)
+        let transport = LifecycleAcquisitionTransport(recorder: recorder)
+        let coordinator = makeCoordinator(access: access, transport: transport)
+        for draft in ["first draft", "second draft"] {
+            coordinator.start(
+                bundleIdentifier: "com.test.host", selectedRange: .init(location: 0, length: 0), validateTarget: { true }
+            )
+            let preview = try XCTUnwrap(coordinator.session)
+            await waitUntil { await preview.report().began }
+            coordinator.mirror(draft)
+            await waitUntil { await preview.report().marksSent == 1 }
+            await coordinator.finish()
+            XCTAssertEqual(access.current, PreviewKeyboardSource.companionIdentifier)
+            XCTAssertEqual(access.selections, [])
+        }
+        let lines = await transport.lines
+        XCTAssertEqual(lines.filter { $0.hasPrefix("begin ") }, Array(repeating:
+            "begin com.test.host adopt-layout \(PreviewKeyboardSource.companionIdentifier) com.test.layout", count: 2))
+        XCTAssertEqual(lines.filter { $0 == "cancel" }.count, 2)
+        XCTAssertEqual(lines.filter { $0 == "end" }.count, 2)
+    }
+
+    func testAdoptionFailurePreservesUserSelectedEposAndSendsNoDraft() async throws {
+        for failure in ["open", "activation", "barrier", "reply"] {
+            let recorder = AcquisitionEventRecorder()
+            let access = LifecycleKeyboardAccess(recorder: recorder, current: PreviewKeyboardSource.companionIdentifier)
+            let transport = LifecycleAcquisitionTransport(
+                recorder: recorder, openFails: failure == "open",
+                beginReply: failure == "activation" ? "err input method activation pending" : "err input barrier unavailable",
+                beginError: failure == "reply" ? .replyTimedOut : nil
+            )
+            let coordinator = makeCoordinator(access: access, transport: transport)
+            coordinator.start(bundleIdentifier: "com.test.host", selectedRange: .init(location: 0, length: 0))
+            let preview = try XCTUnwrap(coordinator.session)
+            coordinator.mirror("queued draft")
+            await waitUntil { await preview.report().failure != nil }
+            await coordinator.finish()
+
+            let report = await preview.report()
+            XCTAssertFalse(report.began)
+            XCTAssertFalse(report.didAttemptMark)
+            XCTAssertEqual(access.current, PreviewKeyboardSource.companionIdentifier)
+            XCTAssertEqual(access.selections, [])
+            let lines = await transport.lines
+            XCTAssertFalse(lines.contains { $0.hasPrefix("mark ") })
+        }
+    }
+
+    func testRetiredAdoptedPassCannotResumeOrCommitAndKeepsUserSource() async throws {
+        let recorder = AcquisitionEventRecorder()
+        let access = LifecycleKeyboardAccess(recorder: recorder, current: PreviewKeyboardSource.companionIdentifier)
+        let transport = LifecycleAcquisitionTransport(recorder: recorder, markReply: "err unsafe unmarked session retired")
+        let coordinator = makeCoordinator(access: access, transport: transport)
+        coordinator.start(
+            bundleIdentifier: "com.test.host", selectedRange: .init(location: 0, length: 0), validateTarget: { true }
+        )
+        let preview = try XCTUnwrap(coordinator.session)
+        await waitUntil { await preview.report().began }
+        coordinator.mirror("first draft")
+        await waitUntil { await preview.report().failure == "unsafeTarget" }
+        coordinator.mirror("late draft")
+        let final = await preview.commitFinalTranscript("final text")
+        XCTAssertEqual(final, .targetUnsafe)
+        await coordinator.finish()
+
+        let lines = await transport.lines
+        XCTAssertEqual(lines.filter { $0.hasPrefix("mark ") }, ["mark first draft"])
+        XCTAssertFalse(lines.contains { $0.hasPrefix("commit ") })
+        XCTAssertEqual(access.current, PreviewKeyboardSource.companionIdentifier)
+        XCTAssertEqual(access.selections, [])
+    }
+
     private func makeCoordinator(
         access: LifecycleKeyboardAccess, transport: LifecycleAcquisitionTransport
     ) -> InlinePreviewCoordinator {
@@ -179,13 +253,14 @@ private final class AcquisitionEventRecorder: @unchecked Sendable {
 @MainActor
 private final class LifecycleKeyboardAccess: PreviewKeyboardSourceAccess {
     private let recorder: AcquisitionEventRecorder
-    private let restored: XCTestExpectation
-    private(set) var current = "com.test.layout"
+    private let restored: XCTestExpectation?
+    private(set) var current: String
     private(set) var selections: [String] = []
 
-    init(recorder: AcquisitionEventRecorder, restored: XCTestExpectation) {
+    init(recorder: AcquisitionEventRecorder, restored: XCTestExpectation? = nil, current: String = "com.test.layout") {
         self.recorder = recorder
         self.restored = restored
+        self.current = current
     }
     func currentIdentifier() -> String? { current }
     func currentIsLayout() -> Bool { true }
@@ -195,7 +270,7 @@ private final class LifecycleKeyboardAccess: PreviewKeyboardSourceAccess {
         current = identifier
         selections.append(identifier)
         recorder.append("source \(identifier)")
-        if identifier == "com.test.layout" { restored.fulfill() }
+        if identifier == "com.test.layout" { restored?.fulfill() }
         return true
     }
 }
@@ -208,6 +283,7 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
     private let beginReply: String
     private let beginError: InlinePreviewTransportError?
     private let markError: InlinePreviewTransportError?
+    private let markReply: String
     private var beginCount = 0
     private var beginWaiter: CheckedContinuation<Void, Never>?
     private(set) var lines: [String] = []
@@ -215,7 +291,8 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
     init(
         recorder: AcquisitionEventRecorder, waiting: XCTestExpectation? = nil,
         pendingOnce: Bool = false, openFails: Bool = false, beginReply: String = "ok locked",
-        beginError: InlinePreviewTransportError? = nil, markError: InlinePreviewTransportError? = nil
+        beginError: InlinePreviewTransportError? = nil, markError: InlinePreviewTransportError? = nil,
+        markReply: String = "ok"
     ) {
         self.recorder = recorder
         self.waiting = waiting
@@ -224,6 +301,7 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
         self.beginReply = beginReply
         self.beginError = beginError
         self.markError = markError
+        self.markReply = markReply
     }
     func open() throws {
         if openFails { throw InlinePreviewTransportError.unavailable }
@@ -243,7 +321,10 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
             if let beginError { throw beginError }
             return beginReply
         }
-        if line.hasPrefix("mark "), let markError { throw markError }
+        if line.hasPrefix("mark ") {
+            if let markError { throw markError }
+            return markReply
+        }
         return line.hasPrefix("commit ") ? "ok committed" : "ok"
     }
     func releaseBegin() {

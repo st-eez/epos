@@ -11,9 +11,12 @@ Stream into field defaults on. A companion keyboard InputMethodKit bundle in
 `~/Library/Input Methods/EposProbe.app` receives preview commands over a per-user
 Unix socket. It renders the same cleaned provisional transcript as marked text
 in the captured application's field. Updates are coalesced to at most one per
-100 ms. Epos borrows this input source for the hold, preserves the underlying
-keyboard mapping, and restores the prior source after teardown. A source you
-choose during dictation is retained. Selecting Epos alone does not start preview:
+100 ms. If Epos is already your selected keyboard input method, the recording
+adopts it with its underlying layout and leaves it selected after cleanup or
+failure. Keeping Epos selected lets ordinary typing use that layout while its
+activated client is ready for native streaming. Otherwise Epos borrows the source
+for the hold and restores the prior source after teardown. A source you choose
+during dictation is retained. Selecting Epos alone does not start preview:
 the companion must acknowledge an activated client in the captured application.
 
 Each update supplies the complete current provisional transcript to
@@ -108,8 +111,9 @@ the observed draft range for ownership, while preserving readable selection and
 client checks. A synchronous event barrier covers Ghostty's mouse input, which
 does not pass through the input-method callbacks.
 
-Acquisition from a keyboard layout can accept unavailable initial marked
-metadata after actual Epos activation. Acquisition from another keyboard input
+An already selected Epos source with its underlying layout, or acquisition from
+a keyboard layout, can accept unavailable initial marked metadata after actual
+Epos activation. Acquisition from another keyboard input
 method requires positively absent composition metadata. Known foreign marks
 always refuse. Missing activation, an unavailable event barrier, or uncertain
 cleanup uses the HUD or refuses delivery as appropriate. This does not turn an
@@ -118,7 +122,10 @@ unavailable range into proof of absence.
 Ghostty's native asynchronous `insertText` can acknowledge a call without
 producing terminal bytes. An unreadable draft therefore finishes with the
 existing guarded Unicode backend after the companion cancels its preedit.
-No Ghostty patch, clipboard, corrective backspaces, or external service is used.
+No Ghostty patch, synthetic wake key, clipboard, corrective backspaces, or external
+service is used. Switching the source only at fn press did not activate Ghostty
+in the October 9 installed hold. Epos can adopt a source selected before dictation;
+its actual client activation still gates every draft.
 
 The redesign is authored and under verification. Direct Ghostty streaming,
 revised drafts, zero-byte cancellation, one final payload, interruption, and

@@ -22,8 +22,12 @@ the prior bundle if replacement fails. First registration of the companion can
 require a logout or input source consent.
 The app can use its recording pill while the companion is unavailable.
 The companion is a keyboard input method. Enable its input source when macOS
-requests consent. Epos selects it temporarily during preview and restores the
-prior keyboard source afterward. Upgrading from the earlier palette companion
+requests consent. For native streaming in Ghostty, select Epos as your keyboard
+input method before dictation and leave it selected. Ordinary typing continues
+through the existing keyboard layout; recording cleanup or failure preserves
+your Epos selection. The companion must still activate in the target field.
+When another source is selected, Epos can borrow its companion temporarily for
+preview and restore the prior source afterward. Upgrading from the earlier palette companion
 can require input-source consent again; live registration does not mean the
 keyboard source is enabled. EposProbe also needs Accessibility for the
 event barrier that ends a draft before ordinary keyboard or mouse input.
