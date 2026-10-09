@@ -55,6 +55,8 @@ func parseOptions() -> Options {
 
             Each pass pins itself to the app focused when the countdown ends and
             refuses to write anywhere else. --target asserts that app up front.
+            The previous keyboard source is restored after the run unless the
+            user changes it. --no-select never changes keyboard sources.
             """)
             exit(0)
         default:
@@ -99,10 +101,26 @@ final class CommandClient {
     init?(path: String) {
         descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else { return nil }
+        // A departed companion must return through source restoration, rather
+        // than terminating on SIGPIPE or leaving a blocked reply read behind.
+        var suppressPipeSignal: Int32 = 1
+        var timeout = timeval(tv_sec: 2, tv_usec: 0)
+        guard setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &suppressPipeSignal,
+                         socklen_t(MemoryLayout<Int32>.size)) == 0,
+              setsockopt(descriptor, SOL_SOCKET, SO_RCVTIMEO, &timeout,
+                         socklen_t(MemoryLayout<timeval>.size)) == 0,
+              setsockopt(descriptor, SOL_SOCKET, SO_SNDTIMEO, &timeout,
+                         socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            close(descriptor)
+            return nil
+        }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let pathBytes = Array(path.utf8)
-        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else { return nil }
+        guard pathBytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            close(descriptor)
+            return nil
+        }
         withUnsafeMutableBytes(of: &address.sun_path) { $0.copyBytes(from: pathBytes) }
         let connected = withUnsafePointer(to: &address) { pointer in
             pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -144,49 +162,47 @@ func connectWithRetry(timeout: TimeInterval) -> CommandClient? {
 
 let options = parseOptions()
 
-guard let source = findSource(inputSourceID) else {
-    print("FAIL input source not registered: \(inputSourceID)")
-    print("     run ./install first")
-    exit(1)
-}
-print("source \(inputSourceID) \(describeSource(source))")
+struct KeyboardAcquisition {
+    let previousSource: TISInputSource
+    let previousIdentifier: String
+    let argument: String
 
-if options.select {
-    // TISEnableInputSource raises a macOS consent dialog on every call, so only
-    // call it when the source is genuinely disabled.
-    if boolProperty(source, kTISPropertyInputSourceIsEnabled) {
-        print("already enabled; not calling TISEnableInputSource")
-    } else {
-        print("TISEnableInputSource -> \(TISEnableInputSource(source))")
+    init?() {
+        guard let previous = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue(),
+              let previousID = stringProperty(previous, kTISPropertyInputSourceID),
+              previousID != inputSourceID,
+              let layout = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
+              let layoutID = stringProperty(layout, kTISPropertyInputSourceID) else { return nil }
+        let kind = stringProperty(previous, kTISPropertyInputSourceType) == kTISTypeKeyboardLayout as String
+            ? "acquire-layout" : "acquire-method"
+        previousSource = previous
+        previousIdentifier = previousID
+        argument = "\(kind) \(previousID) \(layoutID)"
     }
 
-    if boolProperty(source, kTISPropertyInputSourceIsSelected) {
-        print("already selected; not calling TISSelectInputSource")
-    } else {
-        var selectStatus: OSStatus = -1
-        for _ in 0..<20 {
-            selectStatus = TISSelectInputSource(source)
-            if selectStatus == noErr { break }
-            Thread.sleep(forTimeInterval: 0.1)
+    func select(_ source: TISInputSource) -> Bool {
+        let current = currentIdentifier()
+        if current == inputSourceID { return true }
+        guard current == previousIdentifier else {
+            print("FAIL keyboard source changed during the run; preserving the user's choice")
+            return false
         }
-        print("TISSelectInputSource -> \(selectStatus)")
+        let result = TISSelectInputSource(source)
+        print("TISSelectInputSource -> \(result)")
+        return result == noErr && currentIdentifier() == inputSourceID
     }
-    if let refreshed = findSource(inputSourceID) {
-        print("after select: \(describeSource(refreshed))")
-    }
-    if let keyboard = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() {
-        print("current keyboard source: \(stringProperty(keyboard, kTISPropertyInputSourceID) ?? "?")")
-    }
-}
 
-guard let client = connectWithRetry(timeout: 8) else {
-    print("FAIL could not connect to \(ProbePaths.socketPath)")
-    print("     the input method process may not have been launched by the system")
-    exit(1)
+    func restore() {
+        guard currentIdentifier() == inputSourceID else { return }
+        let result = TISSelectInputSource(previousSource)
+        print("restore keyboard source -> \(result)")
+    }
+
+    private func currentIdentifier() -> String? {
+        guard let source = TISCopyCurrentKeyboardInputSource()?.takeRetainedValue() else { return nil }
+        return stringProperty(source, kTISPropertyInputSourceID)
+    }
 }
-print("connected \(ProbePaths.socketPath)")
-print("ping -> \(client.send("ping"))")
-print("status -> \(client.send("status"))")
 
 func waitForFocus() {
     guard options.focusDelaySeconds > 0 else { return }
@@ -196,19 +212,24 @@ func waitForFocus() {
 
 /// Returns false when the pass was refused, so a focus mismatch aborts loudly
 /// instead of typing into an unrelated app.
-func streamPass(finish: String) -> Bool {
+func streamPass(client: CommandClient, acquisition: KeyboardAcquisition?, finish: String) -> Bool {
     // Selecting the input source tears down and rebuilds client sessions, so the
     // target's session can take several seconds to appear after focus lands.
     var began = ""
     let deadline = Date().addingTimeInterval(20)
     repeat {
-        began = client.send("begin \(options.target)")
+        let argument = acquisition.map { " \($0.argument)" } ?? ""
+        began = client.send("begin \(options.target)\(argument)")
         if began.hasPrefix("ok") { break }
+        if began != "err input method activation pending" { break }
         Thread.sleep(forTimeInterval: 0.5)
     } while Date() < deadline
     print("  begin -> \(began)")
     guard began.hasPrefix("ok") else { return false }
-    defer { print("  end -> \(client.send("end"))") }
+    var ended = false
+    defer {
+        if !ended { print("  end -> \(client.send("end"))") }
+    }
 
     let markVerb = options.plainMarkedText ? "markplain" : "mark"
     var spoken: [String] = []
@@ -217,7 +238,7 @@ func streamPass(finish: String) -> Bool {
         let text = spoken.joined(separator: " ")
         let response = client.send("\(markVerb) \(text)")
         print("  mark \"\(text)\" -> \(response)")
-        if response.hasPrefix("err") {
+        if !response.hasPrefix("ok") {
             _ = client.send("cancel")
             return false
         }
@@ -227,32 +248,74 @@ func streamPass(finish: String) -> Bool {
         print("  holding marked text for \(options.holdSeconds)s")
         Thread.sleep(forTimeInterval: options.holdSeconds)
     }
-    print("  \(finish) -> \(client.send(finish))")
-    return true
+    let finished = client.send(finish)
+    print("  \(finish) -> \(finished)")
+    guard finished.hasPrefix("ok") else {
+        // A missing commit acknowledgement can follow a successful insertion.
+        // Only a confirmed refusal permits another composition command.
+        if finish == "commit", finished.hasPrefix("err") { _ = client.send("cancel") }
+        return false
+    }
+    let end = client.send("end")
+    ended = true
+    print("  end -> \(end)")
+    return end.hasPrefix("ok")
 }
 
-if options.statusOnly {
-    exit(0)
+func run() -> Int32 {
+    guard let source = findSource(inputSourceID) else {
+        print("FAIL input source not registered: \(inputSourceID)")
+        print("     run ./install first")
+        return 1
+    }
+    print("source \(inputSourceID) \(describeSource(source))")
+
+    var acquisition: KeyboardAcquisition?
+    if options.select {
+        guard boolProperty(source, kTISPropertyInputSourceIsEnabled),
+              stringProperty(source, kTISPropertyInputSourceType)
+                == kTISTypeKeyboardInputMethodWithoutModes as String else {
+            print("FAIL an enabled keyboard input method is required; enable the installed companion first")
+            return 1
+        }
+        guard let saved = KeyboardAcquisition() else {
+            print("FAIL could not capture the previous keyboard source and layout; select a normal source first")
+            return 1
+        }
+        acquisition = saved
+    }
+    // Returning before exit runs this cleanup even on connection or pass failure.
+    defer { acquisition?.restore() }
+    if let acquisition, !acquisition.select(source) { return 1 }
+
+    guard let client = connectWithRetry(timeout: 8) else {
+        print("FAIL could not connect to \(ProbePaths.socketPath)")
+        print("     the input method process may not have been launched by the system")
+        return 1
+    }
+    print("connected \(ProbePaths.socketPath)")
+    let ping = client.send("ping")
+    print("ping -> \(ping)")
+    guard ping == "pong" else { return 1 }
+    print("status -> \(client.send("status"))")
+    if options.statusOnly { return 0 }
+
+    for (label, finish) in [("pass 1: stream then commit", "commit"),
+                            ("pass 2: stream then cancel (field must end unchanged)", "cancel")] {
+        guard finish == "commit" ? options.doCommitPass : options.doCancelPass else { continue }
+        // The companion restores the previous source at end, so each pass borrows it anew.
+        if let acquisition, !acquisition.select(source) { return 1 }
+        print(label)
+        waitForFocus()
+        guard streamPass(client: client, acquisition: acquisition, finish: finish) else { return 1 }
+        Thread.sleep(forTimeInterval: options.settleSeconds)
+    }
+    print("final status -> \(client.send("status"))")
+    if options.deselect {
+        print("--deselect: borrowed sources are restored automatically; --no-select leaves sources untouched")
+    }
+    print("done")
+    return 0
 }
 
-if options.doCommitPass {
-    print("pass 1: stream then commit")
-    waitForFocus()
-    _ = streamPass(finish: "commit")
-    Thread.sleep(forTimeInterval: options.settleSeconds)
-}
-
-if options.doCancelPass {
-    print("pass 2: stream then cancel (field must end unchanged)")
-    waitForFocus()
-    _ = streamPass(finish: "cancel")
-    Thread.sleep(forTimeInterval: options.settleSeconds)
-}
-
-print("final status -> \(client.send("status"))")
-
-if options.deselect, let refreshed = findSource(inputSourceID) {
-    print("TISDeselectInputSource -> \(TISDeselectInputSource(refreshed))")
-}
-
-print("done")
+exit(run())

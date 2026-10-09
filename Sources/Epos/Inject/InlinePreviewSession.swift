@@ -5,10 +5,10 @@ import Foundation
 struct InlinePreviewReport: Equatable, Sendable {
     var bundleIdentifier: String
     var began: Bool
-    /// Whether any mark was ever put on the wire. A mark whose reply never came
-    /// back leaves `marksSent` at zero yet may be rendered in the field, so this
-    /// — not `marksSent` — is what "a composition may be on screen" means.
+    /// Whether any mark was ever put on the wire, including refused commands.
     var didAttemptMark: Bool
+    /// Unknown replies may have rendered a mark; a conclusive first refusal cannot.
+    var mayHaveRendered: Bool
     var marksSent: Int
     var cancelAcknowledged: Bool
     var committed: Bool
@@ -16,7 +16,7 @@ struct InlinePreviewReport: Equatable, Sendable {
 
     var logLine: String {
         "inline preview target=\(bundleIdentifier) began=\(began) " +
-            "attemptedMark=\(didAttemptMark) marks=\(marksSent) " +
+            "attemptedMark=\(didAttemptMark) mayHaveRendered=\(mayHaveRendered) marks=\(marksSent) " +
             "cancelAck=\(cancelAcknowledged) committed=\(committed) failure=\(failure ?? "none")"
     }
 }
@@ -76,8 +76,11 @@ actor InlinePreviewSession {
 
     private let transport: InlinePreviewTransport
     private let bundleIdentifier: String
+    private let acquisitionArgument: String?
     private let throttle: Duration
     private let sleep: @Sendable (Duration) async -> Void
+    private let validateTarget: @MainActor @Sendable () -> Bool
+    private let onAcquisitionFailure: @MainActor @Sendable () -> Void
     /// Fired on transitions in and out of active marking (begin acked, channel
     /// healthy). The coordinator uses it to drop the HUD's duplicate transcript
     /// line while the field shows the same text.
@@ -94,11 +97,11 @@ actor InlinePreviewSession {
     private var draining = false
     private var safetyReplyInFlight = false
     private var safetyReplyCompletions: [CheckedContinuation<Void, Never>] = []
-    /// Woken when the in-flight drain finishes, so the commit handshake can wait
-    /// for reply alignment without polling.
+    /// Woken when the current coalescing drain finishes.
     private var drainCompletions: [CheckedContinuation<Void, Never>] = []
     private var began = false
     private var didAttemptMark = false
+    private var firstMarkRefused = false
     private var marksSent = 0
     private var cancelAcknowledged = false
     private var compositionCancelled = false
@@ -109,15 +112,21 @@ actor InlinePreviewSession {
     init(
         transport: InlinePreviewTransport,
         bundleIdentifier: String,
+        acquisitionArgument: String? = nil,
         throttle: Duration = .milliseconds(100),
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
+        validateTarget: @escaping @MainActor @Sendable () -> Bool = { true },
+        onAcquisitionFailure: @escaping @MainActor @Sendable () -> Void = {},
         onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
         onFirstMarkRendered: @escaping @Sendable () -> Void = {}
     ) {
         self.transport = transport
         self.bundleIdentifier = bundleIdentifier
+        self.acquisitionArgument = acquisitionArgument
         self.throttle = throttle
         self.sleep = sleep
+        self.validateTarget = validateTarget
+        self.onAcquisitionFailure = onAcquisitionFailure
         self.onMarkingActivityChange = onMarkingActivityChange
         self.onFirstMarkRendered = onFirstMarkRendered
     }
@@ -137,21 +146,46 @@ actor InlinePreviewSession {
         do {
             try await transport.open()
             guard phase == .pending else { return await transport.close() }
-            let reply = try await sendSafetyCommand("begin \(bundleIdentifier)")
+            let command = "begin \(bundleIdentifier)" + (acquisitionArgument.map { " \($0)" } ?? "")
+            var reply = try await sendSafetyCommand(command)
+            // Native source selection and controller activation are separate
+            // events. Wait only for this explicit, no-write activation reply.
+            let deadline = ContinuousClock.now + .milliseconds(200)
+            while acquisitionArgument != nil, reply == "err input method activation pending",
+                  phase == .pending, ContinuousClock.now < deadline {
+                await sleep(.milliseconds(5))
+                guard phase == .pending else { return await transport.close() }
+                reply = try await sendSafetyCommand(command)
+            }
             let targetUnsafe = recordUnsafeTarget(reply)
             guard phase == .pending else { return await transport.close() }
-            if targetUnsafe { return degrade("unsafeTarget") }
+            if targetUnsafe { return await failAcquisition("unsafeTarget") }
             guard reply.hasPrefix("ok") else {
                 if !reply.hasPrefix("err") { unsafeTarget = true }
-                return degrade("beginRefused")
+                return await failAcquisition("beginRefused")
             }
             began = true
+            let targetIsUnchanged = await validateTarget()
+            guard phase == .pending else { return await transport.close() }
+            guard targetIsUnchanged else {
+                unsafeTarget = true
+                return await failAcquisition("unsafeTarget")
+            }
             transition(to: .marking)
             startDrainIfNeeded()
         } catch {
             recordUnknownSafetyFailure(error)
-            degrade("connectFailed")
+            await failAcquisition("connectFailed")
         }
+    }
+
+    /// No draft has been sent during acquisition, so retiring its connection is
+    /// sufficient before restoring the borrowed keyboard source.
+    private func failAcquisition(_ reason: String) async {
+        degrade(reason)
+        if began { _ = try? await transport.send("end") }
+        await transport.close()
+        await onAcquisitionFailure()
     }
 
     /// Records the latest volatile display text. Sending is coalesced: only the
@@ -236,9 +270,10 @@ actor InlinePreviewSession {
         // Reply alignment is load-bearing: the transport pairs each request
         // with the next reply line, so an in-flight mark must consume its reply
         // before this cancel — and the commit after it — can trust theirs.
-        // `committing` stops new drains; waiting out the current one leaves the
-        // stream aligned. A mark that fails in flight degrades and aborts here.
-        await awaitDrainCompletion()
+        // `committing` stops new marks. Consume only a pending safety reply.
+        // An acknowledged mark's throttle sleep cannot affect reply alignment.
+        // A mark that fails in flight degrades and aborts here.
+        await awaitSafetyReply()
         guard phase == .committing else { return false }
         guard !unsafeTarget else {
             outcome = .refused
@@ -327,6 +362,7 @@ actor InlinePreviewSession {
             bundleIdentifier: bundleIdentifier,
             began: began,
             didAttemptMark: didAttemptMark,
+            mayHaveRendered: didAttemptMark && !firstMarkRefused,
             marksSent: marksSent,
             cancelAcknowledged: cancelAcknowledged,
             committed: committed,
@@ -395,13 +431,15 @@ actor InlinePreviewSession {
             do {
                 let reply = try await sendSafetyCommand("mark \(text)")
                 _ = recordUnsafeTarget(reply)
-                if reply.hasPrefix("err"), marksSent == 0 {
-                    // The first mark was conclusively refused before setMarkedText.
-                    // No cancellation should disturb the original selection.
+                let refusedBeforeMark = reply.hasPrefix("err unmarked ") || reply.hasPrefix("err unsafe unmarked ")
+                if refusedBeforeMark, marksSent == 0 {
+                    // Only explicit pre-write proof can skip owned cleanup.
+                    // Other errors may follow a native mark that rendered.
+                    firstMarkRefused = true
                     compositionCancelled = true
                 } else if !reply.hasPrefix("ok") {
-                    // A previously accepted mark may have been ended by its host.
-                    // Losing the ability to update it also retires final delivery.
+                    // Without pre-write proof, even the first error may follow
+                    // a native mark. Retire final delivery and attempt owned cleanup.
                     unsafeTarget = true
                 }
                 guard phase == .marking else { return }

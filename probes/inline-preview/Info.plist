@@ -20,14 +20,12 @@
 	<string>0.1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>ComponentInvisibleInSystemUI</key>
-	<true/>
 	<key>InputMethodConnectionName</key>
 	<string>EposProbe_1_Connection</string>
 	<key>InputMethodServerControllerClass</key>
 	<string>EposProbeInputController</string>
 	<key>InputMethodType</key>
-	<string>palette</string>
+	<string>keyboard</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>26.0</string>
 	<key>NSPrincipalClass</key>

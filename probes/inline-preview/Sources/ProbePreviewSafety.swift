@@ -10,6 +10,14 @@ enum ProbePreviewSafety {
         case unreadable
     }
 
+    /// Only a refusal before setMarkedText can prove this command rendered nothing.
+    static func unmarkedRefusal(_ reason: String, unsafe: Bool = false) -> String {
+        if reason.hasPrefix("unsafe ") {
+            return "err unsafe unmarked \(reason.dropFirst("unsafe ".count))"
+        }
+        return "err \(unsafe ? "unsafe " : "")unmarked \(reason)"
+    }
+
     /// Client identity alone cannot prove ownership after the host ends a mark.
     /// Require the live document range and text to match the last Epos write.
     static func compositionState(

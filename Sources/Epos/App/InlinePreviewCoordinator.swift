@@ -12,6 +12,8 @@ final class InlinePreviewCoordinator {
     private let isEnabled: @MainActor () -> Bool
     private let log: EposLogger
     private let latency: RecordingLatencyDiagnostics?
+    private let keyboardSourceFactory: @MainActor () -> PreviewKeyboardSource?
+    private let transportFactory: @MainActor () -> any InlinePreviewTransport
     /// Raised and lowered by the session as its channel becomes (or stops being)
     /// healthy enough to mirror. Generation-guarded, so a stale session can never
     /// speak for a later recording.
@@ -20,6 +22,7 @@ final class InlinePreviewCoordinator {
 
     private(set) var session: InlinePreviewSession?
     private var discard: Task<Void, Never>?
+    private var keyboardSource: PreviewKeyboardSource?
     /// Monotonic token so a stale session's marking-activity callback can never
     /// flip the HUD suppression of a later recording.
     private var generation = 0
@@ -30,17 +33,25 @@ final class InlinePreviewCoordinator {
         isEnabled: @escaping @MainActor () -> Bool,
         log: EposLogger,
         latency: RecordingLatencyDiagnostics? = nil,
+        keyboardSourceFactory: @escaping @MainActor () -> PreviewKeyboardSource? = { PreviewKeyboardSource() },
+        transportFactory: @escaping @MainActor () -> any InlinePreviewTransport = { UnixSocketInlinePreviewTransport() },
         onMarkingActivityChange: @escaping @MainActor (Bool) -> Void,
         onFirstMarkRendered: @escaping @MainActor () -> Void
     ) {
         self.isEnabled = isEnabled
         self.log = log
         self.latency = latency
+        self.keyboardSourceFactory = keyboardSourceFactory
+        self.transportFactory = transportFactory
         self.onMarkingActivityChange = onMarkingActivityChange
         self.onFirstMarkRendered = onFirstMarkRendered
     }
 
-    func start(bundleIdentifier: String?, selectedRange: InsertionTargetTextRange?) {
+    func start(
+        bundleIdentifier: String?, selectedRange: InsertionTargetTextRange?, holdKeyCode: UInt16? = nil,
+        holdModifierFlags: UInt64? = nil,
+        validateTarget: @escaping @MainActor @Sendable () -> Bool = { false }
+    ) {
         // A skipped preview still starts a new recording. Retire every callback
         // from its predecessor before any early return.
         generation += 1
@@ -50,7 +61,23 @@ final class InlinePreviewCoordinator {
             log.info("inline preview skipped: fn-press text selection is nonempty")
             return
         }
-        guard let session = makeSession(bundleIdentifier: bundleIdentifier) else {
+        guard isEnabled(), let bundleIdentifier, !bundleIdentifier.isEmpty else { return }
+        guard let keyboardSource = keyboardSourceFactory() else {
+            log.info("inline preview unavailable: native keyboard source cannot be acquired")
+            return
+        }
+        self.keyboardSource = keyboardSource
+        let acquisitionArgument = keyboardSource.acquisitionArgument
+            + (holdKeyCode.map { code in
+                " hold-key=\(code)" + (holdModifierFlags.map { " hold-flags=\($0)" } ?? "")
+            } ?? "")
+        guard let session = makeSession(
+            bundleIdentifier: bundleIdentifier,
+            acquisitionArgument: acquisitionArgument,
+            validateTarget: validateTarget
+        ) else {
+            keyboardSource.release()
+            self.keyboardSource = nil
             if isEnabled() {
                 // Correlates a "saw nothing in app X" report with an unidentifiable
                 // fn-press target rather than a rendering failure.
@@ -68,6 +95,8 @@ final class InlinePreviewCoordinator {
     func makeSession(
         bundleIdentifier: String?,
         transport: (any InlinePreviewTransport)? = nil,
+        acquisitionArgument: String? = nil,
+        validateTarget: @escaping @MainActor @Sendable () -> Bool = { true },
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     ) -> InlinePreviewSession? {
         generation += 1
@@ -76,9 +105,15 @@ final class InlinePreviewCoordinator {
         }
         let generation = generation
         return InlinePreviewSession(
-            transport: transport ?? UnixSocketInlinePreviewTransport(),
+            transport: transport ?? transportFactory(),
             bundleIdentifier: bundleIdentifier,
+            acquisitionArgument: acquisitionArgument,
             sleep: sleep,
+            validateTarget: validateTarget,
+            onAcquisitionFailure: { [weak self] in
+                guard let self, self.generation == generation else { return }
+                self.releaseKeyboardSource()
+            },
             onMarkingActivityChange: { [weak self] active in
                 Task { @MainActor in
                     guard let self, self.generation == generation else { return }
@@ -124,29 +159,24 @@ final class InlinePreviewCoordinator {
     /// Callers guard on `isActive` first: with no session there is nothing to
     /// finish and no HUD suppression to lift.
     ///
-    /// Returns true when a mark was attempted and never committed — the one
-    /// case where marked text may still be drawn over the field at return time,
-    /// and the only recording whose final write needs a baseline settle.
+    /// Returns true when preview could have rendered and never committed. Final
+    /// delivery settles that composition before authorizing its write.
     @discardableResult
     func finish() async -> Bool {
         guard let session else { return false }
         startDiscard()
         await discard?.value
         let report = await session.report()
-        let compositionMayLinger = report.didAttemptMark && !report.committed
-        if compositionMayLinger {
-            // Keyed to the attempt, not the ack: a mark whose reply timed out
-            // leaves marksSent at zero and may still be drawn in the field, and
-            // that is exactly the case keystrokes must not land on top of.
-            // After an acked IME commit no keystrokes follow, so there is nothing
-            // to settle for.
-            latency?.begin(.compositionSettle)
-            try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay)
-            latency?.end(.compositionSettle)
-        }
+        let compositionMayLinger = report.mayHaveRendered && !report.committed
         log.info(report.logLine)
         self.session = nil
         discard = nil
+        releaseKeyboardSource()
         return compositionMayLinger
+    }
+
+    private func releaseKeyboardSource() {
+        keyboardSource?.release()
+        keyboardSource = nil
     }
 }

@@ -46,6 +46,7 @@ builds the app and installs the companion used for inline preview.
 3. Disable the macOS Dictation fn shortcut in System Settings, Keyboard, Dictation.
 4. If macOS requests consent for the companion input source, grant it. Its first
    registration may also require logging out and back in.
+5. Grant EposProbe Accessibility for inline preview interruption handling.
 
 Epos uses the recording indicator while inline preview is unavailable. See
 [setup](docs/setup.md) for signing, permissions, and companion registration.
@@ -84,8 +85,8 @@ Epos uses one configured language, US English by default, without a language
 switcher. Inline preview and text insertion
 depend on the destination app and its accessibility support. See
 [insertion](docs/insertion.md) for selection, focus, and delivery behavior.
-The verified Ghostty build uses overlay preview and guarded final delivery; see
-[terminal input](docs/insertion.md#terminal-input) for the version and cause.
+The native keyboard-session redesign for Ghostty is under installed verification;
+see [terminal input](docs/insertion.md#terminal-input) for current evidence.
 
 Tests cover app logic and native text view safety checks. Daily use still needs
 verification with the installed app in your target applications. Latency and

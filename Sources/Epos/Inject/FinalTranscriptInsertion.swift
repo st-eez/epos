@@ -298,7 +298,8 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         target.targetWindowTitle()
     }
 
-    private func targetIsUnchanged() -> Bool {
+    /// Shared by preview acquisition and final authorization, before either writes.
+    func targetIsUnchanged() -> Bool {
         guard target.hasCapturedTarget() else {
             // Failure A of the Electron dormant-tree bug: nothing was focusable
             // at fn press, so there is no target to verify, and "target changed"

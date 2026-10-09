@@ -2,7 +2,7 @@ import AppKit
 import Carbon
 import InputMethodKit
 
-/// Palette input method controller. It never consumes keystrokes; every text
+/// Keyboard input method controller. It never consumes keystrokes; every text
 /// operation arrives over the command socket so the probe can drive marked text
 /// without owning the keyboard.
 ///
@@ -40,9 +40,16 @@ final class EposProbeInputController: IMKInputController {
     }
 
     nonisolated(unsafe) private static var composition: Composition?
+    nonisolated(unsafe) private static var session: ProbeSessionOwnership?
+    nonisolated(unsafe) private static var barrier: ProbeInputBarrier?
+    nonisolated(unsafe) private static var savedKeyboardSource: TISInputSource?
+    nonisolated(unsafe) private static var discarding = false
+    nonisolated(unsafe) private static var nativeMarkInFlight = false
+    private var activated = false
 
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
+        activated = true
         Self.activeController = self
         Self.controllers.add(self)
         ProbeLog.write("activateServer client=\(Self.describe(sender))")
@@ -52,6 +59,8 @@ final class EposProbeInputController: IMKInputController {
 #if EPOS_SESSION_PROTOTYPE
         ProbeSessionPrototype.hostCallback(self, reason: "deactivate")
 #endif
+        activated = false
+        if Self.lockedController === self { Self.interruptSession("deactivate", mayDiscard: true) }
         ProbeLog.write("deactivateServer client=\(Self.describe(sender))")
         // The host is tearing this session down. Anything of ours still marked in
         // it comes off now: once the session is gone the composition is no longer
@@ -66,11 +75,12 @@ final class EposProbeInputController: IMKInputController {
         super.deactivateServer(sender)
     }
 
-    // A palette input method must never swallow typing.
+    // Interrupted typing passes through after the owned preview is discarded.
     override func inputText(_ string: String!, client sender: Any!) -> Bool {
 #if EPOS_SESSION_PROTOTYPE
         ProbeSessionPrototype.hostCallback(self, reason: "input-text")
 #endif
+        if Self.lockedController === self { Self.interruptSession("input-text", mayDiscard: true) }
         return false
     }
 
@@ -81,6 +91,9 @@ final class EposProbeInputController: IMKInputController {
             ProbeSessionPrototype.hostCallback(self, reason: "handle")
         }
 #endif
+        if event?.type != .flagsChanged, event?.type != .keyUp, Self.lockedController === self {
+            Self.interruptSession("handle", mayDiscard: true)
+        }
         return false
     }
 
@@ -92,6 +105,7 @@ final class EposProbeInputController: IMKInputController {
 #if EPOS_SESSION_PROTOTYPE
         ProbeSessionPrototype.hostCallback(self, reason: "host-commit")
 #endif
+        if Self.lockedController === self { Self.interruptSession("host-commit", mayDiscard: true) }
         guard Self.composition?.controller === self else {
             ProbeLog.write("commitComposition ignored (not the composition owner) client=\(Self.describe(sender))")
             return
@@ -108,7 +122,7 @@ final class EposProbeInputController: IMKInputController {
             .joined(separator: ",")
         let front = activeController?.client()?.bundleIdentifier() ?? "none"
         return "ok recent=\(front) sessions=[\(sessions)] locked=\(lockedBundleID ?? "-") "
-            + "owner=\(composition?.bundleID ?? "-") marked=\"\(composition?.text ?? "")\""
+            + "owner=\(composition?.bundleID ?? "-") markedUTF16=\(((composition?.text ?? "") as NSString).length)"
     }
 
     /// Developer metadata only. Run with Epos stopped: opening a new socket
@@ -130,19 +144,49 @@ final class EposProbeInputController: IMKInputController {
     /// Pins the pass to one app. `expected` of "any" takes whichever session
     /// activated most recently; anything else must have a live session or the
     /// pass is refused.
-    static func begin(expected: String, connection: UInt64) -> String {
+    static func begin(expected argument: String, connection: UInt64) -> String {
+        let parts = argument.split(separator: " ").map(String.init)
+        guard let expected = parts.first, parts.count == 1 || (4...6).contains(parts.count),
+              parts.count == 1 || ["acquire-layout", "acquire-method"].contains(parts[1]) else {
+            return "err invalid acquisition"
+        }
+        let holdKey: UInt16?
+        if parts.count >= 5 {
+            guard let key = ProbeInputBarrier.holdKey(from: parts[4]) else { return "err invalid hold key" }
+            holdKey = key
+        } else { holdKey = nil }
+        let shortcut: DictationShortcut?
+        if parts.count == 6 {
+            guard let binding = ProbeInputBarrier.holdShortcut(keyToken: parts[4], flagsToken: parts[5]) else {
+                return "err invalid hold shortcut"
+            }
+            shortcut = binding
+        } else { shortcut = nil }
+        let acquiredFromLayout = parts.count >= 4 && parts[1] == "acquire-layout"
+        let priorSource: TISInputSource?
+        if parts.count >= 4 {
+            guard let prior = keyboardSource(identifier: parts[2]),
+                  parts[2] != Bundle.main.bundleIdentifier,
+                  keyboardSource(identifier: parts[3], layoutOnly: true) != nil,
+                  !acquiredFromLayout || keyboardSource(identifier: parts[2], layoutOnly: true) != nil else {
+                return "err invalid saved keyboard source"
+            }
+            priorSource = prior
+        } else { priorSource = nil }
         let controller: EposProbeInputController?
         if expected == "any" {
             controller = activeController
         } else {
             let matches = controllers.allObjects.filter { $0.client()?.bundleIdentifier() == expected }
             guard matches.count == 1 else {
+                if matches.isEmpty, ProbeInputBarrier.eposIsSelected { return "err input method activation pending" }
                 return "err expected one client session for \(expected), found \(matches.count)"
             }
             controller = matches[0]
         }
-        guard let controller, let client = controller.client() else {
-            return "err no client session for \(expected); live sessions: \(status())"
+        guard ProbeInputBarrier.eposIsSelected else { return "err Epos keyboard source is not selected" }
+        guard let controller, controller.activated, let client = controller.client() else {
+            return "err input method activation pending"
         }
         if let current = composition,
            current.connection != connection || current.controller !== controller {
@@ -150,10 +194,24 @@ final class EposProbeInputController: IMKInputController {
                 return "err \(reason)"
             }
         }
+        let observation = observe(client, expected: nil)
+        if observation.composition == .foreign { return "err unsafe composition before acquisition" }
+        guard let policy = ProbeSessionOwnership(acquiredFromLayout: acquiredFromLayout, observation: observation) else {
+            return "err acquisition requires readable empty selection and composition absence"
+        }
+        guard let inputBarrier = ProbeInputBarrier(targetBundle: client.bundleIdentifier() ?? expected, holdKey: holdKey, shortcut: shortcut, interrupt: { reason, mayDiscard in
+            Self.interruptSession(reason, mayDiscard: mayDiscard)
+        }) else { return "err input barrier unavailable" }
+        barrier?.stop()
+        barrier = inputBarrier
+        session = policy
+        savedKeyboardSource = priorSource
         lockedController = controller
         lockedInputClient = client
         lockedBundleID = client.bundleIdentifier() ?? ""
         lockedConnection = connection
+        if parts.count >= 4 { client.overrideKeyboard(withKeyboardNamed: parts[3]) }
+        guard !policy.isRetired else { return "err unsafe session retired during acquisition" }
         ProbeLog.write("begin locked=\(lockedBundleID ?? "?") connection=\(connection)")
         return "ok locked \(lockedBundleID ?? "?")"
     }
@@ -164,6 +222,11 @@ final class EposProbeInputController: IMKInputController {
     static func end(connection: UInt64) -> String {
         guard lockedConnection == connection else { return "err preview pass is not owned by this connection" }
         let previous = lockedBundleID ?? "-"
+        session?.retire("end")
+        barrier?.stop()
+        barrier = nil
+        restoreKeyboardSource()
+        session = nil
         lockedController = nil
         lockedInputClient = nil
         lockedBundleID = nil
@@ -179,6 +242,7 @@ final class EposProbeInputController: IMKInputController {
 #if EPOS_SESSION_PROTOTYPE
         ProbeSessionPrototype.disconnect(connection)
 #endif
+        if lockedConnection == connection { interruptSession("disconnect", mayDiscard: true) }
         if composition?.connection == connection {
             clearComposition(reason: "connection \(connection) \(reason)")
         }
@@ -188,6 +252,10 @@ final class EposProbeInputController: IMKInputController {
             lockedInputClient = nil
             lockedBundleID = nil
             lockedConnection = nil
+            barrier?.stop()
+            barrier = nil
+            restoreKeyboardSource()
+            session = nil
         }
     }
 
@@ -199,6 +267,10 @@ final class EposProbeInputController: IMKInputController {
     private static func lockedClient(connection: UInt64) -> LockedClient {
         guard lockedConnection == connection else {
             return .refused("preview pass is not owned by this connection")
+        }
+        guard session?.isRetired != true, barrier?.enabled == true, ProbeInputBarrier.eposIsSelected else {
+            interruptSession("session-unavailable", mayDiscard: false)
+            return .refused("unsafe preview session ended")
         }
         if let locked = lockedBundleID {
             guard let controller = lockedController, let client = lockedInputClient,
@@ -222,7 +294,7 @@ final class EposProbeInputController: IMKInputController {
         let client: IMKTextInput & NSObjectProtocol
         switch lockedClient(connection: connection) {
         case .refused(let reason):
-            return composition?.connection == connection ? "err unsafe \(reason)" : "err \(reason)"
+            return ProbePreviewSafety.unmarkedRefusal(reason, unsafe: composition?.connection == connection)
         case .ready(let resolved, let resolvedClient):
             controller = resolved
             client = resolvedClient
@@ -232,7 +304,7 @@ final class EposProbeInputController: IMKInputController {
         // left to address it.
         if let current = composition, current.controller !== controller {
             if case .unreachable(let reason) = clearComposition(reason: "mark moved to \(bundleID)") {
-                return "err \(reason)"
+                return ProbePreviewSafety.unmarkedRefusal(reason)
             }
         }
         let selectedRange = client.selectedRange()
@@ -240,26 +312,47 @@ final class EposProbeInputController: IMKInputController {
         let liveState = liveCompositionState(of: client, expected: composition, markedRange: markedRange)
         if liveState == .foreign {
             logMarkRefusal(client: client, selection: selectedRange, marked: markedRange, state: liveState)
-            return "err unsafe composition before preview"
+            return ProbePreviewSafety.unmarkedRefusal("composition before preview", unsafe: true)
         }
-        guard ProbePreviewSafety.canWrite(
-            selectedRange: selectedRange,
-            compositionState: liveState,
-            continuingComposition: composition != nil
-        ) else {
+        guard let policy = session, policy.canOperate(.init(
+            selection: selectedRange, marked: markedRange, composition: liveState
+        )) else {
             logMarkRefusal(client: client, selection: selectedRange, marked: markedRange, state: liveState)
             return composition == nil
-                ? "err preview requires a readable empty selection and no existing composition"
-                : "err unsafe selection or composition before preview"
+                ? ProbePreviewSafety.unmarkedRefusal("preview requires a readable empty selection and no existing composition")
+                : ProbePreviewSafety.unmarkedRefusal("selection or composition before preview", unsafe: true)
         }
         let start = composition?.range.location ?? selectedRange.location
         let selection = NSRange(location: (text as NSString).length, length: 0)
         let payload: Any = styled ? underlinedMarkedText(text) : text
-        client.setMarkedText(payload, selectionRange: selection, replacementRange: replacementRange)
+        // Install the record before calling native code so a reentrant host
+        // callback cannot leave a newly rendered draft without an owner.
         composition = Composition(
             controller: controller, client: client, bundleID: bundleID, connection: connection,
             range: NSRange(location: start, length: (text as NSString).length), text: text
         )
+        nativeMarkInFlight = true
+        client.setMarkedText(payload, selectionRange: selection, replacementRange: replacementRange)
+        nativeMarkInFlight = false
+        let observedRange = client.markedRange()
+        guard session === policy, !policy.isRetired else {
+            // A native callback can retire the pass while its mark is on the
+            // stack. Keep that retirement sticky and complete owned cleanup.
+            if let current = composition, observedRange == current.range,
+               ProbeSessionOwnership.emptySelection(client.selectedRange()) {
+                _ = clearComposition(reason: "retired during mark", sessionAuthorized: true)
+            }
+            restoreKeyboardSource()
+            return "err unsafe session retired during mark"
+        }
+        if let current = composition {
+            composition = Composition(controller: current.controller, client: current.client,
+                                      bundleID: current.bundleID, connection: current.connection,
+                                      range: observedRange, text: text)
+        }
+        guard policy.didMark(observe(client, expected: composition), utf16Length: (text as NSString).length) else {
+            return "err unsafe mark readback changed"
+        }
         ProbeLog.write("mark len=\(text.count) styled=\(styled) connection=\(connection) client=\(describe(client))")
         return "ok marked \(text.count) styled=\(styled) client=\(describe(client))"
     }
@@ -286,6 +379,15 @@ final class EposProbeInputController: IMKInputController {
             controller = resolved
             client = resolvedClient
         }
+        guard let policy = session else { return "err unsafe preview session ended" }
+        if policy.requiresUnicodeFinal {
+            guard composition == nil, policy.canOperate(observe(client, expected: nil)), policy.finish() else {
+                return "err unsafe unreadable draft was not cancelled in its owned session"
+            }
+            // Finish before refusing the native insert. The app's authorized
+            // Unicode events then pass through without retiring mid-delivery.
+            return "err native commit unavailable for unreadable draft"
+        }
         let text = replacement ?? composition?.text ?? ""
         guard !text.isEmpty else { return "err nothing to commit" }
         if let current = composition, current.controller !== controller {
@@ -298,6 +400,7 @@ final class EposProbeInputController: IMKInputController {
         ) else {
             return "err unsafe selection or composition before commit"
         }
+        guard policy.finishNativeCommit() else { return "err unsafe session is not ready for final commit" }
         client.insertText(text, replacementRange: replacementRange)
         // insertText consumed the composition in this client; drop the record
         // without sending anything further.
@@ -358,24 +461,31 @@ final class EposProbeInputController: IMKInputController {
             && rect.size.height > 1
     }
 
-    /// Goes to the concrete owner and clears only a live range/text match.
-    /// Foreign or unreadable marked text is preserved and reported as unsafe.
+    /// Clears the concrete owner's draft. An acquired uninterrupted session
+    /// permits unreadable text only while its observed range still matches.
     static func cancel(connection: UInt64) -> String {
         guard lockedConnection == connection else { return "err preview pass is not owned by this connection" }
-        switch clearComposition(reason: "cancel") {
+        guard let policy = session, !policy.isRetired,
+              case .ready(_, let client) = lockedClient(connection: connection),
+              policy.canOperate(observe(client, expected: composition)) else {
+            return "err unsafe preview session before cancellation"
+        }
+        let hadDraft = composition != nil
+        switch clearComposition(reason: "cancel", sessionAuthorized: true) {
         case .nothingMarked:
             let client: IMKTextInput & NSObjectProtocol
             switch lockedClient(connection: connection) {
             case .refused(let reason): return "err unsafe \(reason)"
             case .ready(_, let resolved): client = resolved
             }
-            let reply = ProbePreviewSafety.cancellationReplyWithoutComposition(
-                selectedRange: client.selectedRange(),
-                compositionState: liveCompositionState(of: client, expected: nil)
-            )
+            let reply = policy.canOperate(observe(client, expected: nil))
+                ? "ok cancelled nothing marked" : "err unsafe composition before cancellation"
             ProbeLog.write("cancel without composition reply=\(reply)")
             return reply
         case .cleared(let unmarked, let viaOwner):
+            guard !policy.isRetired, !hadDraft || policy.didDiscard(observe(client, expected: nil)) else {
+                return "err unsafe cancellation readback changed"
+            }
             return "ok cancelled unmarkText=\(unmarked) viaOwner=\(viaOwner)"
         case .unreachable(let reason):
             return "err \(reason)"
@@ -385,7 +495,7 @@ final class EposProbeInputController: IMKInputController {
     // MARK: - Composition teardown
 
     @discardableResult
-    private static func clearComposition(reason: String) -> ClearOutcome {
+    private static func clearComposition(reason: String, sessionAuthorized: Bool = false) -> ClearOutcome {
         guard let current = composition else { return .nothingMarked }
         guard let target = compositionTarget(current) else {
             // A different session in the same app may address a different field.
@@ -399,10 +509,17 @@ final class EposProbeInputController: IMKInputController {
         case .absent:
             composition = nil
             return .unreachable("unsafe Epos preview ended before cancellation")
-        case .foreign, .unreadable:
+        case .unreadable:
+            guard sessionAuthorized, target.client.markedRange() == current.range,
+                  ProbeSessionOwnership.emptySelection(target.client.selectedRange()) else {
+                return .unreachable("unsafe composition no longer matches the Epos preview")
+            }
+        case .foreign:
             return .unreachable("unsafe composition no longer matches the Epos preview")
         }
         composition = nil
+        discarding = true
+        defer { discarding = false }
         // Zero-length marked text is the reliable discard on hosts whose
         // unmarkText commits the composition instead of dropping it.
         target.client.setMarkedText(
@@ -416,6 +533,47 @@ final class EposProbeInputController: IMKInputController {
                 + "viaOwner=\(target.isOwner) unmarkText=\(unmarked)"
         )
         return .cleared(unmarkText: unmarked, viaOwner: target.isOwner)
+    }
+
+    private static func interruptSession(_ reason: String, mayDiscard: Bool) {
+        guard !discarding, let policy = session, policy.state != .finished else { return }
+        let authorized = mayDiscard && composition.map { current in
+            guard let client = current.client else { return false }
+            let observation = observe(client, expected: current)
+            return policy.canOperate(observation) || (nativeMarkInFlight
+                && observation.marked == current.range
+                && ProbeSessionOwnership.emptySelection(observation.selection)
+                && (observation.composition == .owned || observation.composition == .unreadable))
+        } == true
+        policy.interrupt(reason) {
+            if authorized { clearComposition(reason: reason, sessionAuthorized: true) }
+        }
+        if !nativeMarkInFlight { restoreKeyboardSource() }
+    }
+
+    private static func observe(_ client: IMKTextInput & NSObjectProtocol, expected: Composition?) -> ProbeSessionOwnership.Observation {
+        let marked = client.markedRange()
+        return .init(selection: client.selectedRange(), marked: marked,
+                     composition: liveCompositionState(of: client, expected: expected, markedRange: marked))
+    }
+
+    private static func keyboardSource(identifier: String, layoutOnly: Bool = false) -> TISInputSource? {
+        let properties = [kTISPropertyInputSourceID as String: identifier,
+                          kTISPropertyInputSourceCategory as String: kTISCategoryKeyboardInputSource as String] as CFDictionary
+        guard let sources = TISCreateInputSourceList(properties, false)?.takeRetainedValue() as? [TISInputSource],
+              let source = sources.first else { return nil }
+        if layoutOnly {
+            guard let value = TISGetInputSourceProperty(source, kTISPropertyInputSourceType),
+                  CFEqual(Unmanaged<CFString>.fromOpaque(value).takeUnretainedValue(), kTISTypeKeyboardLayout) else { return nil }
+        }
+        return source
+    }
+
+    private static func restoreKeyboardSource() {
+        guard let saved = savedKeyboardSource else { return }
+        if !ProbeInputBarrier.eposIsSelected || TISSelectInputSource(saved) == noErr {
+            savedKeyboardSource = nil
+        } else { ProbeLog.write("saved keyboard source restoration failed") }
     }
 
     private enum ClearOutcome {

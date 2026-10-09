@@ -13,7 +13,7 @@ final class InlinePreviewDiscardTests: XCTestCase {
     func testFirstConclusiveMarkRefusalNeedsNoCancelAfterDiscardStarts() async {
         let commandSent = expectation(description: "mark awaiting its refusal")
         let transport = PendingCommandTransport(
-            command: "mark", sent: commandSent, reply: "err preview requires an empty selection"
+            command: "mark", sent: commandSent, reply: "err unmarked preview requires an empty selection"
         )
         let discardStarted = expectation(description: "preview left the marking phase")
         let preview = InlinePreviewSession(
@@ -30,13 +30,44 @@ final class InlinePreviewDiscardTests: XCTestCase {
         await discard.value
         let cancelCount = await transport.cancelCount
         let unsafeTarget = await preview.hasUnsafeTarget()
+        let report = await preview.report()
         XCTAssertEqual(cancelCount, 0, "initial selection refusal created no Epos mark")
         XCTAssertFalse(unsafeTarget, "the original selection remains eligible for guarded final replacement")
+        XCTAssertFalse(report.mayHaveRendered, "discard must retain the pending mark's conclusive refusal")
+    }
+
+    func testPendingPostWriteMarkErrorsAttemptCleanupAfterDiscardStarts() async {
+        for reply in ["err unsafe mark readback changed", "err unsafe session retired during mark"] {
+            let commandSent = expectation(description: "mark awaiting its post-write reply")
+            let transport = PendingCommandTransport(command: "mark", sent: commandSent, reply: reply)
+            let discardStarted = expectation(description: "preview left the marking phase")
+            let preview = InlinePreviewSession(
+                transport: transport, bundleIdentifier: "com.test.app",
+                onMarkingActivityChange: { if !$0 { discardStarted.fulfill() } }
+            )
+            await preview.begin()
+            await preview.mark("provisional text")
+            await fulfillment(of: [commandSent], timeout: 1)
+            let discard = Task { await preview.discard() }
+            await fulfillment(of: [discardStarted], timeout: 1)
+            await transport.releaseReply()
+            await discard.value
+
+            let cancelCount = await transport.cancelCount
+            let unsafeTarget = await preview.hasUnsafeTarget()
+            let report = await preview.report()
+            XCTAssertEqual(cancelCount, 1, reply)
+            XCTAssertTrue(unsafeTarget, reply)
+            XCTAssertTrue(report.mayHaveRendered, reply)
+        }
     }
 
     private func consumesPendingSafetyRefusal(command: String) async {
         let commandSent = expectation(description: "\(command) awaiting its reply")
-        let transport = PendingCommandTransport(command: command, sent: commandSent)
+        let transport = PendingCommandTransport(
+            command: command, sent: commandSent,
+            reply: command == "mark" ? "err unsafe unmarked composition" : "err unsafe composition"
+        )
         let preview = InlinePreviewSession(transport: transport, bundleIdentifier: "com.test.app")
         let begin = Task { await preview.begin() }
         if command == "mark" {

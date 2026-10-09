@@ -91,6 +91,36 @@ final class CoordinatorRecognizerFailureTests: XCTestCase {
         XCTAssertEqual(coordinator.state, .idle)
     }
 
+    func testRecognizerStreamEndingCleanlyWhileHeldWaitsForRelease() async throws {
+        let log = try TemporaryDiagnosticLog()
+        let coordinator = makeCoordinator(diagnostics: log.sink)
+
+        coordinator.startRecording()
+        let session = coordinator.transcriptionTask
+        await advance(until: { self.transcriber.didStart }, "the transcriber never started")
+
+        transcriber.emit(.final("the the build "))
+        transcriber.emit(.partial("uh is broken"))
+        transcriber.endStream()
+
+        await advance(
+            until: { !self.audio.isCapturing },
+            "the closed recognition stream did not stop capture"
+        )
+        XCTAssertEqual(coordinator.state, .recording, "stream completion cannot release the user's hold")
+        XCTAssertTrue(coordinator.recognitionUnavailable, "recognition stopped while the user was still holding")
+        XCTAssertEqual(backend.insertedTexts, [], "nothing may be typed before release")
+        XCTAssertEqual(coordinator.displayText, Self.recognizedClean)
+
+        fn.held = false
+        coordinator.finishRecording()
+        await session?.value
+        coordinator.finishRecording()
+
+        XCTAssertEqual(backend.insertedTexts, [Self.recognizedClean])
+        XCTAssertEqual(coordinator.state, .idle)
+    }
+
     /// The same failure after the key is already up must not park on a release that
     /// has already happened — and the "Recognition lost" notice belongs to the
     /// mid-hold case only, where the user is still speaking.

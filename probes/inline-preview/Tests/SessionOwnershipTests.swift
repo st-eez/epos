@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Foundation
 
 @main
@@ -70,6 +71,9 @@ enum SessionOwnershipTests {
 
     @MainActor
     static func main() {
+        productionInputBarrier()
+        deferredShortcutPreservesFinal()
+        productionAcquisition()
         uninterruptedLifecycle()
         for (name, key, code) in [("typing", "x", UInt16(7)), ("backspace", "\u{7f}", UInt16(51)),
                                  ("caret", String(UnicodeScalar(NSLeftArrowFunctionKey)!), UInt16(123))] {
@@ -86,7 +90,124 @@ enum SessionOwnershipTests {
         reentrantMarkCannotRevive()
         reentrantDiscardCannotRevive()
         finishedInsertionCannotRepeat()
-        print("session ownership prototype: 17 native lifecycle checks passed")
+        print("session ownership prototype: 20 native lifecycle checks passed")
+    }
+
+    private static func productionInputBarrier() {
+        var flags: CGEventFlags = [.maskSecondaryFn]
+        var heldKey: UInt16?
+        precondition(ProbeInputBarrier.ignoresInput(.flagsChanged, flags: [], previousFlags: &flags, heldKey: &heldKey),
+                     "fn release interrupted finalization")
+        flags = [.maskControl, .maskShift]
+        precondition(ProbeInputBarrier.ignoresInput(.flagsChanged, flags: [], previousFlags: &flags, heldKey: &heldKey),
+                     "custom modifier hold release interrupted finalization")
+        precondition(ProbeInputBarrier.ignoresInput(.keyUp, flags: [], previousFlags: &flags, heldKey: &heldKey),
+                     "custom key hold release interrupted finalization")
+        heldKey = 7
+        precondition(ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskControl], previousFlags: &flags,
+                                                   heldKey: &heldKey, keyCode: 7, isRepeat: true),
+                     "configured hold repeat retired the draft")
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskControl], previousFlags: &flags,
+                                                    heldKey: &heldKey, keyCode: 8, isRepeat: true),
+                     "another key's repeat bypassed retirement")
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskControl], previousFlags: &flags,
+                                                    heldKey: &heldKey, keyCode: 7, isRepeat: false),
+                     "fresh hold-key press bypassed retirement")
+        precondition(ProbeInputBarrier.ignoresInput(.keyUp, flags: [], previousFlags: &flags,
+                                                   heldKey: &heldKey, keyCode: 7) && heldKey == nil)
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [], previousFlags: &flags,
+                                                    heldKey: &heldKey, keyCode: 7, isRepeat: true),
+                     "released hold key retained its repeat exemption")
+        precondition(ProbeInputBarrier.holdKey(from: "hold-key=0") == 0)
+        precondition(ProbeInputBarrier.holdKey(from: "hold-key=127") == 127)
+        for token in ["hold-key=128", "hold-key=-1", "hold-key=65535", "hold-key=", "key=7"] {
+            precondition(ProbeInputBarrier.holdKey(from: token) == nil, "invalid hold key accepted")
+        }
+        let commandA = ProbeInputBarrier.holdShortcut(keyToken: "hold-key=0",
+                                                     flagsToken: "hold-flags=\(CGEventFlags.maskCommand.rawValue)")!
+        flags = [.maskCommand]
+        precondition(ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskCommand], previousFlags: &flags,
+                                                   heldKey: &heldKey, shortcut: commandA, keyCode: 0),
+                     "fresh matched shortcut retired the finalizing pass before the main tap")
+        precondition(heldKey == 0)
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [], previousFlags: &flags,
+                                                    heldKey: &heldKey, shortcut: commandA, keyCode: 0),
+                     "Unicode delivery inherited the physical Command modifier")
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskCommand, .maskShift], previousFlags: &flags,
+                                                    heldKey: &heldKey, shortcut: commandA, keyCode: 0),
+                     "a different shortcut bypassed retirement")
+        precondition(ProbeInputBarrier.ignoresInput(.keyDown, flags: [], previousFlags: &flags,
+                                                   heldKey: &heldKey, shortcut: commandA, keyCode: 0, isRepeat: true),
+                     "held shortcut repeat leaked when its modifiers were released")
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskCommand], previousFlags: &flags,
+                                                    heldKey: &heldKey, shortcut: commandA, keyCode: 7, isRepeat: true))
+        precondition(ProbeInputBarrier.ignoresInput(.keyUp, flags: [], previousFlags: &flags,
+                                                   heldKey: &heldKey, shortcut: commandA, keyCode: 0) && heldKey == nil)
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskCommand], previousFlags: &flags,
+                                                    heldKey: &heldKey, shortcut: commandA, keyCode: 0, isRepeat: true),
+                     "repeat reacquired the shortcut after keyUp")
+        let fnLeft = DictationShortcut(modifierFlags: CGEventFlags.maskSecondaryFn.rawValue, keyCode: 123)!
+        flags = []
+        precondition(!ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskSecondaryFn], previousFlags: &flags,
+                                                    heldKey: &heldKey, shortcut: fnLeft, keyCode: 123),
+                     "implicit navigation fn matched a physical fn shortcut")
+        flags = [.maskSecondaryFn]
+        precondition(ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskSecondaryFn], previousFlags: &flags,
+                                                   heldKey: &heldKey, shortcut: fnLeft, keyCode: 123))
+        for token in ["hold-flags=0", "hold-flags=\(CGEventFlags.maskAlphaShift.rawValue)",
+                      "hold-flags=18446744073709551616", "hold-flags=-1", "hold-flags=", "flags=1048576"] {
+            precondition(ProbeInputBarrier.holdShortcut(keyToken: "hold-key=0", flagsToken: token) == nil,
+                         "invalid shortcut modifiers accepted")
+        }
+        precondition(ProbeInputBarrier.holdShortcut(keyToken: "hold-key=63",
+                                                   flagsToken: "hold-flags=\(CGEventFlags.maskCommand.rawValue)") == nil)
+        for type: CGEventType in [.keyDown, .leftMouseDown, .leftMouseDragged, .scrollWheel] {
+            precondition(!ProbeInputBarrier.ignoresInput(type, flags: [], previousFlags: &flags, heldKey: &heldKey),
+                         "ordinary input bypassed synchronous retirement")
+        }
+    }
+
+    @MainActor
+    private static func deferredShortcutPreservesFinal() {
+        let fixture = Fixture()
+        precondition(fixture.mark("English draft") && fixture.cancel())
+        var flags: CGEventFlags = [.maskCommand]
+        var heldKey: UInt16?
+        let shortcut = DictationShortcut(modifierFlags: CGEventFlags.maskCommand.rawValue, keyCode: 0)!
+        if !ProbeInputBarrier.ignoresInput(.keyDown, flags: [.maskCommand], previousFlags: &flags,
+                                          heldKey: &heldKey, shortcut: shortcut, keyCode: 0) {
+            fixture.beforeInput("fresh shortcut") {}
+        }
+        precondition(fixture.final(), "deferred shortcut lost the previous finalized transcript")
+        precondition(fixture.view.string == "prefix English final suffix")
+    }
+
+    private static func productionAcquisition() {
+        let caret = NSRange(location: 0, length: 0)
+        let unknown = ProbeSessionOwnership.Observation(selection: caret, marked: unavailable, composition: .unreadable)
+        precondition(ProbeSessionOwnership(acquiredFromLayout: false, observation: unknown) == nil,
+                     "another keyboard method authorized an unknown composition")
+        let acquired = ProbeSessionOwnership(acquiredFromLayout: true, observation: unknown)!
+        precondition(acquired.canOperate(unknown), "exclusive acquisition from a layout was refused")
+        let foreign = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .foreign)
+        precondition(ProbeSessionOwnership(acquiredFromLayout: true, observation: foreign) == nil,
+                     "keyboard acquisition replaced a known foreign composition")
+        let malformed = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: NSNotFound), composition: .unreadable)
+        precondition(ProbeSessionOwnership(acquiredFromLayout: true, observation: malformed) == nil,
+                     "acquisition accepted arbitrary unreadable marked metadata")
+        let marked = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .unreadable)
+        precondition(acquired.didMark(marked, utf16Length: 5))
+        precondition(acquired.requiresUnicodeFinal && !acquired.finishNativeCommit(),
+                     "unreadable draft was eligible for native final insertion")
+        precondition(acquired.didDiscard(unknown))
+        precondition(acquired.requiresUnicodeFinal && !acquired.finishNativeCommit(),
+                     "cancellation erased unreadable draft delivery policy")
+        let absent = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 0), composition: .absent)
+        let readable = ProbeSessionOwnership(acquiredFromLayout: false, observation: absent)!
+        let owned = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .owned)
+        precondition(readable.didMark(owned, utf16Length: 5) && !readable.requiresUnicodeFinal)
+        precondition(readable.didDiscard(absent) && readable.finishNativeCommit())
+        precondition(!readable.finishNativeCommit(), "native commit repeated its final insertion")
     }
 
     @MainActor

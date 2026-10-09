@@ -6,7 +6,7 @@ set -euo pipefail
 probe_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 driver="$probe_dir/.build/epos-probe-stream"
 
-if [[ ! -x "$driver" ]]; then
+if [[ ! -x "$driver" || "$probe_dir/Driver/main.swift" -nt "$driver" || "$probe_dir/Sources/ProbeSupport.swift" -nt "$driver" ]]; then
   echo "building driver..." >&2
   mkdir -p "$probe_dir/.build"
   /usr/bin/xcrun swiftc \

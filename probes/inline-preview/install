@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build, sign, install and LIVE-register the throwaway palette input method.
+# Build, sign, install and LIVE-register the companion keyboard input method.
 # Exit 0 = registered live. Exit 1 = logout/login required, then rerun --verify-only.
 set -euo pipefail
 
@@ -52,6 +52,9 @@ if [[ "$verify_only" == false ]]; then
     "$probe_dir/Sources/main.swift" \
     "$probe_dir/Sources/ProbeSupport.swift" \
     "$probe_dir/Sources/ProbePreviewSafety.swift" \
+    "$probe_dir/Sources/ProbeSessionOwnership.swift" \
+    "$probe_dir/Sources/ProbeInputBarrier.swift" \
+    "$probe_dir/../../Sources/Epos/Hotkey/DictationShortcut.swift" \
     "$probe_dir/Sources/ProbeInputController.swift" \
     "$probe_dir/Sources/ProbeCommandSocket.swift"
 

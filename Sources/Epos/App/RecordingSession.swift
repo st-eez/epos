@@ -31,6 +31,8 @@ final class RecordingSession {
     private let evidenceRecorder: CorrectionEvidenceRecorder
     private let isShortcutHeld: @MainActor () -> Bool
     private let isMicrophoneAccessMissing: @MainActor () -> Bool
+    private let previewKeyboardSourceFactory: @MainActor () -> PreviewKeyboardSource?
+    private let previewTransportFactory: @MainActor () -> any InlinePreviewTransport
     private let onEvent: @MainActor (RecordingSession, Event) -> Void
     private let log: EposLogger
     private let injectLog: EposLogger
@@ -52,6 +54,8 @@ final class RecordingSession {
         isEnabled: { [weak self] in self?.settings.inlinePreview ?? false },
         log: injectLog,
         latency: latency,
+        keyboardSourceFactory: previewKeyboardSourceFactory,
+        transportFactory: previewTransportFactory,
         onMarkingActivityChange: { [weak self] active in
             guard let self, self.phase != .finished else { return }
             self.previewMirroring = active
@@ -78,6 +82,10 @@ final class RecordingSession {
         isShortcutHeld: @escaping @MainActor () -> Bool,
         isMicrophoneAccessMissing: @escaping @MainActor () -> Bool,
         includeTranscriptText: Bool,
+        previewKeyboardSourceFactory: @escaping @MainActor () -> PreviewKeyboardSource? = { PreviewKeyboardSource() },
+        previewTransportFactory: @escaping @MainActor () -> any InlinePreviewTransport = {
+            UnixSocketInlinePreviewTransport()
+        },
         latencyNow: @escaping @Sendable () -> ContinuousClock.Instant = { ContinuousClock().now },
         onEvent: @escaping @MainActor (RecordingSession, Event) -> Void
     ) {
@@ -95,6 +103,8 @@ final class RecordingSession {
         self.evidenceRecorder = evidenceRecorder
         self.isShortcutHeld = isShortcutHeld
         self.isMicrophoneAccessMissing = isMicrophoneAccessMissing
+        self.previewKeyboardSourceFactory = previewKeyboardSourceFactory
+        self.previewTransportFactory = previewTransportFactory
         self.onEvent = onEvent
         self.log = EposLogger(category: "coordinator", diagnostics: diagnostics)
         self.injectLog = EposLogger(category: "inject", diagnostics: diagnostics)
@@ -157,9 +167,13 @@ final class RecordingSession {
             latency: latency
         )
         latency?.end(.targetBaseline)
+        let capturedInsertion = textInsertionSession
         preview.start(
             bundleIdentifier: textInsertionSession?.targetApplicationBundleIdentifier(),
-            selectedRange: textInsertionSession?.baselineSelectedRange
+            selectedRange: textInsertionSession?.baselineSelectedRange,
+            holdKeyCode: settings.dictationShortcut.keyCode,
+            holdModifierFlags: settings.dictationShortcut.modifierFlags,
+            validateTarget: { capturedInsertion?.targetIsUnchanged() ?? false }
         )
         transcriptTiming.start()
         task = Task { await run() }
@@ -237,8 +251,8 @@ final class RecordingSession {
         latency?.end(.recognizerFinalization, outcome: completion)
         stopMicrophone()
         promotePartialTranscriptAsFallbackFinalIfNeeded()
-        if recognizerFailed, phase == .held, isShortcutHeld() {
-            log.error("recognizer failed while the shortcut was held; holding the transcript until release")
+        if phase == .held, isShortcutHeld() {
+            log.error("recognizer stopped while the shortcut was held; holding the transcript until release")
             onEvent(self, .recognitionFailedWhileHeld)
             await withCheckedContinuation { releaseWaiter = $0 }
         }
@@ -443,6 +457,11 @@ final class RecordingSession {
             latency?.begin(.baselineSettle)
             let polledBaseline = await textInsertionSession?.settleReadableBaseline()
             latency?.end(.baselineSettle, outcome: polledBaseline == true ? .completed : .unavailable)
+            if polledBaseline != true {
+                latency?.begin(.compositionSettle)
+                try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay)
+                latency?.end(.compositionSettle)
+            }
         }
         return .completed(insertFinalTranscriptResult(transcript), viaIME: false)
     }

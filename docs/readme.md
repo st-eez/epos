@@ -30,7 +30,7 @@ Search terms include common user wording and implementation names.
 | Ignore speaker audio | echo cancellation, music bleed, background playback | [Dictation](dictation.md#ignore-speaker-audio) |
 | On-device recognition, locale, vocabulary context | local transcription, offline speech, custom vocabulary | [Dictation](dictation.md#audio-and-recognition) |
 | Final cleanup of fillers, stutters, and ordinals | filler removal, um and uh, repeated words | [Dictation](dictation.md#transcript-cleanup) |
-| Stream into field, marked text, companion input method | live preview, inline dictation, provisional text | [Insertion](insertion.md#stream-into-field) |
+| Stream into field, marked text, temporary keyboard source | live preview, inline dictation, provisional text, source restoration | [Insertion](insertion.md#stream-into-field) |
 | Captured target guard, final IME commit, Unicode keystrokes | paste, text injection, focus protection | [Insertion](insertion.md#final-delivery) |
 | Terminal delivery, preview evidence and limitations | Ghostty, Claude CLI, terminal dictation | [Terminal input](insertion.md#terminal-input) |
 | Experimental session ownership and background draft rendering | Ghostty prototype, session lifecycle, typing interruption, hidden workspace | [Session ownership prototype](../specs/preview-session-prototype.md) |

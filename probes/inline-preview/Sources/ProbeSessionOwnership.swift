@@ -1,7 +1,7 @@
 import Foundation
 
-/// Experimental policy. The caller supplies the event barrier and a controlled
-/// empty fixture. Neither a saved client nor an empty selection proves absence.
+/// Owns one uninterrupted native input session. The caller supplies acquisition
+/// and the synchronous event barrier; client identity alone is insufficient.
 final class ProbeSessionOwnership {
     enum State: Equatable {
         case ready
@@ -20,10 +20,19 @@ final class ProbeSessionOwnership {
     private var expectedSelection: NSRange
     private let baselineSelection: NSRange
     private let unavailable = NSRange(location: NSNotFound, length: NSNotFound)
+    private let permitsUnavailableBaseline: Bool
+    private(set) var requiresUnicodeFinal = false
 
-    init?(controlledEmptyFixture: Bool, observation: Observation) {
-        guard controlledEmptyFixture, Self.emptySelection(observation.selection),
-              observation.composition == .absent || observation.marked == unavailable else { return nil }
+    convenience init?(controlledEmptyFixture: Bool, observation: Observation) {
+        guard controlledEmptyFixture else { return nil }
+        self.init(acquiredFromLayout: true, observation: observation)
+    }
+
+    init?(acquiredFromLayout: Bool, observation: Observation) {
+        permitsUnavailableBaseline = acquiredFromLayout
+        guard Self.emptySelection(observation.selection),
+              observation.composition == .absent || (acquiredFromLayout
+                && observation.composition == .unreadable && observation.marked == unavailable) else { return nil }
         expectedSelection = observation.selection
         baselineSelection = observation.selection
     }
@@ -34,7 +43,8 @@ final class ProbeSessionOwnership {
         guard observation.selection == expectedSelection, Self.emptySelection(observation.selection) else { return false }
         switch state {
         case .ready:
-            return observation.composition == .absent || observation.marked == unavailable
+            return observation.composition == .absent || (permitsUnavailableBaseline
+                && observation.composition == .unreadable && observation.marked == unavailable)
         case .draft(let range):
             return observation.marked == range
                 && (observation.composition == .owned || observation.composition == .unreadable)
@@ -59,6 +69,7 @@ final class ProbeSessionOwnership {
             retire("mark-moved")
             return false
         }
+        requiresUnicodeFinal = requiresUnicodeFinal || observation.composition == .unreadable
         expectedSelection = observation.selection
         state = .draft(observation.marked)
         return true
@@ -69,7 +80,8 @@ final class ProbeSessionOwnership {
     @discardableResult
     func didDiscard(_ observation: Observation) -> Bool {
         guard isDraft, observation.selection == baselineSelection,
-              observation.composition == .absent || observation.marked == unavailable else {
+              observation.composition == .absent || (permitsUnavailableBaseline
+                && observation.composition == .unreadable && observation.marked == unavailable) else {
             retire("discard-readback")
             return false
         }
@@ -90,6 +102,14 @@ final class ProbeSessionOwnership {
 
     func finish() -> Bool {
         guard permitsFinal else { return false }
+        state = .finished
+        return true
+    }
+
+    /// Production native commits require readable draft evidence. A direct
+    /// legacy commit can consume an owned draft without the cancel handshake.
+    func finishNativeCommit() -> Bool {
+        guard !requiresUnicodeFinal, state == .ready || isDraft else { return false }
         state = .finished
         return true
     }

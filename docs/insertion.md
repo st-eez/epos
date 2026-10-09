@@ -7,11 +7,14 @@ keystrokes.
 
 ## Stream into field
 
-Stream into field defaults on. A companion palette InputMethodKit bundle in
+Stream into field defaults on. A companion keyboard InputMethodKit bundle in
 `~/Library/Input Methods/EposProbe.app` receives preview commands over a per-user
 Unix socket. It renders the same cleaned provisional transcript as marked text
 in the captured application's field. Updates are coalesced to at most one per
-100 ms. The normal keyboard layout remains the user's layout.
+100 ms. Epos borrows this input source for the hold, preserves the underlying
+keyboard mapping, and restores the prior source after teardown. A source you
+choose during dictation is retained. Selecting Epos alone does not start preview:
+the companion must acknowledge an activated client in the captured application.
 
 Each update supplies the complete current provisional transcript to
 `setMarkedText`, replacing Epos's owned preview span. Existing text around that
@@ -34,15 +37,19 @@ failed channel restores the recording pill and its transcript for that hold.
 The menu toggle can disable inline preview.
 
 Preview is skipped when the captured target has selected text. Before every mark,
-the companion also requires a readable empty selection and checks composition
-ownership against the recorded marked range and text. Unknown selections and
+the companion also requires a readable empty selection and checks the observed
+marked range. During an uninterrupted acquired session, unavailable draft text
+does not block updates or cancellation. Readable text that differs from the draft
+still refuses the operation. Unknown selections and
 ambiguous sets of client sessions use the HUD.
 This prevents cancellation from deleting a selection that marked text replaced.
 
 Each pass pins its concrete input client and command connection. Superseded
 commands cannot mutate a newer pass, and cleanup addresses only the recorded
-client. A stale record cannot authorize changing another input method's live
-mark. An unreachable owner is refused instead of redirecting cleanup into a
+client. Ordinary keyboard and mouse input retire the session and discard its
+owned draft synchronously before the event reaches the host. Source changes,
+focus loss, host callbacks, and connection loss also retire ownership. The pass
+cannot restart after retirement. An unreachable owner is refused instead of redirecting cleanup into a
 different field in the same application. Provisional text is discarded before
 either final delivery path authorizes a write. Marked text still requires
 verification in each target app because rendering and teardown are host dependent.
@@ -55,9 +62,14 @@ selection. Opaque targets use process, window, and focus signature evidence. An 
 target refuses delivery. Epos does not restore focus or undo the user's edits.
 
 A healthy preview channel that acknowledged at least one mark can receive the
-final transcript through a single IME `insertText`. Epos first cancels the marked
+final transcript through a single IME `insertText` when native draft readback is
+available. An unreadable native draft uses guarded Unicode events after
+acknowledged cancellation. Epos first cancels the marked
 composition, waits for the readable baseline to settle, and runs the same target
 guard as the keystroke path. Text containing a newline uses the keystroke path.
+Release waits for an outstanding preview reply, without waiting for the preview
+throttle interval. Baseline settlement happens once before final authorization;
+a conclusively refused first mark requires no settlement.
 
 A foreign composition or a changed selection detected after preview blocks both
 final delivery paths and shows `Not inserted`. Unconfirmed preview cleanup also
@@ -89,58 +101,36 @@ window, and focused surface checks still apply. Its native search and rename
 fields keep exact value, caret, and selection checks, as do unconfirmed surfaces
 and other applications.
 
-Inline preview still requires a readable empty selection and provable composition
-ownership through the companion. A first refused mark uses the overlay and
-guarded final delivery.
+The October 9 implementation acquires Epos as an exclusive keyboard input method
+before streaming. Ghostty's legacy IMK wrapper can hide an absent composition and
+cannot return the draft string. Epos now uses its uninterrupted input session and
+the observed draft range for ownership, while preserving readable selection and
+client checks. A synchronous event barrier covers Ghostty's mouse input, which
+does not pass through the input-method callbacks.
 
-On October 2, the live IMK client for installed Ghostty revision `33da6848d`
-reported selection `{0, 0}` and marked range `{NSNotFound, NSNotFound}`. The
-marked range is unavailable, so Epos cannot prove composition ownership in that
-build and keeps preview in the overlay. Ghostty's direct `NSTextInputClient`
-implementation does not establish what its legacy IMK wrapper exposes. The
-terminal screen fix permits guarded final delivery without waiving preview
-safety. Steve confirmed final delivery into Ghostty's Claude Code prompt with the
-installed Release build, while preview remained in the overlay.
+Acquisition from a keyboard layout can accept unavailable initial marked
+metadata after actual Epos activation. Acquisition from another keyboard input
+method requires positively absent composition metadata. Known foreign marks
+always refuse. Missing activation, an unavailable event barrier, or uncertain
+cleanup uses the HUD or refuses delivery as appropriate. This does not turn an
+unavailable range into proof of absence.
 
-An isolated native test on October 2 reproduced the legacy wrapper's unavailable
-marked range with both active foreign marked text and a cleared composition. A
-view matching Ghostty's separate preedit storage reported a concrete marked
-range directly, while its IMK wrapper returned the unavailable range. An empty
-selection therefore cannot establish that it is safe to begin or clear a mark.
-The companion safety checks cover this refusal. The fixture does not certify
-rendering or cancellation in Ghostty itself.
+Ghostty's native asynchronous `insertText` can acknowledge a call without
+producing terminal bytes. An unreadable draft therefore finishes with the
+existing guarded Unicode backend after the companion cancels its preedit.
+No Ghostty patch, clipboard, corrective backspaces, or external service is used.
 
-The July 31 feasibility record describes successful inline preview in
-cmux/Ghostty, and retained companion logs contain accepted Ghostty mark calls.
-That implementation sent marks without the current selection and live ownership
-checks. The current preview path requires the bridge to expose composition
-absence and exact live ownership. The selection guard independently prevents the
-native selected-text deletion reproduced in the audit. Relaxing unavailable
-ownership metadata while retaining that guard does not remove selection protection.
+The redesign is authored and under verification. Direct Ghostty streaming,
+revised drafts, zero-byte cancellation, one final payload, interruption, and
+keyboard-source restoration need an installed app check before replacement
+readiness can be claimed. Concurrent additive input methods remain a limit.
 
-An October 2 native English comparison relaxed only the unavailable marked-range
-state, retaining the readable empty selection requirement. It used real
-`NSTextView` writes with simulated bridge readback. A deliberately staged
-different English mark was overwritten and discarded. Ordinary typing and
-Backspace ended the original draft; a later update, cancellation, and final
-insertion left old draft text beside the final transcript. These checks excluded
-the companion's host callbacks and do not establish the same behavior in Ghostty.
-
-A bounded live Ghostty probe then allowed only the unavailable marked-range state
-in a disposable English prompt. The first underlined draft rendered directly in
-the terminal and delivered zero input bytes. After that mark, the IMK wrapper
-reported a concrete range `{0, 16}`, but its text readback remained unreadable.
-The same narrow relaxation refused the next update and cancellation; the first
-draft remained visible after restoring the original companion. Cua Escape later
-removed it without delivering input bytes. This verifies initial rendering and
-that explicit Escape action.
-
-A further scratch policy permits unreadable content only when the concrete range
-matches the recorded Epos range and pinned client. Its live retries sent zero
-marks: one had no newly activated IMK client, and the next stopped during Cua
-focus setup before creating a fresh terminal tab. Continued streaming, companion
-cleanup, final commit, and English typing interruption remain unverified in the
-current Ghostty build.
+Earlier observations are retained in the [feasibility record](../specs/inline-preview-feasibility.md)
+and [session prototype](../specs/preview-session-prototype.md). July 31 dogfood
+used fewer ownership checks. October 2 rendered one underlined Ghostty draft
+with zero input bytes, then refused its unreadable content. October 8 background
+probes stopped at client acquisition and sent no marks; they did not establish
+Ghostty's rendering limits.
 
 ## Session ownership prototype
 
@@ -158,8 +148,9 @@ can return to an unavailable marked range, so its acknowledgement establishes
 the ordered native discard operation only. Native lifecycle checks exercise real
 `NSTextView` updates, discards and English key events with simulated wrapper
 readback. Actual Ghostty updates, cancellation, event coverage and final delivery
-require a separate Cua run with terminal byte evidence. Normal companion commands
-retain their exact range and text ownership checks.
+require a separate Cua run with terminal byte evidence. The October 9 production redesign replaces exact unreadable-text readback with
+exclusive source acquisition and uninterrupted ownership; the experimental
+fixture gates are not used by normal dictation.
 
 The separate background rendering test keeps the agent workspace hidden. It
 uses one fresh client, the disposable prompt's nonce and exclusive caret geometry
@@ -223,6 +214,7 @@ Implementation lives in
 [InsertionTargetGuard](../Sources/Epos/Inject/InsertionTargetGuard.swift),
 [FinalTranscriptCommitRouter](../Sources/Epos/Inject/FinalTranscriptCommitRouter.swift),
 [InlinePreviewSession](../Sources/Epos/Inject/InlinePreviewSession.swift),
+[PreviewKeyboardSource](../Sources/Epos/Inject/PreviewKeyboardSource.swift),
 [InlinePreviewTransport](../Sources/Epos/Inject/InlinePreviewTransport.swift), and
 [TextInsertionBackend](../Sources/Epos/Inject/TextInsertionBackend.swift).
 [ElectronAccessibilityWaker](../Sources/Epos/Inject/ElectronAccessibilityWaker.swift)
@@ -232,6 +224,10 @@ Tests cover [target guards](../Tests/EposTests/InsertionTargetGuardTests.swift),
 [focus signatures](../Tests/EposTests/InsertionTargetFocusSignatureTests.swift),
 [Ghostty terminal delivery](../Tests/EposTests/GhosttyInsertionTargetTests.swift),
 [preview lifecycle](../Tests/EposTests/InlinePreviewSessionTests.swift),
+[native activation ordering](../Tests/EposTests/InlinePreviewAcquisitionTests.swift),
+[keyboard-source restoration](../Tests/EposTests/PreviewKeyboardSourceTests.swift),
+[release without throttle delay](../Tests/EposTests/InlinePreviewFinalCancellationTests.swift),
+[single baseline settlement](../Tests/EposTests/InlinePreviewSettlementTests.swift),
 [empty preview updates](../Tests/EposTests/InlinePreviewEmptyTests.swift),
 [preview callback isolation](../Tests/EposTests/InlinePreviewCoordinatorTests.swift),
 [final preview safety](../Tests/EposTests/InlinePreviewFinalSafetyTests.swift),

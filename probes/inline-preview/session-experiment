@@ -130,7 +130,8 @@ def prepare():
     sdk = run("/usr/bin/xcrun", "--sdk", "macosx", "--show-sdk-path").decode().strip()
     run("/usr/bin/xcrun", "swiftc", "-sdk", sdk, "-target", "arm64-apple-macos26.0", "-O",
         "-warnings-as-errors", "-D", "EPOS_SESSION_PROTOTYPE", "-module-cache-path", directory / "ModuleCache",
-        "-o", staged / "Contents/MacOS/EposProbe", *sorted((PROBE / "Sources").glob("*.swift")))
+        "-o", staged / "Contents/MacOS/EposProbe", *sorted((PROBE / "Sources").glob("*.swift")),
+        PROBE.parent.parent / "Sources/Epos/Hotkey/DictationShortcut.swift")
     run("/usr/bin/xcrun", "swiftc", "-sdk", sdk, "-target", "arm64-apple-macos26.0", "-O",
         "-warnings-as-errors", "-module-cache-path", directory / "ModuleCache", "-o", directory / "SourceMetadata",
         PROBE / "Tools/session-metadata.swift")

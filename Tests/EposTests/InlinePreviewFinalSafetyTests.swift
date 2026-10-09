@@ -17,7 +17,7 @@ final class InlinePreviewFinalSafetyTests: XCTestCase {
 
     func testUnsafeMarkRefusalBlocksOrdinaryKeystrokeDelivery() async {
         await refusesUnsafeFinalTarget(
-            transport: FakeInlinePreviewTransport(markReply: "err unsafe composition"),
+            transport: FakeInlinePreviewTransport(markReply: "err unsafe unmarked composition"),
             transcript: "Hello there.",
             expectedFailure: "unsafeTarget"
         )
@@ -61,13 +61,13 @@ final class InlinePreviewFinalSafetyTests: XCTestCase {
 
     func testGenericRefusalAfterAcceptedPreviewBlocksFinalDelivery() async {
         await refusesUnsafeFinalTarget(
-            transport: FakeInlinePreviewTransport(markReplyAfterFirst: "err preview requires an empty selection"),
+            transport: FakeInlinePreviewTransport(markReplyAfterFirst: "err unmarked preview requires an empty selection"),
             transcript: "Hello there.", laterMark: "hello there again"
         )
     }
 
     func testFirstConclusiveMarkRefusalPreservesGuardedFinalDelivery() async {
-        let transport = FakeInlinePreviewTransport(markReply: "err preview requires an empty selection")
+        let transport = FakeInlinePreviewTransport(markReply: "err unmarked preview requires an empty selection")
         let backend = RecordingInsertionBackend()
         let coordinator = AppCoordinator(
             textInsertion: backend, settings: Settings(), inlinePreviewEnabled: true, autoStart: false
@@ -88,6 +88,17 @@ final class InlinePreviewFinalSafetyTests: XCTestCase {
         XCTAssertEqual(backend.inserted, ["Hello there."])
         let lines = await transport.lines
         XCTAssertFalse(lines.contains("cancel"), "no Epos mark exists to cancel")
+    }
+
+    func testPostWriteMarkErrorsAttemptOwnedCleanupAndBlockFinalDelivery() async {
+        for reply in ["err unsafe mark readback changed", "err unsafe session retired during mark"] {
+            let transport = FakeInlinePreviewTransport(markReply: reply)
+            await refusesUnsafeFinalTarget(
+                transport: transport, transcript: "Hello there.", expectedFailure: "unsafeTarget"
+            )
+            let lines = await transport.lines
+            XCTAssertEqual(lines.filter { $0 == "cancel" }, ["cancel"], reply)
+        }
     }
 
     private func refusesUnsafeFinalTarget(

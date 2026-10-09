@@ -76,7 +76,7 @@ new_app_placed=true
 codesign --verify --deep --strict "$install_app_path"
 installation_verified=true
 
-# The inline preview streams into the field through the companion palette input
+# The inline preview streams into the field through the companion keyboard input
 # method; keep it in lockstep with the app. A registration that needs a logout
 # (first install on a machine) must not fail the app install — Epos degrades to
 # the pill HUD until the input method is live.

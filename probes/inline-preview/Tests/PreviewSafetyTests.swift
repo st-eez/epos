@@ -19,7 +19,17 @@ enum PreviewSafetyTests {
         refusesUnreadableSelection()
         refusesUnreadableCompositionWithEmptySelection()
         refusesSupersededCommands()
-        print("inline preview safety: 12 checks passed")
+        provesUnmarkedRefusalsWithoutLosingUnsafeClassification()
+        print("inline preview safety: 13 checks passed")
+    }
+
+    private static func provesUnmarkedRefusalsWithoutLosingUnsafeClassification() {
+        precondition(ProbePreviewSafety.unmarkedRefusal("preview requires an empty selection")
+                     == "err unmarked preview requires an empty selection")
+        precondition(ProbePreviewSafety.unmarkedRefusal("composition before preview", unsafe: true)
+                     == "err unsafe unmarked composition before preview")
+        precondition(ProbePreviewSafety.unmarkedRefusal("unsafe composition owner is gone")
+                     == "err unsafe unmarked composition owner is gone")
     }
 
     @MainActor

@@ -12,7 +12,7 @@ final class GhosttyInsertionTargetTests: XCTestCase {
         XCTAssertNil(insertion.baselineSelectedRange)
         XCTAssertFalse(observer.requiresTextContextValidation())
 
-        let transport = FakeInlinePreviewTransport(markReply: "err preview requires an empty selection")
+        let transport = FakeInlinePreviewTransport(markReply: "err unmarked preview requires an empty selection")
         let preview = await makePreview(transport: transport)
         observer.value = "terminal screen frame two"
         observer.range = .init(location: 0, length: 0)
@@ -143,7 +143,7 @@ final class GhosttyInsertionTargetTests: XCTestCase {
 
     func testTerminalContextPolicyKeepsForeignAndUnknownPreviewRefusals() async {
         for transport in [
-            FakeInlinePreviewTransport(markReply: "err unsafe composition"),
+            FakeInlinePreviewTransport(markReply: "err unsafe unmarked composition"),
             FakeInlinePreviewTransport(markError: .replyTimedOut),
             FakeInlinePreviewTransport(markError: .replyMalformed),
         ] {

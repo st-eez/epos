@@ -1,10 +1,11 @@
-# Inline preview companion (palette input method)
+# Inline preview companion (keyboard input method)
 
-The palette-type InputMethodKit bundle that renders Epos's inline preview:
+The keyboard InputMethodKit bundle that renders Epos's inline preview:
 `InlinePreviewSession` streams volatile text to it over a Unix socket and it
 draws the marked text in the focused field. Started as the falsifying probe for
 `specs/inline-preview-feasibility.md`; the probe passed (2026-07-31) and this
-is now a product component, built and installed in lockstep with the app by
+became a product component. The October 9 exclusive-session redesign is under
+installed verification. It is built and installed in lockstep with the app by
 `scripts/install-signed-app.sh` (which calls `install` below).
 
 It stays outside `Package.swift` and the root `project.yml` on purpose — input
@@ -22,10 +23,12 @@ costs a logout).
 | `Sources/ProbeCommandSocket.swift` | AF_UNIX line protocol: `ping status begin end mark markplain commit cancel quit` |
 | `Sources/ProbeSupport.swift` | Socket path (`confstr(_CS_DARWIN_USER_TEMP_DIR)`) and log path |
 | `Sources/ProbePreviewSafety.swift` | Selection/composition checks and connection ownership |
+| `Sources/ProbeSessionOwnership.swift` | Uninterrupted draft lifecycle and retirement |
+| `Sources/ProbeInputBarrier.swift` | Synchronous keyboard/mouse interception and source/focus retirement |
 | `verify` / `Tests/PreviewSafetyTests.swift` | Full companion compilation and native safety checks |
 | `Driver/main.swift` | `run-stream` driver: TIS enable/select, streams words, commits or cancels |
 | `Tools/tisctl.swift` | TIS query/register helper used by `install` / `uninstall` |
-| `Info.plist` | `InputMethodType = palette`, `ComponentInvisibleInSystemUI = true` |
+| `Info.plist` | `InputMethodType = keyboard` |
 | `install` / `uninstall` / `run-stream` | Operator commands |
 
 Log: `~/Library/Caches/EposProbe/probe.log` — records every `activateServer`,
@@ -41,15 +44,16 @@ client currently holds marked text* as its own record — bundle id, owning sess
 and the command connection that put it there — separately from the per-pass focus
 lock. Each pass pins a concrete client and command connection. A nonempty or
 unreadable selection refuses marked text, including updates after a host changed
-its selection. Ambiguous client sets also refuse the pass. The recorded client,
-document range, and exact text must match the live marked composition before an
-update or cancellation. The companion reads the live span through
+its selection. Ambiguous client sets also refuse the pass. Actual keyboard-source activation acquires an uninterrupted input session.
+The recorded client and observed draft range must match before an update or
+cancellation. Readable text remains an additional veto; unreadable draft content
+is allowed while the session is uninterrupted. The companion reads the live span through
 `IMKTextInput.markedRange` and `attributedSubstringFromRange`, as declared in the
 active SDK's `IMKInputSession.h`.
 
 - **`cancel`** uses the captured concrete client and clears only the live Epos
-  range and text. It preserves foreign or unreadable compositions and reports
-  an unsafe refusal. If the host already ended Epos's mark, it drops the stale
+  range. It preserves foreign compositions and reports unsafe ownership.
+  Unreadable draft text is allowed only within the acquired uninterrupted pass. If the host already ended Epos's mark, it drops the stale
   record without writing and also reports an unsafe refusal. Another session
   from the same bundle cannot substitute for the captured client.
 - **Losing the command connection** is a teardown, not a pause. The peer that
@@ -67,7 +71,9 @@ active SDK's `IMKInputSession.h`.
 the final write, including keystroke fallback. A confirmed foreign composition
 refuses delivery even on the first preview attempt. Initial nonempty or unreadable
 selections without an Epos composition degrade to the HUD and retain guarded
-final delivery. `end` only releases the lock and never touches text.
+final delivery. `end` releases the lock and restores the saved keyboard source only while Epos
+still owns the selection. A user-chosen source is preserved. Disconnect and
+retirement also restore the source after owned cleanup.
 
 Exactly one client is legitimate, so **a new connection supersedes the current
 one**: the previous peer is shut down (which runs its teardown) and each
@@ -100,9 +106,11 @@ in). **On this machine live registration worked — no logout was needed.**
 
 ## Per-target test recipe
 
-The palette source is additive: selecting it does not change your keyboard
-layout (verified — `TISSelectInputSource` succeeds and the current keyboard
-source stays `com.apple.keylayout.ABC`).
+The driver borrows the keyboard source and restores the saved one on completion
+or failure. It does not enable a disabled source or bypass macOS consent.
+Use a disposable field; stop Epos before opening a second socket. The companion
+requires Accessibility for its synchronous input barrier. `--no-select` leaves
+the source unchanged and uses the legacy, stricter acquisition command.
 
 1. Open the target app and click into the field you want to test. Leave a known
    sentinel string in it so you can prove the cancel pass changed nothing.
@@ -115,7 +123,10 @@ source stays `com.apple.keylayout.ABC`).
    `--target` is a hard guard: the pass refuses to write anywhere else. Use
    `--focus-delay 5` if you need time to click back into the field, and
    `--hold N` to freeze the marked text for N seconds so you can look at it.
-   Pass 1 streams four words then commits; pass 2 streams then cancels.
+   Pass 1 streams four words then attempts a native commit; pass 2 streams then
+   cancels. Unreadable drafts deliberately refuse native commit. Use
+   `--cancel-only` to check draft replacement and zero-byte cancellation there;
+   final Unicode delivery must be checked through the installed Epos app.
    `--commit-only` / `--cancel-only` run one pass. `--plain` sends an unstyled
    string instead of the underlined attributed run.
 3. For the held-fn condition, hold fn while the marked text is on screen
