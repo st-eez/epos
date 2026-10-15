@@ -23,6 +23,7 @@ enum ProbePreviewSafety {
     static func compositionState(
         markedRange: NSRange,
         expected: (range: NSRange, text: String)?,
+        textBeforeMark: String? = nil,
         readText: (NSRange) -> String?
     ) -> CompositionState {
         guard markedRange.location >= 0, markedRange.length >= 0,
@@ -32,9 +33,12 @@ enum ProbePreviewSafety {
         guard let expected else { return .foreign }
         guard let text = readText(markedRange),
               (text as NSString).length == markedRange.length else { return .unreadable }
-        guard expected.range == markedRange,
-              (expected.text as NSString).isEqual(to: text) else { return .foreign }
-        return .owned
+        guard expected.range == markedRange else { return .foreign }
+        if (expected.text as NSString).isEqual(to: text) { return .owned }
+        // Chromium updates markedRange before its surrounding-text cache. An
+        // unchanged pre-write readback cannot establish the new mark's text.
+        if let textBeforeMark, (textBeforeMark as NSString).isEqual(to: text) { return .unreadable }
+        return .foreign
     }
 
     static func canWrite(

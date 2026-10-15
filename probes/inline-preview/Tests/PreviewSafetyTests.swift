@@ -20,7 +20,43 @@ enum PreviewSafetyTests {
         refusesUnreadableCompositionWithEmptySelection()
         refusesSupersededCommands()
         provesUnmarkedRefusalsWithoutLosingUnsafeClassification()
-        print("inline preview safety: 13 checks passed")
+        distinguishesCachedTextFromChangedComposition()
+        print("inline preview safety: 14 checks passed")
+    }
+
+    @MainActor
+    private static func distinguishesCachedTextFromChangedComposition() {
+        let view = NSTextView(frame: .zero)
+        view.string = "\n" // The empty Chromium editor's reported paragraph.
+        view.setSelectedRange(NSRange(location: 0, length: 0))
+        let range = NSRange(location: 0, length: 1)
+        let before = view.attributedSubstring(forProposedRange: range, actualRange: nil)?.string
+        mark("E", in: view)
+        let expected = (range: range, text: "E")
+        let cached = ProbePreviewSafety.compositionState(
+            markedRange: view.markedRange(), expected: expected, textBeforeMark: before,
+            readText: { _ in before }
+        )
+        precondition(cached == .unreadable, "unchanged surrounding text was mistaken for a foreign mark")
+        precondition(view.string == "E\n", "native fixture did not render its mark")
+        precondition(state(of: view, expected: expected) == .owned)
+        let foreign = ProbePreviewSafety.compositionState(
+            markedRange: range, expected: expected, textBeforeMark: before, readText: { _ in "X" }
+        )
+        precondition(foreign == .foreign, "changed readable text bypassed ownership")
+        let moved = ProbePreviewSafety.compositionState(
+            markedRange: NSRange(location: 1, length: 1), expected: expected,
+            textBeforeMark: before, readText: { _ in before }
+        )
+        precondition(moved == .foreign, "a cached string authorized a moved range")
+        let unowned = ProbePreviewSafety.compositionState(
+            markedRange: range, expected: nil, textBeforeMark: before, readText: { _ in before }
+        )
+        precondition(unowned == .foreign, "cached text authorized an unowned composition")
+        let reverted = ProbePreviewSafety.compositionState(
+            markedRange: range, expected: expected, readText: { _ in before }
+        )
+        precondition(reverted == .foreign, "readback without a pending cache snapshot accepted old text")
     }
 
     private static func provesUnmarkedRefusalsWithoutLosingUnsafeClassification() {

@@ -45,8 +45,11 @@ The menu toggle can disable inline preview.
 Preview is skipped when the captured target has selected text. Before every mark,
 the companion also requires a readable empty selection and checks the observed
 marked range. During an uninterrupted acquired session, unavailable draft text
-does not block updates or cancellation. Readable text that differs from the draft
-still refuses the operation. Unknown selections and
+does not block updates or cancellation. Chromium can update its native marked
+range before its surrounding-text cache. A readback identical to the text sampled
+at that range immediately before the write is also unavailable as evidence of the
+new draft. This allowance ends once the readback matches the draft. Other readable
+text that differs from the draft still refuses the operation. Unknown selections and
 ambiguous sets of client sessions use the HUD.
 This prevents cancellation from deleting a selection that marked text replaced.
 
@@ -59,6 +62,13 @@ cannot restart after retirement. An unreachable owner is refused instead of redi
 different field in the same application. A healthy composition stays visible through its native final commit. A fallback
 write requires acknowledged cleanup first. Marked text still requires
 verification in each target app because rendering and teardown are host dependent.
+
+A controlled October 15 Codex check displayed native underlined `E`, revised it
+to `F` and `Epos test`, then committed `Epos verified` in place. Screenshots and
+the editor's Accessibility value confirmed the final phrase and its removal.
+The companion acknowledged each operation. This check exercised the companion
+directly, not speech recognition or Epos's final Accessibility guard. The latter
+still needs to account for Codex reporting its empty editor's placeholder as text.
 
 ## Final delivery
 

@@ -3,6 +3,9 @@ import Foundation
 @main
 enum ControllerLifecycleTests {
     static func main() {
+        precondition(EposProbeInputController.cachedReadbackStatesForTesting(["\n", "E", "\n"])
+                     == [.unreadable, .owned, .foreign],
+                     "a composition retained its cached-text allowance after owned readback")
         for graceful in [true, false] {
             let connection: UInt64 = graceful ? 41 : 42
             EposProbeInputController.stageUnreachableCompositionForTesting(connection: connection)

@@ -37,6 +37,17 @@ final class EposProbeInputController: IMKInputController {
         let connection: UInt64
         let range: NSRange
         var text: String
+        var textBeforeMark: String? = nil
+
+        mutating func observe(markedRange: NSRange, readText: (NSRange) -> String?) -> ProbePreviewSafety.CompositionState {
+            let state = ProbePreviewSafety.compositionState(
+                markedRange: markedRange, expected: (range, text), textBeforeMark: textBeforeMark,
+                readText: readText
+            )
+            // Once the cache catches up, reverting to its old text is a change.
+            if state == .owned { textBeforeMark = nil }
+            return state
+        }
     }
 
     nonisolated(unsafe) private static var composition: Composition?
@@ -49,6 +60,12 @@ final class EposProbeInputController: IMKInputController {
     private var activated = false
 
 #if EPOS_CONTROLLER_TESTS
+    static func cachedReadbackStatesForTesting(_ readbacks: [String]) -> [ProbePreviewSafety.CompositionState] {
+        var record = Composition(controller: nil, client: nil, bundleID: "test.host", connection: 1,
+                                 range: NSRange(location: 0, length: 1), text: "E", textBeforeMark: "\n")
+        return readbacks.map { text in record.observe(markedRange: record.range, readText: { _ in text }) }
+    }
+
     static func stageUnreachableCompositionForTesting(connection: UInt64) {
         lockedConnection = connection
         lockedBundleID = "test.host"
@@ -344,13 +361,18 @@ final class EposProbeInputController: IMKInputController {
                 : ProbePreviewSafety.unmarkedRefusal("selection or composition before preview", unsafe: true)
         }
         let start = composition?.range.location ?? selectedRange.location
+        let nextRange = NSRange(location: start, length: (text as NSString).length)
+        let textBeforeMark = client.attributedSubstring(from: nextRange)?.string
+        guard session === policy, !policy.isRetired else {
+            return ProbePreviewSafety.unmarkedRefusal("session retired before mark", unsafe: true)
+        }
         let selection = NSRange(location: (text as NSString).length, length: 0)
         let payload: Any = styled ? underlinedMarkedText(text) : text
         // Install the record before calling native code so a reentrant host
         // callback cannot leave a newly rendered draft without an owner.
         composition = Composition(
             controller: controller, client: client, bundleID: bundleID, connection: connection,
-            range: NSRange(location: start, length: (text as NSString).length), text: text
+            range: nextRange, text: text, textBeforeMark: textBeforeMark
         )
         nativeMarkInFlight = true
         client.setMarkedText(payload, selectionRange: selection, replacementRange: replacementRange)
@@ -369,7 +391,8 @@ final class EposProbeInputController: IMKInputController {
         if let current = composition {
             composition = Composition(controller: current.controller, client: current.client,
                                       bundleID: current.bundleID, connection: current.connection,
-                                      range: observedRange, text: text)
+                                      range: observedRange, text: text,
+                                      textBeforeMark: observedRange == nextRange ? textBeforeMark : nil)
         }
         let readback = observe(client, expected: composition)
         guard policy.didMark(readback, utf16Length: (text as NSString).length) else {
@@ -619,13 +642,13 @@ final class EposProbeInputController: IMKInputController {
         expected current: Composition?,
         markedRange: NSRange? = nil
     ) -> ProbePreviewSafety.CompositionState {
-        let expected: (range: NSRange, text: String)?
-        if let current, current.client === client {
-            expected = (current.range, current.text)
-        } else {
-            expected = nil
+        let range = markedRange ?? client.markedRange()
+        if var current, current.client === client {
+            let state = current.observe(markedRange: range) { client.attributedSubstring(from: $0)?.string }
+            if composition?.client === client { composition?.textBeforeMark = current.textBeforeMark }
+            return state
         }
-        return ProbePreviewSafety.compositionState(markedRange: markedRange ?? client.markedRange(), expected: expected) {
+        return ProbePreviewSafety.compositionState(markedRange: range, expected: nil) {
             client.attributedSubstring(from: $0)?.string
         }
     }
