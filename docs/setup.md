@@ -27,6 +27,11 @@ input-agent restarts. It checks all matching sources for an enabled, selectable
 keyboard method before and after replacement. A registered but disabled source
 is reported as unavailable; the installer never enables it automatically.
 The app can use its recording pill while the companion is unavailable.
+When Stream into field is on, the menu reports a missing or disabled input
+source. For a disabled source, Keyboard settings opens the setup pane. Under
+Text Input, click Edit, then the plus button to add EposProbe. The source list
+before clicking plus contains only sources already enabled. Reopen the Epos menu
+after setup to refresh its status.
 The companion is a keyboard input method. Enable its input source when macOS
 requests consent. For native streaming in Ghostty, select Epos as your keyboard
 input method before dictation and leave it selected. Ordinary typing continues

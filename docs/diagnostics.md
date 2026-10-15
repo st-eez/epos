@@ -24,6 +24,10 @@ unified log command:
 
 The companion keeps its own log at `~/Library/Caches/EposProbe/probe.log`; inspect
 it when debugging marked text.
+Failed keyboard-source acquisition logs its native status as `missing`,
+`disabled`, `available`, or `selected`. Registration alone does not establish
+that macOS has enabled the input source. The Stream into field menu shows setup
+guidance when that prerequisite is absent.
 Refused marks record selection and marked ranges, composition state, and client
 type without transcript text. Its developer `ranges <bundle-id>` socket command
 returns those ranges without writing to the field. Use it only with Epos stopped

@@ -63,7 +63,7 @@ final class InlinePreviewCoordinator {
         }
         guard isEnabled(), let bundleIdentifier, !bundleIdentifier.isEmpty else { return }
         guard let keyboardSource = keyboardSourceFactory() else {
-            log.info("inline preview unavailable: native keyboard source cannot be acquired")
+            log.info("inline preview unavailable: native keyboard source cannot be acquired status=\(PreviewKeyboardSource.status.rawValue)")
             return
         }
         self.keyboardSource = keyboardSource

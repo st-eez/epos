@@ -1,6 +1,23 @@
 import Carbon
 import Foundation
 
+enum PreviewKeyboardSourceStatus: String {
+    case missing, disabled, available, selected
+
+    var setupMessage: String? {
+        switch self {
+        case .missing:
+            "The Epos input source is missing. Reinstall Epos with its signed installer."
+        case .disabled:
+            "Add EposProbe in Keyboard settings, Text Input, then select it in the input menu."
+        case .available:
+            "For live text in Ghostty, select EposProbe in the input menu."
+        case .selected:
+            nil
+        }
+    }
+}
+
 @MainActor
 protocol PreviewKeyboardSourceAccess {
     func currentIdentifier() -> String?
@@ -15,6 +32,7 @@ protocol PreviewKeyboardSourceAccess {
 @MainActor
 final class PreviewKeyboardSource {
     static let companionIdentifier = "com.steez.inputmethod.EposProbe"
+    static var status: PreviewKeyboardSourceStatus { NativePreviewKeyboardSourceAccess().companionStatus() }
     let acquisitionArgument: String
     private let previousIdentifier: String?
     private let access: any PreviewKeyboardSourceAccess
@@ -73,10 +91,21 @@ private struct NativePreviewKeyboardSourceAccess: PreviewKeyboardSourceAccess {
     }
 
     func companionIsAvailable() -> Bool {
-        guard let source = find(PreviewKeyboardSource.companionIdentifier),
-              string(source, kTISPropertyInputSourceType) == kTISTypeKeyboardInputMethodWithoutModes as String,
-              let enabled = TISGetInputSourceProperty(source, kTISPropertyInputSourceIsEnabled) else { return false }
-        return CFBooleanGetValue(Unmanaged<CFBoolean>.fromOpaque(enabled).takeUnretainedValue())
+        let status = companionStatus()
+        return status == .available || status == .selected
+    }
+
+    func companionStatus() -> PreviewKeyboardSourceStatus {
+        let filter = [kTISPropertyInputSourceID as String: PreviewKeyboardSource.companionIdentifier] as CFDictionary
+        let sources = TISCreateInputSourceList(filter, true)?.takeRetainedValue() as? [TISInputSource] ?? []
+        let methods = sources.filter {
+            string($0, kTISPropertyInputSourceType) == kTISTypeKeyboardInputMethodWithoutModes as String
+        }
+        guard !methods.isEmpty else { return .missing }
+        guard methods.contains(where: {
+            boolean($0, kTISPropertyInputSourceIsEnabled) && boolean($0, kTISPropertyInputSourceIsSelectCapable)
+        }) else { return .disabled }
+        return currentIdentifier() == PreviewKeyboardSource.companionIdentifier ? .selected : .available
     }
 
     func select(_ identifier: String) -> Bool {
@@ -95,5 +124,10 @@ private struct NativePreviewKeyboardSourceAccess: PreviewKeyboardSourceAccess {
     private func string(_ source: TISInputSource, _ key: CFString) -> String? {
         guard let value = TISGetInputSourceProperty(source, key) else { return nil }
         return Unmanaged<CFString>.fromOpaque(value).takeUnretainedValue() as String
+    }
+
+    private func boolean(_ source: TISInputSource, _ key: CFString) -> Bool {
+        guard let value = TISGetInputSourceProperty(source, key) else { return false }
+        return CFBooleanGetValue(Unmanaged<CFBoolean>.fromOpaque(value).takeUnretainedValue())
     }
 }

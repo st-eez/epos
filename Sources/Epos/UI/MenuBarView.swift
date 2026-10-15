@@ -7,6 +7,7 @@ public struct MenuBarView: View {
     @State private var launchAtLogin = false
     @State private var saveAudioSamples = false
     @State private var saveCorrectionEvidence = false
+    @State private var previewSourceStatus = PreviewKeyboardSourceStatus.missing
 
     /// Curated glow palette. Swatches, not a SwiftUI ColorPicker: its well
     /// cannot present NSColorPanel from a non-activating menu-bar popover in
@@ -54,6 +55,7 @@ public struct MenuBarView: View {
             launchAtLogin = coordinator.launchAtLogin
             saveAudioSamples = coordinator.saveAudioSamples
             saveCorrectionEvidence = coordinator.saveCorrectionEvidence
+            previewSourceStatus = PreviewKeyboardSource.status
         }
         .task {
             // Opening the menu is the other natural moment to re-check a launch
@@ -198,6 +200,22 @@ public struct MenuBarView: View {
                 .tint(teal)
                 .scaleEffect(0.74)
                 .frame(width: 42, height: 22)
+            }
+            if coordinator.inlinePreviewSetting, let message = previewSourceStatus.setupMessage {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(message)
+                        .font(.system(size: 11))
+                        .foregroundStyle(amber)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if previewSourceStatus == .disabled {
+                        Button("Keyboard settings") {
+                            if let url = URL(string: "x-apple.systempreferences:com.apple.Keyboard-Settings.extension") {
+                                NSWorkspace.shared.open(url)
+                            }
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                    }
+                }
             }
             Divider().overlay(.white.opacity(0.08))
             metaRow("Edge glow") {
