@@ -21,17 +21,14 @@ enum FinalTranscriptCommitRouter {
         guard let insertion, InlinePreviewSession.isCommittableText(transcript) else {
             return nil
         }
-        guard let draft = await preview.prepareFinalCommit() else {
+        guard await preview.prepareFinalCommit() else {
             if await preview.hasUnsafeTarget() {
                 insertion.cancel()
                 return .completed(.targetRefused, viaIME: false)
             }
             return nil
         }
-        // A host can publish its AX value after acknowledging the native mark.
-        // Wait for that exact owned draft, keeping it visible throughout.
-        await insertion.settleReadableBaseline(replacingPreview: draft)
-        switch insertion.authorizeFinalWrite(transcript, replacingPreview: draft) {
+        switch insertion.authorizeNativeCommit(transcript) {
         case .refused(let result):
             return .completed(result, viaIME: false)
         case .authorized:

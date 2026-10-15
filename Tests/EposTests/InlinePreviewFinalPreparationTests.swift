@@ -28,7 +28,7 @@ final class InlinePreviewFinalPreparationTests: XCTestCase {
         // Release even on failure so the regression cannot strand its task.
         await throttle.open()
         let cancelled = await cancellation.value
-        XCTAssertEqual(cancelled, "first")
+        XCTAssertTrue(cancelled)
         await preview.mark("late revision")
         let outcome = await preview.commitFinalTranscript("Final text.")
         XCTAssertEqual(outcome, .committed)
@@ -74,7 +74,7 @@ final class InlinePreviewFinalPreparationTests: XCTestCase {
         await transport.replyToSecondMark(reply)
 
         let cancelled = await cancellation.value
-        XCTAssertEqual(cancelled, expectedCancellation ? "second" : nil)
+        XCTAssertEqual(cancelled, expectedCancellation)
         let unsafe = await preview.hasUnsafeTarget()
         XCTAssertEqual(unsafe, !expectedCancellation)
         let linesAfterReply = await transport.lines

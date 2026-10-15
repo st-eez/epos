@@ -346,7 +346,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         let eligible = await session.isEligibleForFinalCommit()
         XCTAssertTrue(eligible)
         let cancelled = await session.prepareFinalCommit()
-        XCTAssertEqual(cancelled, "hello there")
+        XCTAssertTrue(cancelled)
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .committed)
         await session.discard()
@@ -369,7 +369,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
         let cancelled = await session.prepareFinalCommit()
-        XCTAssertEqual(cancelled, "hello there")
+        XCTAssertTrue(cancelled)
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .refused)
         await session.discard()
@@ -390,7 +390,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
         let cancelled = await session.prepareFinalCommit()
-        XCTAssertEqual(cancelled, "hello there")
+        XCTAssertTrue(cancelled)
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .ambiguous)
 
@@ -414,7 +414,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
         let cancelled = await session.prepareFinalCommit()
-        XCTAssertEqual(cancelled, "hello there")
+        XCTAssertTrue(cancelled)
         let outcome = await session.commitFinalTranscript("Hello there.")
 
         // The commit was fully written before the probe died, so it may have
@@ -430,7 +430,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
         let cancelled = await session.prepareFinalCommit()
-        XCTAssertEqual(cancelled, "hello there")
+        XCTAssertTrue(cancelled)
         let outcome = await session.commitFinalTranscript("Hello there.")
 
         XCTAssertEqual(outcome, .refused)
@@ -447,7 +447,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         let eligible = await session.isEligibleForFinalCommit()
         XCTAssertFalse(eligible)
         let cancelled = await session.prepareFinalCommit()
-        XCTAssertNil(cancelled)
+        XCTAssertFalse(cancelled)
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .unavailable)
         await Self.waitForLines([Self.begin], from: transport)

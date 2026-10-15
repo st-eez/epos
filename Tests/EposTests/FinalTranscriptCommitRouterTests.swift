@@ -106,7 +106,7 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         let preview = await makeHealthyPreview(transport: transport)
         let backend = RecordingBackend()
         let target = ReadableTargetObserver()
-        target.context = .init(prefix: "", suffix: "Write a message", valueMayBePlaceholder: true)
+        target.context = .init(prefix: "", suffix: "Write a message")
         target.value = "hello there"
         target.selection = .init(location: target.value.utf16.count, length: 0)
         let route = await FinalTranscriptCommitRouter.attemptIMECommit(
@@ -141,25 +141,54 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         XCTAssertEqual(lines.filter { $0.hasPrefix("commit ") }, ["commit \(Self.transcript)"])
     }
 
-    func testInPlaceCommitStillRefusesEditsOutsidePreviewAndChangedCaret() async {
-        for change in ["prefix", "suffix", "caret"] {
+    func testNativeOwnershipAcceptsDifferentAccessibilityTextRepresentation() async {
+        for (baseline, value) in [("\n", "hello there"), ("before \n", "before hello there"),
+                                  ("before \u{a0}after\n", "before hello there after\n")] {
             let transport = ScriptedTransport()
             let preview = await makeHealthyPreview(transport: transport)
             let backend = RecordingBackend()
             let target = ReadableTargetObserver()
-            if change == "prefix" { target.value = "changed hello there after" }
-            if change == "suffix" { target.value = "before hello there changed" }
-            if change == "caret" { target.selection = .init(location: 0, length: 0) }
-            let insertion = makeInsertion(backend: backend, observer: target)
+            target.context = .init(prefix: "", suffix: baseline)
+            target.value = value
             let route = await FinalTranscriptCommitRouter.attemptIMECommit(
-                transcript: Self.transcript, preview: preview, insertion: insertion, settle: {}
+                transcript: Self.transcript, preview: preview,
+                insertion: makeInsertion(backend: backend, observer: target)
             )
-            XCTAssertEqual(route, .completed(.targetRefused, viaIME: false), change)
+            XCTAssertEqual(route, .completed(.accepted, viaIME: true))
+            XCTAssertTrue(backend.inserted.isEmpty)
             let lines = await transport.lines
-            XCTAssertFalse(lines.contains { $0.hasPrefix("commit ") }, change)
-            XCTAssertTrue(backend.inserted.isEmpty, change)
+            XCTAssertFalse(lines.contains("cancel"))
             await preview.discard()
         }
+    }
+
+    func testNativeRefusalStillBlocksCommitAndFallbackWithDifferentAXText() async {
+        let transport = ScriptedTransport(commitReply: "err unsafe selection or composition before commit")
+        let preview = await makeHealthyPreview(transport: transport)
+        let backend = RecordingBackend()
+        let target = ReadableTargetObserver()
+        target.value = "different representation"
+        let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+            transcript: Self.transcript, preview: preview,
+            insertion: makeInsertion(backend: backend, observer: target)
+        )
+        XCTAssertEqual(route, .completed(.targetRefused, viaIME: false))
+        XCTAssertTrue(backend.inserted.isEmpty)
+        await preview.discard()
+    }
+
+    func testNativeRefusalCannotBypassFallbackBaselineGuard() async {
+        let transport = ScriptedTransport(commitReply: "err commit refused")
+        let preview = await makeHealthyPreview(transport: transport)
+        let backend = RecordingBackend()
+        let target = ReadableTargetObserver()
+        target.value = "changed content"
+        let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+            transcript: Self.transcript, preview: preview,
+            insertion: makeInsertion(backend: backend, observer: target), settle: {}
+        )
+        XCTAssertEqual(route, .completed(.targetRefused, viaIME: false))
+        XCTAssertTrue(backend.inserted.isEmpty)
     }
 
     // MARK: - Helpers

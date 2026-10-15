@@ -71,27 +71,20 @@ directly, not speech recognition or Epos's final Accessibility guard.
 
 ## Final delivery
 
-The captured target guard checks the application and field. Where Accessibility
-exposes an editable text context, it also requires the original value, caret, and
-selection. Opaque targets use process, window, and focus signature evidence. An absent or changed
+The captured target guard checks the application and field. Keystroke delivery
+also requires the original Accessibility value, caret, and selection when exposed. Opaque targets use process, window, and focus signature evidence. An absent or changed
 target refuses delivery. Epos does not restore focus or undo the user's edits.
 
 A healthy preview channel that acknowledged at least one mark commits the final
 transcript through a single IME `insertText`, replacing its owned marked span in
 place. It does not clear the field first. Release waits for an outstanding preview
-reply, without waiting for the preview throttle interval. The target guard permits
-only the exact acknowledged draft between the original prefix and suffix, with
-an empty caret at its end. The companion rechecks the concrete client, selection,
-marked range and uninterrupted session immediately before committing. Hosts with
-unreadable draft strings use that native ownership evidence too.
-
-CSS-generated placeholders can appear as the empty editor's Accessibility value,
-as observed in Codex. When the baseline value equals the field's description,
-Epos keeps that literal baseline and records the ambiguity. An acknowledged native
-draft may resolve it only when the original caret was at zero and the complete
-current value and caret exactly match that draft. Ordinary final delivery and
-fallback continue to require the literal baseline. No application is excluded
-from streaming by this check.
+reply, without waiting for the preview throttle interval. The app checks captured
+focus. The companion authorizes replacement of the composition by rechecking its
+concrete client, native selection, marked range, readable draft and uninterrupted
+session immediately before committing. Accessibility text can include generated
+placeholders and layout newlines, so it is not compared with the native draft.
+Ordinary final delivery and fallback still require the exact original
+Accessibility value and selection after confirmed cleanup.
 
 If the host leaves marked text after `insertText`, the result is ambiguous and
 Epos suppresses a second write. A native acknowledgement still establishes

@@ -249,14 +249,14 @@ actor InlinePreviewSession {
 
     /// Stops new marks and waits only for the pending native reply. Keep the
     /// acknowledged composition visible while the target guard authorizes it.
-    func prepareFinalCommit() async -> String? {
-        guard isEligibleForFinalCommit() else { return nil }
+    func prepareFinalCommit() async -> Bool {
+        guard isEligibleForFinalCommit() else { return false }
         transition(to: .committing)
         pendingMark = nil
         await awaitSafetyReply()
         guard phase == .committing, !unsafeTarget, !compositionCancelled,
-              let lastSentMark, !lastSentMark.isEmpty else { return nil }
-        return lastSentMark
+              let lastSentMark, !lastSentMark.isEmpty else { return false }
+        return true
     }
 
     /// Step 2: sends the authoritative transcript as one `commit`, which the
