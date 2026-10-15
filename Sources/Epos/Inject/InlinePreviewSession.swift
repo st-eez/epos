@@ -53,6 +53,7 @@ actor InlinePreviewSession {
         case marking
         /// The final-commit handshake has started; no further marks are sent.
         case committing
+        case sealing
         case degraded
         case discarded
     }
@@ -99,6 +100,8 @@ actor InlinePreviewSession {
     private var cancelAcknowledged = false
     private var compositionCancelled = false
     private var committed = false
+    private var committedPrefix = ""
+    private var phraseCommitAmbiguous = false
     private var commitMayHaveExecuted = false
     private var failure: String?
     private var unsafeTarget = false
@@ -187,7 +190,8 @@ actor InlinePreviewSession {
     func mark(_ text: String) {
         guard phase == .pending || phase == .marking else { return }
         // A newline would split the probe's line protocol into a bogus command.
-        let sanitized = text
+        guard text.hasPrefix(committedPrefix) else { return }
+        let sanitized = String(text.dropFirst(committedPrefix.count))
             .replacingOccurrences(of: "\r", with: " ")
             .replacingOccurrences(of: "\n", with: " ")
         // Matching the update already sent or awaiting its reply makes any
@@ -236,11 +240,8 @@ actor InlinePreviewSession {
 
     // MARK: - Final IME commit
 
-    /// True only when the channel has been healthy for the whole recording:
-    /// begin acked, every send round-tripped (any failure is a sticky degrade),
-    /// and the probe acknowledged rendering at least one mark.
     func isEligibleForFinalCommit() -> Bool {
-        phase == .marking && marksSent > 0
+        phase == .marking && (marksSent > 0 || !committedPrefix.isEmpty)
     }
 
     /// Sticky across degradation and discard. Preview can stop while the target
@@ -254,23 +255,68 @@ actor InlinePreviewSession {
         transition(to: .committing)
         pendingMark = nil
         await awaitSafetyReply()
-        guard phase == .committing, !unsafeTarget, !compositionCancelled,
-              let lastSentMark, !lastSentMark.isEmpty else { return false }
+        guard phase == .committing, !unsafeTarget, (!compositionCancelled || !committedPrefix.isEmpty),
+              !committedPrefix.isEmpty || lastSentMark?.isEmpty == false else { return false }
         return true
     }
 
-    /// Step 2: sends the authoritative transcript as one `commit`, which the
-    /// probe executes as a single atomic `insertText` at the caret.
     func commitFinalTranscript(_ text: String) async -> InlinePreviewCommitOutcome {
+        guard !phraseCommitAmbiguous else { return .ambiguous }
         guard !unsafeTarget else { return .targetUnsafe }
-        guard phase == .committing, !compositionCancelled, !commitMayHaveExecuted,
-              Self.isCommittableText(text) else {
+        guard phase == .committing, !committed, !commitMayHaveExecuted else { return .unavailable }
+        guard text.hasPrefix(committedPrefix) else { return .targetUnsafe }
+        let remainder = String(text.dropFirst(committedPrefix.count))
+        if remainder.isEmpty, !committedPrefix.isEmpty {
+            await clearPreviewComposition()
+            guard !unsafeTarget else { return .targetUnsafe }
+            committed = true
+            return .committed
+        }
+        if !committedPrefix.isEmpty { compositionCancelled = false }
+        return await sendCommit(remainder, continuing: false)
+    }
+
+    func commitPhrase(_ text: String) async -> InlinePreviewCommitOutcome {
+        guard phase == .marking, !unsafeTarget, text.hasPrefix(committedPrefix) else { return .unavailable }
+        let remainder = String(text.dropFirst(committedPrefix.count))
+        guard Self.isCommittableText(remainder) else { return .unavailable }
+        transition(to: .sealing)
+        pendingMark = nil
+        await awaitSafetyReply()
+        guard phase == .sealing, !unsafeTarget else { return .targetUnsafe }
+        compositionCancelled = false
+        let outcome = await sendCommit(remainder, continuing: true)
+        if outcome == .committed {
+            committedPrefix = text
+            commitMayHaveExecuted = false
+            committed = false
+            lastSentMark = nil
+            compositionCancelled = true
+            if phase == .sealing { transition(to: .marking) }
+        } else if outcome == .ambiguous {
+            phraseCommitAmbiguous = true
+        }
+        return outcome
+    }
+
+    func hasCommittedPrefix() -> Bool { !committedPrefix.isEmpty }
+    func hasAmbiguousPhraseCommit() -> Bool { phraseCommitAmbiguous }
+
+    private func sendCommit(_ text: String, continuing: Bool) async -> InlinePreviewCommitOutcome {
+        guard (phase == .committing || phase == .sealing), !compositionCancelled, !commitMayHaveExecuted,
+              !text.isEmpty else {
             return .unavailable
         }
+        let command: String
+        if Self.isCommittableText(text) {
+            command = "\(continuing ? "seal" : "commit") \(text)"
+        } else if !continuing, !committedPrefix.isEmpty {
+            command = "commit64 " + Data(text.utf8).base64EncodedString()
+        } else { return .unavailable }
         commitMayHaveExecuted = true
         do {
-            let reply = try await transport.send(
-                "commit \(text)",
+            let reply = try await sendSafetyCommand(
+                command,
                 replyTimeout: Self.commitAckTimeout
             )
             if recordUnsafeTarget(reply) {
@@ -330,7 +376,7 @@ actor InlinePreviewSession {
             marksSent: marksSent,
             cancelAcknowledged: cancelAcknowledged,
             committed: committed,
-            commitMayHaveExecuted: commitMayHaveExecuted,
+            commitMayHaveExecuted: commitMayHaveExecuted || !committedPrefix.isEmpty,
             failure: failure
         )
     }
@@ -356,7 +402,7 @@ actor InlinePreviewSession {
         await withCheckedContinuation { safetyReplyCompletions.append($0) }
     }
 
-    private func sendSafetyCommand(_ line: String) async throws -> String {
+    private func sendSafetyCommand(_ line: String, replyTimeout: TimeInterval? = nil) async throws -> String {
         safetyReplyInFlight = true
         defer {
             safetyReplyInFlight = false
@@ -364,6 +410,7 @@ actor InlinePreviewSession {
             safetyReplyCompletions = []
             for waiter in waiters { waiter.resume() }
         }
+        if let replyTimeout { return try await transport.send(line, replyTimeout: replyTimeout) }
         return try await transport.send(line)
     }
 
@@ -461,12 +508,9 @@ actor InlinePreviewSession {
     }
 
     private func transition(to newPhase: Phase) {
-        let wasMarking = phase == .marking
+        let wasActive = phase == .marking || phase == .sealing
         phase = newPhase
-        if wasMarking, newPhase != .marking {
-            onMarkingActivityChange(false)
-        } else if !wasMarking, newPhase == .marking {
-            onMarkingActivityChange(true)
-        }
+        let isActive = phase == .marking || phase == .sealing
+        if wasActive != isActive { onMarkingActivityChange(isActive) }
     }
 }

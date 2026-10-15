@@ -206,4 +206,21 @@ final class ReliabilityDiagnosticsTests: XCTestCase {
         XCTAssertTrue(log.contains("writeAttempted=true writeAccepted=true"))
         XCTAssertTrue(log.contains("readbackAvailable=true readbackMatched=true"))
     }
+    func testRefusedRemainderStillRecordsTheEarlierNativeWrite() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("EposReliability-\(UUID())")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let sink = DiagnosticLogSink(configuration: .init(enabled: true), directory: directory)
+        let recording = ReliabilityRecording(recordingID: "partial-native", diagnostics: sink)
+        recording.emitFinal(
+            recognizerFailed: false, insertionResult: .targetRefused, delivery: .unavailable,
+            transcriptUTF16: 20, priorNativeCommit: true
+        )
+        sink.flush()
+        let url = try XCTUnwrap(FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil).first)
+        let log = try String(contentsOf: url, encoding: .utf8)
+        XCTAssertTrue(log.contains("outcome=target-refused"))
+        XCTAssertTrue(log.contains("writeAttempted=true writeAccepted=false"))
+        XCTAssertTrue(log.contains("imeCommit=true imeCommitAck=true"))
+    }
+
 }

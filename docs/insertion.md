@@ -1,9 +1,9 @@
 # Insertion
 
-Epos captures the destination at shortcut press and authorizes one final write after
-release. Provisional text may appear while recording through the companion input
-method. The final path either commits through that companion or posts Unicode
-keystrokes.
+Epos captures the destination at shortcut press. The companion input method shows
+unfinished text as native marked text and commits confirmed phrases while held.
+Release delivers the remaining text. Without a usable native session, Epos keeps
+the guarded whole-transcript Unicode delivery path.
 
 ## Stream into field
 
@@ -22,8 +22,13 @@ A source you choose
 during dictation is retained. Selecting Epos alone does not start preview:
 the companion must acknowledge an activated client in the captured application.
 
-Each update supplies the complete current provisional transcript to
-`setMarkedText`, replacing Epos's owned preview span. Existing text around that
+Each update supplies the complete unfinished phrase to `setMarkedText`, replacing
+Epos's owned preview span. Confirmed phrases already committed remain ordinary
+text. Corrections freeze when a phrase commits. Later phrases retain preceding
+raw context for their corrections, but cannot rewrite confirmed text or match
+aliases across that boundary. Cleanup keeps the full corrected transcript as
+context. Trailing whitespace and commas remain provisional so filler removal can
+still repair the boundary without changing committed text. Existing text around that
 span is preserved. An update matching the text already sent removes any obsolete
 queued revision. Commands awaiting a reply count as sent, so a newer revision
 still replaces them when needed.
@@ -75,9 +80,11 @@ The captured target guard checks the application and field. Keystroke delivery
 also requires the original Accessibility value, caret, and selection when exposed. Opaque targets use process, window, and focus signature evidence. An absent or changed
 target refuses delivery. Epos does not restore focus or undo the user's edits.
 
-A healthy preview channel that acknowledged at least one mark commits the final
-transcript through a single IME `insertText`, replacing its owned marked span in
-place. It does not clear the field first. Release waits for an outstanding preview
+A healthy preview channel commits each confirmed phrase through IME `insertText`,
+replacing its owned marked span in place. It retains the same native client,
+connection and event barrier, and captures the new empty-selection baseline.
+Release commits only the remaining phrase. If everything is already committed,
+release performs no further insertion and clears an obsolete owned draft if needed. It does not clear the field first. Release waits for an outstanding preview
 reply, without waiting for the preview throttle interval. The app checks captured
 focus. The companion authorizes replacement of the composition by rechecking its
 concrete client, native selection, marked range, readable draft and uninterrupted
@@ -88,8 +95,9 @@ Accessibility value and selection after confirmed cleanup.
 
 If the host leaves marked text after `insertText`, the result is ambiguous and
 Epos suppresses a second write. A native acknowledgement still establishes
-acceptance rather than independently verified delivery. Text containing a newline
-uses the keystroke path, as do unavailable preview channels. Those paths cancel
+acceptance rather than independently verified delivery. Text containing a newline uses the keystroke path before any native phrase has
+committed, as do unavailable preview channels. After a phrase has committed, a
+newline in the remainder travels through an encoded native commit command. Those paths cancel
 owned marked text, wait for the readable baseline to settle, then run the original
 target guard. A conclusively refused first mark requires no settlement.
 
@@ -110,7 +118,9 @@ without clearing unverified host text. A failed preview in one app must not bloc
 the next recording in another app. Native mark-readback failures log the expected
 length, actual selection and marked ranges, and ownership state without transcript text.
 Other conclusive commit refusals or commands that could not be sent completely
-can fall back to guarded keystrokes. If the complete command was
+can fall back to guarded keystrokes only before any phrase has committed. After
+that, Epos preserves confirmed text and refuses further delivery with `Partly
+inserted`. Cleanup discards only the unfinished draft. If the complete command was
 sent and its acknowledgment is lost or malformed, delivery is ambiguous.
 The transport closes a connection after any reply failure, so a late reply cannot
 become the acknowledgement for the next command. Epos suppresses a
@@ -152,7 +162,10 @@ cleanup uses the HUD or refuses delivery as appropriate. This does not turn an
 unavailable range into proof of absence.
 
 Ghostty's `insertText` consumes the preedit and delivers committed text without a
-separate preview-clear command. Its current implementation also requires a prior
+separate preview-clear command. Confirmed phrases leave preedit as recognition
+finalizes them, so a long hold no longer recommits all its phrases on release.
+Ghostty still redraws the unfinished phrase when it becomes terminal input; a
+short hold with one phrase can therefore still show a native redraw. Its current implementation also requires a prior
 native event. A newly launched background fixture can therefore acknowledge the
 call without receiving bytes. The companion checks that the marked span was
 consumed; a still-marked result is ambiguous and cannot trigger a second write.

@@ -14,8 +14,9 @@ struct CorrectionRuleMatchResult {
 }
 
 enum CorrectionRuleMatcher {
-    static func apply(_ specs: [CorrectionRuleMatchSpec], to text: String) -> CorrectionRuleMatchResult {
-        let text = attachingFlagPrefix(in: text)
+    static func apply(_ specs: [CorrectionRuleMatchSpec], to text: String, startingAt offset: Int = 0) -> CorrectionRuleMatchResult {
+        let raw = text as NSString
+        let text = raw.substring(to: offset) + attachingFlagPrefix(in: raw.substring(from: offset))
         guard !text.isEmpty else {
             return CorrectionRuleMatchResult(output: text, appliedRecordIDs: [])
         }
@@ -30,6 +31,7 @@ enum CorrectionRuleMatcher {
             var specApplied = false
 
             for match in spec.regex.matches(in: text, range: fullRange) {
+                guard match.range.location >= offset else { continue }
                 guard !replacements.contains(where: { rangesOverlap($0.range, match.range) }) else {
                     continue
                 }

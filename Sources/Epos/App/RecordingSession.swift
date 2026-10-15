@@ -46,6 +46,10 @@ final class RecordingSession {
     private var releaseWaiter: CheckedContinuation<Void, Never>?
     private var textInsertionSession: FinalTranscriptInsertionSession?
     private var finalText = ""
+    private var committedCanonicalText = ""
+    private var committedRawUTF16 = 0
+    private var hasCommittedPhrase: Bool { committedRawUTF16 > 0 }
+    private var committedCorrectionIDs: [String] = []
     private var partial = ""
     private var displayText = ""
     private var transcriptTiming: TranscriptTimingDiagnostics
@@ -239,6 +243,7 @@ final class RecordingSession {
             case .final(let text):
                 latency?.end(.firstRecognizerResult)
                 handleFinalTranscriptSegment(text)
+                await commitConfirmedPhraseIfHeld()
                 logTranscriptTiming(kind: .final, eventText: text)
             case .failed(let message):
                 recognizerFailed = true
@@ -257,8 +262,9 @@ final class RecordingSession {
             await withCheckedContinuation { releaseWaiter = $0 }
         }
         latency?.begin(.transcriptCleanup)
-        let correctionResult = canonicalizer.canonicalizeWithProvenance(finalText)
-        let finalTranscript = TranscriptDeterministicCleaner.streamClean(correctionResult.output)
+        let transcript = renderTranscript(finalText)
+        let correctionResult = transcript.corrections
+        let finalTranscript = transcript.display
         latency?.end(.transcriptCleanup)
         latency?.abandon(.firstRecognizerResult)
         latency?.abandon(.firstDisplayPublication)
@@ -304,12 +310,36 @@ final class RecordingSession {
     }
 
     private func refreshDisplayText() {
-        displayText = TranscriptDeterministicCleaner.streamClean(
-            canonicalizer.canonicalize(finalText + partial)
-        )
+        displayText = renderTranscript(finalText + partial).display
         onEvent(self, .transcript(final: finalText, partial: partial, display: displayText))
         if !displayText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             latency?.end(.firstDisplayPublication)
+        }
+    }
+
+    private func renderTranscript(_ raw: String) -> (corrections: CorrectionRuleMatchResult, display: String) {
+        let result = canonicalizer.canonicalizeSuffix(raw, afterUTF16: committedRawUTF16)
+        var seen: Set<String> = []
+        let corrections = CorrectionRuleMatchResult(
+            output: committedCanonicalText + result.output,
+            appliedRecordIDs: (committedCorrectionIDs + result.appliedRecordIDs).filter { seen.insert($0).inserted }
+        )
+        return (corrections, TranscriptDeterministicCleaner.streamClean(corrections.output))
+    }
+
+    func commitConfirmedPhraseIfHeld() async {
+        guard phase == .held, let session = preview.session,
+              let insertion = textInsertionSession,
+              !displayText.isEmpty else { return }
+        let result = renderTranscript(finalText)
+        var text = result.display
+        while let last = text.last, last.isWhitespace || last == "," { text.removeLast() }
+        guard case .authorized = insertion.authorizeNativeCommit(text) else { return }
+        if await session.commitPhrase(text) == .committed {
+            committedCanonicalText = result.corrections.output
+            committedRawUTF16 = (finalText as NSString).length
+            committedCorrectionIDs = result.corrections.appliedRecordIDs
+            preview.mirror(result.display)
         }
     }
 
@@ -374,7 +404,7 @@ final class RecordingSession {
                 onEvent(self, .insertionUnavailable(
                     insertionResult == .accessibilityUntrusted
                         ? "No access"
-                        : AppCoordinator.defaultInsertionNotice
+                        : hasCommittedPhrase ? "Partly inserted" : AppCoordinator.defaultInsertionNotice
                 ))
             }
             let insertedTranscript = textInsertionSession?.insertedTranscript
@@ -487,7 +517,8 @@ final class RecordingSession {
                 insertionResult: insertionResult,
                 delivery: .unavailable,
                 transcriptUTF16: transcript.utf16.count,
-                imeCommit: viaIMECommit
+                imeCommit: viaIMECommit,
+                priorNativeCommit: hasCommittedPhrase
             )
             return
         }
@@ -498,7 +529,8 @@ final class RecordingSession {
                 insertionResult: insertionResult,
                 delivery: delivery,
                 transcriptUTF16: transcript.utf16.count,
-                imeCommit: viaIMECommit
+                imeCommit: viaIMECommit,
+                priorNativeCommit: hasCommittedPhrase
             )
         }
     }

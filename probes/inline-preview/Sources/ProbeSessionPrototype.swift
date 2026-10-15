@@ -184,6 +184,7 @@ enum ProbeSessionPrototype {
         let state: String
         switch current.policy.state {
         case .ready: state = "ready"
+        case .committing: state = "committing"
         case .draft: state = "draft"
         case .retired(let reason): state = "retired-\(reason)"
         case .finished: state = "finished"

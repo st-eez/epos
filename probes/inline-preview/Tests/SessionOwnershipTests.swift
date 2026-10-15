@@ -76,6 +76,8 @@ enum SessionOwnershipTests {
         productionAcquisition()
         uninterruptedLifecycle()
         commitsOwnedDraftInPlace()
+        confirmedPhraseThenDraftCancellation()
+        interruptedPhraseCannotResume()
         for (name, key, code) in [("typing", "x", UInt16(7)), ("backspace", "\u{7f}", UInt16(51)),
                                  ("caret", String(UnicodeScalar(NSLeftArrowFunctionKey)!), UInt16(123))] {
             interruptedKey(name, key: key, code: code)
@@ -91,7 +93,36 @@ enum SessionOwnershipTests {
         reentrantMarkCannotRevive()
         reentrantDiscardCannotRevive()
         finishedInsertionCannotRepeat()
-        print("session ownership prototype: 20 native lifecycle checks passed")
+        print("session ownership prototype: native lifecycle checks passed")
+    }
+
+    @MainActor
+    private static func confirmedPhraseThenDraftCancellation() {
+        let fixture = Fixture()
+        precondition(fixture.mark("First draft"))
+        precondition(fixture.policy.finishNativeCommit(continuing: true))
+        fixture.view.insertText("First. ", replacementRange: unavailable)
+        precondition(fixture.policy.didCommitPhrase(fixture.observation))
+        precondition(fixture.mark("unfinished"))
+        precondition(fixture.cancel())
+        precondition(fixture.view.string == "prefix First. suffix")
+        precondition(fixture.policy.canOperate(fixture.observation))
+        precondition(fixture.mark("Second."))
+        precondition(fixture.policy.finishNativeCommit())
+        fixture.view.insertText("Second.", replacementRange: unavailable)
+        precondition(fixture.view.string == "prefix First. Second.suffix")
+    }
+
+    @MainActor
+    private static func interruptedPhraseCannotResume() {
+        let fixture = Fixture()
+        precondition(fixture.mark("First draft"))
+        precondition(fixture.policy.finishNativeCommit(continuing: true))
+        fixture.view.insertText("First. ", replacementRange: unavailable)
+        fixture.policy.interrupt("deactivate") {}
+        precondition(!fixture.policy.didCommitPhrase(fixture.observation))
+        precondition(!fixture.mark("wrong field"))
+        precondition(fixture.view.string == "prefix First. suffix")
     }
 
     private static func productionInputBarrier() {

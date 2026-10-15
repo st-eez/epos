@@ -3,6 +3,8 @@ import Foundation
 @main
 enum ControllerLifecycleTests {
     static func main() {
+        precondition(EposProbeInputController.phraseCallbackStatesForTesting() == [.committing, .retired("host-commit")],
+                     "a commit callback retired its own native insertion, or an external callback was ignored")
         precondition(EposProbeInputController.cachedReadbackStatesForTesting(["\n", "E", "\n"])
                      == [.unreadable, .owned, .foreign],
                      "a composition retained its cached-text allowance after owned readback")

@@ -7,6 +7,7 @@ final class ProbeSessionOwnership {
         case ready
         case draft(NSRange)
         case retired(String)
+        case committing
         case finished
     }
 
@@ -18,7 +19,7 @@ final class ProbeSessionOwnership {
 
     private(set) var state: State = .ready
     private var expectedSelection: NSRange
-    private let baselineSelection: NSRange
+    private var baselineSelection: NSRange
     private let unavailable = NSRange(location: NSNotFound, length: NSNotFound)
     private let permitsUnavailableBaseline: Bool
 
@@ -49,7 +50,7 @@ final class ProbeSessionOwnership {
         case .draft(let range):
             return observation.marked == range
                 && (observation.composition == .owned || observation.composition == .unreadable)
-        case .retired, .finished:
+        case .committing, .retired, .finished:
             return false
         }
     }
@@ -108,9 +109,24 @@ final class ProbeSessionOwnership {
 
     /// The caller rechecks the owned selection, range and session before
     /// consuming the composition in place, including hosts with unreadable text.
-    func finishNativeCommit() -> Bool {
+    func finishNativeCommit(continuing: Bool = false) -> Bool {
         guard state == .ready || isDraft else { return false }
-        state = .finished
+        state = continuing ? .committing : .finished
+        return true
+    }
+
+    /// A continued commit can advance only an uninterrupted session. A callback
+    /// that retired it while native insertion ran must remain authoritative.
+    func didCommitPhrase(_ observation: Observation) -> Bool {
+        guard state == .committing, Self.emptySelection(observation.selection),
+              observation.composition == .absent || (permitsUnavailableBaseline
+                && observation.composition == .unreadable && observation.marked == unavailable) else {
+            retire("phrase-readback")
+            return false
+        }
+        baselineSelection = observation.selection
+        expectedSelection = observation.selection
+        state = .ready
         return true
     }
 

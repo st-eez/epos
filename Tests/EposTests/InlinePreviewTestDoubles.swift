@@ -17,6 +17,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
     private let failMarksAfter: Int?
     private let commitReply: String
     private let commitError: InlinePreviewTransportError?
+    private let onSend: @Sendable (String) -> Void
 
     private(set) var lines: [String] = []
     private(set) var openCount = 0
@@ -36,7 +37,8 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
         cancelError: InlinePreviewTransportError? = nil,
         failMarksAfter: Int? = nil,
         commitReply: String = "ok committed 1",
-        commitError: InlinePreviewTransportError? = nil
+        commitError: InlinePreviewTransportError? = nil,
+        onSend: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.openThrows = openThrows
         self.beginReply = beginReply
@@ -50,6 +52,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
         self.failMarksAfter = failMarksAfter
         self.commitReply = commitReply
         self.commitError = commitError
+        self.onSend = onSend
     }
 
     func open() async throws {
@@ -59,6 +62,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
 
     func send(_ line: String) async throws -> String {
         lines.append(line)
+        onSend(line)
         if line.hasPrefix("begin") {
             if let beginError { throw beginError }
             return beginReply
@@ -75,7 +79,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
             if marksSeen > 1, let markReplyAfterFirst { return markReplyAfterFirst }
             return markReply
         }
-        if line.hasPrefix("commit") {
+        if line.hasPrefix("commit") || line.hasPrefix("seal") {
             if let commitError { throw commitError }
             return commitReply
         }

@@ -57,9 +57,31 @@ final class EposProbeInputController: IMKInputController {
     nonisolated(unsafe) private static var acquiredFromKeyboardLayout = false
     nonisolated(unsafe) private static var discarding = false
     nonisolated(unsafe) private static var nativeMarkInFlight = false
+    nonisolated(unsafe) private static var nativeCommitInFlight = false
     private var activated = false
 
 #if EPOS_CONTROLLER_TESTS
+    static func phraseCallbackStatesForTesting() -> [ProbeSessionOwnership.State] {
+        let controller = EposProbeInputController()
+        let policy = ProbeSessionOwnership(layoutSession: true, observation: .init(
+            selection: NSRange(location: 0, length: 0), marked: replacementRange, composition: .unreadable
+        ))!
+        lockedController = controller
+        session = policy
+        defer {
+            nativeCommitInFlight = false
+            lockedController = nil
+            session = nil
+        }
+        precondition(policy.finishNativeCommit(continuing: true))
+        nativeCommitInFlight = true
+        controller.commitComposition(nil)
+        let during = policy.state
+        nativeCommitInFlight = false
+        controller.commitComposition(nil)
+        return [during, policy.state]
+    }
+
     static func cachedReadbackStatesForTesting(_ readbacks: [String]) -> [ProbePreviewSafety.CompositionState] {
         var record = Composition(controller: nil, client: nil, bundleID: "test.host", connection: 1,
                                  range: NSRange(location: 0, length: 1), text: "E", textBeforeMark: "\n")
@@ -129,6 +151,7 @@ final class EposProbeInputController: IMKInputController {
     /// receiving session is the one holding it: a background app finalizing must
     /// not touch a composition live in another app.
     override func commitComposition(_ sender: Any!) {
+        if Self.nativeCommitInFlight, Self.lockedController === self { return }
 #if EPOS_SESSION_PROTOTYPE
         ProbeSessionPrototype.hostCallback(self, reason: "host-commit")
 #endif
@@ -418,7 +441,7 @@ final class EposProbeInputController: IMKInputController {
     /// unresolvable lock: Epos treats an `err` reply as proof `insertText` did not
     /// run and falls back to a guarded keystroke write, so every refusal here must
     /// precede the insert.
-    static func commit(_ replacement: String?, connection: UInt64) -> String {
+    static func commit(_ replacement: String?, connection: UInt64, continuing: Bool = false) -> String {
         let controller: EposProbeInputController
         let client: IMKTextInput & NSObjectProtocol
         switch lockedClient(connection: connection) {
@@ -437,13 +460,15 @@ final class EposProbeInputController: IMKInputController {
         guard policy.canOperate(observe(client, expected: composition)) else {
             return "err unsafe selection or composition before commit"
         }
-        guard policy.finishNativeCommit() else { return "err unsafe session is not ready for final commit" }
+        guard policy.finishNativeCommit(continuing: continuing) else { return "err unsafe session is not ready for final commit" }
         // Drop our record before native code: reentrant host callbacks must not
         // discard the composition while insertText is replacing it in place.
         let hadComposition = composition != nil
         composition = nil
         if acquiredFromKeyboardLayout { savedKeyboardSource = nil }
+        nativeCommitInFlight = true
         client.insertText(text, replacementRange: replacementRange)
+        nativeCommitInFlight = false
         let remaining = client.markedRange()
         if hadComposition, remaining.location != NSNotFound, remaining.length > 0 {
             // The call ran, so it is not safe to issue a second write. In
@@ -451,7 +476,10 @@ final class EposProbeInputController: IMKInputController {
             // ignore insertText and leave its preedit intact.
             return "ambiguous native commit left marked text"
         }
-        ProbeLog.write("commit len=\(text.count) connection=\(connection) client=\(describe(client))")
+        if continuing, !(session === policy && policy.didCommitPhrase(observe(client, expected: nil))) {
+            return "ambiguous native phrase commit lost session"
+        }
+        ProbeLog.write("commit continuing=\(continuing) len=\(text.count) connection=\(connection) client=\(describe(client))")
         return "ok committed \(text.count)"
     }
 

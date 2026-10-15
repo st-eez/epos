@@ -90,6 +90,14 @@ public struct TranscriptCanonicalizer: Sendable {
         CorrectionRuleMatcher.apply(specs, to: text)
     }
 
+    func canonicalizeSuffix(_ text: String, afterUTF16 offset: Int) -> CorrectionRuleMatchResult {
+        let result = CorrectionRuleMatcher.apply(specs, to: text, startingAt: offset)
+        return CorrectionRuleMatchResult(
+            output: (result.output as NSString).substring(from: offset),
+            appliedRecordIDs: result.appliedRecordIDs
+        )
+    }
+
     /// Canonical vocabulary to feed the recognizer as best-effort `AnalysisContext`
     /// bias. Yields each rule's canonical form once (de-duplicated, capped), skipping
     /// pure-symbol canonicals like `--` or `/` that carry no pronounceable token.

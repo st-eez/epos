@@ -230,6 +230,13 @@ final class ProbeCommandSocket {
             return EposProbeInputController.mark(argument, styled: true, connection: connection)
         case "markplain":
             return EposProbeInputController.mark(argument, styled: false, connection: connection)
+        case "commit64":
+            guard let data = Data(base64Encoded: argument), let text = String(data: data, encoding: .utf8) else {
+                return "err invalid commit encoding"
+            }
+            return EposProbeInputController.commit(text, connection: connection)
+        case "seal":
+            return EposProbeInputController.commit(argument, connection: connection, continuing: true)
         case "commit":
             return EposProbeInputController.commit(argument.isEmpty ? nil : argument, connection: connection)
         case "cancel":

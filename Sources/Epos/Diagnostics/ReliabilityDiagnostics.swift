@@ -128,7 +128,8 @@ public final class ReliabilityRecording: @unchecked Sendable {
         insertionResult: FinalInsertionResult,
         delivery: FinalInsertionDeliveryVerification,
         transcriptUTF16: Int,
-        imeCommit: Bool = false
+        imeCommit: Bool = false,
+        priorNativeCommit: Bool = false
     ) {
         let evidence: (
             outcome: ReliabilityOutcome,
@@ -157,12 +158,12 @@ public final class ReliabilityRecording: @unchecked Sendable {
         emit(
             recognizerFailed ? .recognizerFailed : evidence.outcome,
             transcriptUTF16: transcriptUTF16,
-            writeAttempted: evidence.writeAttempted,
+            writeAttempted: evidence.writeAttempted || priorNativeCommit,
             writeAccepted: evidence.writeAccepted,
             readbackAvailable: evidence.readbackAvailable,
             readbackMatched: evidence.readbackMatched,
-            imeCommit: imeCommit,
-            imeCommitAcknowledged: imeCommit
+            imeCommit: imeCommit || priorNativeCommit,
+            imeCommitAcknowledged: imeCommit || priorNativeCommit
         )
     }
 }

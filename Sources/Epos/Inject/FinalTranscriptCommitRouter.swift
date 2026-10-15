@@ -18,11 +18,17 @@ enum FinalTranscriptCommitRouter {
         latency: RecordingLatencyDiagnostics? = nil,
         settle: () async -> Void = { try? await Task.sleep(for: InlinePreviewSession.compositionSettleDelay) }
     ) async -> Route? {
-        guard let insertion, InlinePreviewSession.isCommittableText(transcript) else {
+        if await preview.hasAmbiguousPhraseCommit() {
+            insertion?.cancel()
+            return .imeAmbiguous
+        }
+        let hasPrefix = await preview.hasCommittedPrefix()
+        guard let insertion, hasPrefix || InlinePreviewSession.isCommittableText(transcript) else {
+            if hasPrefix { return .completed(.targetRefused, viaIME: true) }
             return nil
         }
         guard await preview.prepareFinalCommit() else {
-            if await preview.hasUnsafeTarget() {
+            if await preview.hasUnsafeTarget() || hasPrefix {
                 insertion.cancel()
                 return .completed(.targetRefused, viaIME: false)
             }
@@ -63,6 +69,10 @@ enum FinalTranscriptCommitRouter {
         insertion: FinalTranscriptInsertionSession, settle: () async -> Void
     ) async -> Route {
         await preview.discard()
+        if await preview.hasCommittedPrefix() {
+            insertion.cancel()
+            return .completed(.targetRefused, viaIME: true)
+        }
         guard await !preview.hasUnsafeTarget() else {
             insertion.cancel()
             return .completed(.targetRefused, viaIME: false)

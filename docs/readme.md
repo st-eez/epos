@@ -1,7 +1,7 @@
 # Epos documentation
 
-Epos is a macOS menu bar dictation app. Hold the configured shortcut to record, watch the provisional
-transcript, then release to deliver the cleaned final text to the captured field.
+Epos is a macOS menu bar dictation app. Hold the configured shortcut to record, watch confirmed phrases settle into the field while unfinished text remains
+provisional, then release to finish the remaining phrase.
 Apple Speech performs recognition on the device. The feature pages below describe
 the implementation in `Sources/` and its regression coverage in `Tests/`.
 The shortcut defaults to fn; the menu also lets you pin a microphone.
