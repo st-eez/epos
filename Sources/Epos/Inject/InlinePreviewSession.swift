@@ -60,9 +60,8 @@ actor InlinePreviewSession {
         case discarded
     }
 
-    /// Bounded ack window for the one `commit`. Wider than the transport's
-    /// default budget because a missing ack here is the worst outcome (an
-    /// ambiguous write), while a slow ack only delays finalization.
+    /// A fully sent commit can execute before its reply arrives. Keep its native
+    /// acknowledgment bounded, and suppress a second write after a timeout.
     static let commitAckTimeout: TimeInterval = 0.5
 
     /// The probe acks issuing an un-mark/discard, not the host app having drawn

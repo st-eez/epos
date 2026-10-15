@@ -22,6 +22,7 @@ final class InlinePreviewTransportTests: XCTestCase {
             case delayedReply
             /// Reply in one write, including malformed framing when requested.
             case reply(String)
+            case conversation([(reply: String, delay: TimeInterval)])
         }
 
         enum Failure: Error { case setup }
@@ -115,10 +116,16 @@ final class InlinePreviewTransportTests: XCTestCase {
             case .reply(let reply):
                 consumeCommand(connection)
                 writeReply(reply, to: connection)
+            case .conversation(let replies):
+                for (index, reply) in replies.enumerated() {
+                    consumeCommand(connection, notify: index == 0)
+                    Thread.sleep(forTimeInterval: reply.delay)
+                    writeReply(reply.reply, to: connection)
+                }
             }
         }
 
-        private func consumeCommand(_ connection: Int32) {
+        private func consumeCommand(_ connection: Int32, notify: Bool = true) {
             var buffer = [UInt8](repeating: 0, count: 4096)
             var received: [UInt8] = []
             while !received.contains(0x0A) {
@@ -127,7 +134,7 @@ final class InlinePreviewTransportTests: XCTestCase {
                 received.append(contentsOf: buffer[0..<count])
             }
             lock.withLock { commandBytes = received }
-            commandConsumed.fulfill()
+            if notify { commandConsumed.fulfill() }
         }
 
         private func writeReply(_ reply: String, to connection: Int32) {
@@ -151,6 +158,35 @@ final class InlinePreviewTransportTests: XCTestCase {
             lock.withLock { clientClosed = reachedEndOfStream }
             drainFinished.signal()
         }
+    }
+
+    func testNativeRepliesAfterObservedCodexLatencyKeepStreamingAndCommit() async throws {
+        let server = try ProbeSocketServer(behavior: .conversation([
+            ("ok locked com.test.app caret=100,200,1,20\n", 0.15),
+            ("ok marked 5 caret=140,200,1,20\n", 0.15),
+            ("ok committed 5\n", 0.15),
+            ("ok unlocked\n", 0)
+        ]))
+        defer { server.shutdown() }
+        let transport = UnixSocketInlinePreviewTransport(path: server.path)
+        let marked = expectation(description: "native preview acknowledged")
+        let session = InlinePreviewSession(transport: transport, bundleIdentifier: "com.test.app",
+                                           sleep: { _ in }, onFirstMarkRendered: { marked.fulfill() })
+        await session.begin()
+        let acquisition = await session.report()
+        XCTAssertTrue(acquisition.began)
+        guard acquisition.began else { await session.discard(); return }
+        await session.mark("hello")
+        await fulfillment(of: [marked], timeout: 3)
+        let prepared = await session.prepareFinalCommit()
+        XCTAssertTrue(prepared)
+        let result = await session.commitFinalTranscript("hello")
+        XCTAssertEqual(result, .committed)
+        await session.discard()
+        let report = await session.report()
+        XCTAssertEqual(report.marksSent, 1)
+        XCTAssertNil(report.failure)
+        XCTAssertFalse(report.cancelAcknowledged)
     }
 
     // MARK: - Tests

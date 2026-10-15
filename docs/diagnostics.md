@@ -27,7 +27,11 @@ window frame, and whether positioning used the input method, Accessibility, or
 the screen edge. Acquisition reports include socket attempts and the final native
 begin reply. Companion activation and deactivation include controller identities;
 begin records the live controller registry once per connection. These events
-contain geometry and lifecycle metadata, with no transcript text.
+contain geometry and lifecycle metadata, with no transcript text. Native command
+replies have a 500 ms budget. A Codex acquisition observed on October 15 took
+about 134 ms, exceeding the previous 75 ms budget despite successful activation.
+Increasing the deadline does not delay an earlier reply. Missing replies still
+close the channel and preserve the existing write-safety rules.
 
 The companion keeps its own log at `~/Library/Caches/EposProbe/probe.log`; inspect
 it when debugging marked text.

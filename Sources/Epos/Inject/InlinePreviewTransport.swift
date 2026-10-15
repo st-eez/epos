@@ -26,8 +26,8 @@ enum InlinePreviewTransportError: Error {
 protocol InlinePreviewTransport: Sendable {
     func open() async throws
     func send(_ line: String) async throws -> String
-    /// Same as `send`, with a wider bounded reply window. Used for the final
-    /// commit, whose acknowledgment decides between done and ambiguous.
+    /// Uses an explicit reply deadline. A fully sent final commit without an
+    /// acknowledgment remains ambiguous even after this deadline expires.
     func send(_ line: String, replyTimeout: TimeInterval) async throws -> String
     func close() async
 }
@@ -70,7 +70,7 @@ final class UnixSocketInlinePreviewTransport: InlinePreviewTransport, @unchecked
     /// Touched only on `queue`.
     private var descriptor: Int32 = -1
 
-    init(path: String = InlinePreviewSocket.defaultPath, timeout: TimeInterval = 0.075) {
+    init(path: String = InlinePreviewSocket.defaultPath, timeout: TimeInterval = 0.5) {
         self.path = path
         self.timeout = timeout
     }
