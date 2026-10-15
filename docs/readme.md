@@ -44,6 +44,7 @@ Search terms include common user wording and implementation names.
 | Launch at login and saved preferences | startup, preferences, autostart | [Settings](settings.md) |
 | Quit and menu status | tray icon, menu bar, exit | [Settings](settings.md#menu-actions) |
 | Diagnostic logs and transcript timing | debug logs, latency, trace | [Diagnostics](diagnostics.md#logs) |
+| Process memory while idle and across recordings | RAM, memory growth, resident bytes, physical footprint | [Memory diagnostics](diagnostics.md#process-memory) |
 | Recording stage durations and successful write timing | startup speed, first text, release latency, p95 | [Stage timing](diagnostics.md#stage-timing) |
 | Save audio samples and local evidence storage | WAV, recordings, dogfood samples | [Diagnostics](diagnostics.md#saved-audio-and-correction-evidence) |
 | Reliability audit, corpus labeling, confirmation, benchmarks | WER, accuracy, corpus quality | [Diagnostics](diagnostics.md#evaluation-tools) |

@@ -93,6 +93,7 @@ public final class AppCoordinator: ObservableObject {
     /// `AppCoordinatorSettings.swift` can log its own writes.
     let log: EposLogger
     private let includeTranscriptTextInDiagnostics: Bool
+    private var memoryDiagnostics: MemoryDiagnostics?
 
     // MARK: - Collaborators
     //
@@ -261,6 +262,14 @@ public final class AppCoordinator: ObservableObject {
             self.audio.inputDevicesDidChange()
         }
         if autoStart {
+            if MemoryDiagnostics.shouldRun() {
+                let memoryLog = EposLogger(category: "memory", diagnostics: diagnostics)
+                memoryDiagnostics = MemoryDiagnostics(
+                    state: { [weak self] in self?.state },
+                    emit: { message, recordingID in memoryLog.info(message, recordingID: recordingID) }
+                )
+                memoryDiagnostics?.start()
+            }
             bindHotkey()
             bindDebugDictationTriggerIfEnabled()
             // Bootstrap at launch, not on first menu-icon click. This used to hang
@@ -315,6 +324,7 @@ public final class AppCoordinator: ObservableObject {
         }
         didCompleteBootstrap = true
         log.info("bootstrap done format=\(String(describing: self.captureFormat))")
+        memoryDiagnostics?.record(.readiness)
         replayDeferredStartIfNeeded()
     }
 
@@ -334,6 +344,7 @@ public final class AppCoordinator: ObservableObject {
             self.log.info(
                 "readiness re-check: \(self.startBlocker?.logDescription ?? "capture format available")"
             )
+            self.memoryDiagnostics?.record(.readiness)
         }
         readinessRefreshTask = task
         return task
@@ -655,6 +666,7 @@ public final class AppCoordinator: ObservableObject {
             inlinePreviewMirroring = false
             finalizationPhase = .finalizingSpeech
             state = .idle
+            memoryDiagnostics?.record(.recordingComplete, recordingID: session.recordingID)
             replayDeferredStartIfNeeded()
             if let startNotice { flashStartUnavailableNotice(startNotice) }
         }

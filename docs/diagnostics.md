@@ -38,6 +38,29 @@ empty speech, target refusal, backend refusal, delivery mismatch, verified
 delivery, and accepted but unverified delivery have distinct outcomes. A fully
 sent IME commit without acknowledgment is explicitly ambiguous.
 
+## Process memory
+
+The normal app logs a `memory sample schema=1` event at launch, after readiness
+resolution, after each recording completes, and once per minute, including idle
+time. Events include `trigger`, the current coordinator `state`, `residentBytes`,
+and `physicalFootprintBytes`. Recording completion includes its recording ID.
+Both byte counts come from the kernel's `task_vm_info` for the Epos process.
+Resident memory and physical footprint are different measurements. Compare each
+series over time alongside the recording boundaries.
+The recording completion sample runs as the coordinator returns to idle. The
+completing session can still be retained by its callback at that instant. The
+later periodic idle samples establish memory use after that callback returns.
+
+A failed native query emits `outcome=unavailable` and `kernelReturn` without byte
+counts. An unavailable sample does not represent zero memory. Sampling stops
+when its owner is released and is suppressed in tests, evaluation processes, and
+when diagnostic logging is disabled. Events contain no transcript or target data.
+
+These samples can establish idle growth and whether recording cleanup changes
+memory use. They do not identify retained allocations or distinguish a leak from
+framework caching. Capture a live process profile if growth recurs. Epos does not
+restart itself or alter recording behavior in response to these measurements.
+
 ## Stage timing
 
 Each recording also emits metadata events such as
@@ -157,12 +180,16 @@ Source is [EposLogger](../Sources/Epos/Diagnostics/EposLogger.swift),
 [TranscriptTimingDiagnostics](../Sources/Epos/Diagnostics/TranscriptTimingDiagnostics.swift),
 [ReliabilityDiagnostics](../Sources/Epos/Diagnostics/ReliabilityDiagnostics.swift),
 [RecordingLatencyDiagnostics](../Sources/Epos/Diagnostics/RecordingLatencyDiagnostics.swift),
+[MemoryDiagnostics](../Sources/Epos/Diagnostics/MemoryDiagnostics.swift),
 [DogfoodTap](../Sources/Epos/Audio/DogfoodTap.swift), and
 [SignedApplePresetEvalHost](../Sources/EposMacApp/SignedApplePresetEvalHost.swift).
 
 [DiagnosticsSmokeTests](../Tests/EposTests/DiagnosticsSmokeTests.swift) and
 [ReliabilityDiagnosticsTests](../Tests/EposTests/ReliabilityDiagnosticsTests.swift)
 cover log defaults and outcomes.
+[MemoryDiagnosticsTests](../Tests/EposTests/MemoryDiagnosticsTests.swift) cover
+native sampling, unavailable measurements, runtime suppression, periodic state,
+and cancellation when the monitor is released.
 [RecordingLatencyDiagnosticsTests](../Tests/EposTests/RecordingLatencyDiagnosticsTests.swift)
 and [RecordingLatencyPipelineTests](../Tests/EposTests/RecordingLatencyPipelineTests.swift)
 use an injected monotonic clock to check stage boundaries, missing results,
