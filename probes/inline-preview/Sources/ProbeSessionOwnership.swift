@@ -21,7 +21,6 @@ final class ProbeSessionOwnership {
     private let baselineSelection: NSRange
     private let unavailable = NSRange(location: NSNotFound, length: NSNotFound)
     private let permitsUnavailableBaseline: Bool
-    private(set) var requiresUnicodeFinal = false
 
     convenience init?(controlledEmptyFixture: Bool, observation: Observation) {
         guard controlledEmptyFixture else { return nil }
@@ -71,7 +70,6 @@ final class ProbeSessionOwnership {
             retire("mark-moved")
             return false
         }
-        requiresUnicodeFinal = requiresUnicodeFinal || observation.composition == .unreadable
         expectedSelection = observation.selection
         state = .draft(observation.marked)
         return true
@@ -108,10 +106,10 @@ final class ProbeSessionOwnership {
         return true
     }
 
-    /// Production native commits require readable draft evidence. A direct
-    /// legacy commit can consume an owned draft without the cancel handshake.
+    /// The caller rechecks the owned selection, range and session before
+    /// consuming the composition in place, including hosts with unreadable text.
     func finishNativeCommit() -> Bool {
-        guard !requiresUnicodeFinal, state == .ready || isDraft else { return false }
+        guard state == .ready || isDraft else { return false }
         state = .finished
         return true
     }

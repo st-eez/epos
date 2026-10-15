@@ -43,6 +43,7 @@ final class EposProbeInputController: IMKInputController {
     nonisolated(unsafe) private static var session: ProbeSessionOwnership?
     nonisolated(unsafe) private static var barrier: ProbeInputBarrier?
     nonisolated(unsafe) private static var savedKeyboardSource: TISInputSource?
+    nonisolated(unsafe) private static var acquiredFromKeyboardLayout = false
     nonisolated(unsafe) private static var discarding = false
     nonisolated(unsafe) private static var nativeMarkInFlight = false
     private var activated = false
@@ -211,6 +212,7 @@ final class EposProbeInputController: IMKInputController {
         barrier = inputBarrier
         session = policy
         savedKeyboardSource = priorSource
+        acquiredFromKeyboardLayout = acquiredFromLayout
         lockedController = controller
         lockedInputClient = client
         lockedBundleID = client.bundleIdentifier() ?? ""
@@ -385,31 +387,28 @@ final class EposProbeInputController: IMKInputController {
             client = resolvedClient
         }
         guard let policy = session else { return "err unsafe preview session ended" }
-        if policy.requiresUnicodeFinal {
-            guard composition == nil, policy.canOperate(observe(client, expected: nil)), policy.finish() else {
-                return "err unsafe unreadable draft was not cancelled in its owned session"
-            }
-            // Finish before refusing the native insert. The app's authorized
-            // Unicode events then pass through without retiring mid-delivery.
-            return "err native commit unavailable for unreadable draft"
-        }
         let text = replacement ?? composition?.text ?? ""
         guard !text.isEmpty else { return "err nothing to commit" }
         if let current = composition, current.controller !== controller {
             return "err unsafe composition belongs to another client"
         }
-        guard ProbePreviewSafety.canWrite(
-            selectedRange: client.selectedRange(),
-            compositionState: liveCompositionState(of: client, expected: composition),
-            continuingComposition: composition != nil
-        ) else {
+        guard policy.canOperate(observe(client, expected: composition)) else {
             return "err unsafe selection or composition before commit"
         }
         guard policy.finishNativeCommit() else { return "err unsafe session is not ready for final commit" }
-        client.insertText(text, replacementRange: replacementRange)
-        // insertText consumed the composition in this client; drop the record
-        // without sending anything further.
+        // Drop our record before native code: reentrant host callbacks must not
+        // discard the composition while insertText is replacing it in place.
+        let hadComposition = composition != nil
         composition = nil
+        if acquiredFromKeyboardLayout { savedKeyboardSource = nil }
+        client.insertText(text, replacementRange: replacementRange)
+        let remaining = client.markedRange()
+        if hadComposition, remaining.location != NSNotFound, remaining.length > 0 {
+            // The call ran, so it is not safe to issue a second write. In
+            // particular, a newly launched Ghostty with no native event can
+            // ignore insertText and leave its preedit intact.
+            return "ambiguous native commit left marked text"
+        }
         ProbeLog.write("commit len=\(text.count) connection=\(connection) client=\(describe(client))")
         return "ok committed \(text.count)"
     }

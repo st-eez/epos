@@ -86,11 +86,66 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         }
     }
 
+    private final class ReadableTargetObserver: InsertionTargetObserver {
+        var value = "before hello there after"
+        var selection = InsertionTargetTextRange(location: 18, length: 0)
+        func captureBaseline() {}
+        func hasCapturedTarget() -> Bool { true }
+        func focusChangedSinceStart() -> Bool { false }
+        func observedValue() -> String? { value }
+        func observedSelectedRange() -> InsertionTargetTextRange? { selection }
+        func requiresTextContextValidation() -> Bool { true }
+        func baselineInsertionContext() -> InsertionTargetContext? { .init(prefix: "before ", suffix: " after") }
+        func targetApplicationBundleIdentifier() -> String? { "com.test.app" }
+        func targetWindowTitle() -> String? { nil }
+    }
+
+    func testReadablePreviewCommitsInPlaceWithoutClearingItsVisibleText() async {
+        let transport = ScriptedTransport()
+        let preview = await makeHealthyPreview(transport: transport)
+        let backend = RecordingBackend()
+        let target = ReadableTargetObserver()
+        let insertion = makeInsertion(backend: backend, observer: target)
+        let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+            transcript: Self.transcript, preview: preview, insertion: insertion, settle: {
+                XCTFail("an intact preview must not need a blank composition settlement")
+            }
+        )
+        await preview.discard()
+        XCTAssertEqual(route, .completed(.accepted, viaIME: true))
+        XCTAssertEqual(target.value, "before hello there after")
+        XCTAssertTrue(backend.inserted.isEmpty)
+        let lines = await transport.lines
+        XCTAssertFalse(lines.contains("cancel"))
+        XCTAssertEqual(lines.filter { $0.hasPrefix("commit ") }, ["commit \(Self.transcript)"])
+    }
+
+    func testInPlaceCommitStillRefusesEditsOutsidePreviewAndChangedCaret() async {
+        for change in ["prefix", "suffix", "caret"] {
+            let transport = ScriptedTransport()
+            let preview = await makeHealthyPreview(transport: transport)
+            let backend = RecordingBackend()
+            let target = ReadableTargetObserver()
+            if change == "prefix" { target.value = "changed hello there after" }
+            if change == "suffix" { target.value = "before hello there changed" }
+            if change == "caret" { target.selection = .init(location: 0, length: 0) }
+            let insertion = makeInsertion(backend: backend, observer: target)
+            let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+                transcript: Self.transcript, preview: preview, insertion: insertion, settle: {}
+            )
+            XCTAssertEqual(route, .completed(.targetRefused, viaIME: false), change)
+            let lines = await transport.lines
+            XCTAssertFalse(lines.contains { $0.hasPrefix("commit ") }, change)
+            XCTAssertTrue(backend.inserted.isEmpty, change)
+            await preview.discard()
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeInsertion(
         backend: RecordingBackend,
-        observer: OpaqueTargetObserver = OpaqueTargetObserver(),
+        observer: any InsertionTargetObserver = OpaqueTargetObserver(),
         latency: RecordingLatencyDiagnostics? = nil
     ) -> FinalTranscriptInsertionSession {
         FinalTranscriptInsertionSession(
@@ -122,6 +177,23 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
 
     // MARK: - Tests
 
+    func testStillMarkedNativeCommitIsAmbiguousAndNeverFallsBack() async {
+        let transport = ScriptedTransport(commitReply: "ambiguous native commit left marked text")
+        let preview = await makeHealthyPreview(transport: transport)
+        let backend = RecordingBackend()
+        let insertion = makeInsertion(backend: backend)
+        let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+            transcript: Self.transcript, preview: preview, insertion: insertion, settle: {}
+        )
+        await preview.discard()
+        XCTAssertEqual(route, .imeAmbiguous)
+        XCTAssertNil(insertion.insertedTranscript)
+        XCTAssertTrue(backend.inserted.isEmpty)
+        let lines = await transport.lines
+        XCTAssertFalse(lines.contains("cancel"))
+        XCTAssertEqual(lines.filter { $0.hasPrefix("commit ") }, ["commit \(Self.transcript)"])
+    }
+
     func testCommitTimingKeepsAcknowledgedAndAmbiguousResultsDistinct() async throws {
         for error in [nil, InlinePreviewTransportError.replyTimedOut] {
             let log = LatencyTestLog()
@@ -140,14 +212,14 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
                 settle: { clock.advance(.milliseconds(30)) }
             )
 
-            XCTAssertEqual(try log.row(.previewCancel)["durationMs"], "9.000")
-            XCTAssertEqual(try log.row(.baselineSettle)["durationMs"], "30.000")
+            XCTAssertFalse(try log.rows().contains { $0["stage"] == "preview-cancel" })
+            XCTAssertFalse(try log.rows().contains { $0["stage"] == "baseline-settle" })
             XCTAssertEqual(try log.row(.imeCommit)["durationMs"], "21.000")
             XCTAssertEqual(try log.row(.imeCommit)["outcome"], error == nil ? "completed" : "ambiguous")
             XCTAssertTrue(backend.inserted.isEmpty)
             if error == nil {
                 XCTAssertEqual(route, .completed(.accepted, viaIME: true))
-                XCTAssertEqual(try log.row(.releaseToWrite)["durationMs"], "60.000")
+                XCTAssertEqual(try log.row(.releaseToWrite)["durationMs"], "21.000")
             } else {
                 XCTAssertEqual(route, .imeAmbiguous)
                 XCTAssertFalse(try log.rows().contains { $0["stage"] == "release-to-write" })
@@ -156,10 +228,10 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
     }
 
     func testForeignCompositionDuringCancelBlocksBothDeliveryBackends() async {
-        let transport = ScriptedTransport(cancelReply: "err unsafe composition")
+        let transport = ScriptedTransport(commitReply: "err unavailable", cancelReply: "err unsafe composition")
         await refusesUnsafeTarget(transport: transport)
         let lines = await transport.lines
-        XCTAssertFalse(lines.contains { $0.hasPrefix("commit ") })
+        XCTAssertTrue(lines.contains { $0.hasPrefix("commit ") })
     }
 
     func testForeignCompositionBeforeCommitBlocksKeystrokeFallback() async {
@@ -225,7 +297,7 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         XCTAssertEqual(route, .completed(.targetRefused, viaIME: false))
         let lines = await transport.lines
         XCTAssertFalse(lines.contains { $0.hasPrefix("commit") })
-        XCTAssertTrue(lines.contains("cancel"))
+        XCTAssertFalse(lines.contains("cancel"))
         XCTAssertEqual(backend.inserted, [])
         XCTAssertEqual(backend.cancelCount, 1)
         XCTAssertNil(insertion.insertedTranscript)
@@ -274,7 +346,7 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
         // The composition was cancelled (acked) before the keystrokes landed.
         XCTAssertEqual(
             lines.filter { $0 == "cancel" || $0.hasPrefix("commit") },
-            ["cancel", "commit \(Self.transcript)"]
+            ["commit \(Self.transcript)", "cancel"]
         )
     }
 

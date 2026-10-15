@@ -1,25 +1,7 @@
 import Foundation
 
-/// Routes the one authoritative final write between the palette-IME commit and
-/// the keystroke backend, preserving `FinalTranscriptInsertionSession`'s
-/// exactly-once contract across both.
-///
-/// Single-commit under every interleaving:
-/// - The IME path is attempted only when the preview channel stayed healthy for
-///   the entire recording and the probe rendered at least one mark; anything
-///   less returns nil and the caller runs today's discard + guarded-keystroke
-///   path unchanged.
-/// - The composition is cancelled (with a positive ack) before the guard runs,
-///   because live marked text is part of the AX-readable value and would read
-///   as a user edit; the guard itself runs unchanged, before any commit.
-/// - An acked commit records the transcript on the insertion session and is the
-///   only write; no keystrokes follow.
-/// - A probe refusal or send-side failure proves the commit did not execute.
-///   Fallback re-runs the guard, and explicit target safety refusals block it.
-/// - An unacknowledged commit after a complete send is ambiguous: the write may
-///   have landed, so the insertion session is closed without claiming or
-///   attempting anything, and the caller reports the recording honestly rather
-///   than risking the transcript landing twice.
+/// Commits the owned native composition in place. A conclusive refusal can use
+/// guarded keystrokes after cleanup; a fully sent, unacknowledged commit cannot.
 @MainActor
 enum FinalTranscriptCommitRouter {
     enum Route: Equatable {
@@ -39,28 +21,17 @@ enum FinalTranscriptCommitRouter {
         guard let insertion, InlinePreviewSession.isCommittableText(transcript) else {
             return nil
         }
-        let cancelled = await preview.cancelCompositionForFinalCommit(latency: latency)
-        guard cancelled else {
+        guard let draft = await preview.prepareFinalCommit() else {
             if await preview.hasUnsafeTarget() {
                 insertion.cancel()
                 return .completed(.targetRefused, viaIME: false)
             }
             return nil
         }
-        // The probe acknowledged issuing the un-mark, not the host having drawn
-        // it. A readable target is polled until the fn-press baseline is back —
-        // the guard's own comparison, which subsumes any fixed delay and covers
-        // Chromium hosts that reflect the removal into their AX value late. An
-        // opaque target has nothing to poll, so it keeps the fixed settle the
-        // keystroke path uses after its discard.
-        latency?.begin(.baselineSettle)
-        let settledReadableBaseline = await insertion.settleReadableBaseline()
-        if !settledReadableBaseline {
-            await settle()
-        }
-        latency?.end(.baselineSettle)
-
-        switch insertion.authorizeFinalWrite(transcript) {
+        // A host can publish its AX value after acknowledging the native mark.
+        // Wait for that exact owned draft, keeping it visible throughout.
+        await insertion.settleReadableBaseline(replacingPreview: draft)
+        switch insertion.authorizeFinalWrite(transcript, replacingPreview: draft) {
         case .refused(let result):
             return .completed(result, viaIME: false)
         case .authorized:
@@ -79,14 +50,27 @@ enum FinalTranscriptCommitRouter {
             return .completed(.accepted, viaIME: true)
         case .refused:
             latency?.end(.imeCommit, outcome: .refused)
-            return .completed(insertion.insertFinalResult(transcript), viaIME: false)
+            return await fallback(transcript, preview: preview, insertion: insertion, settle: settle)
         case .unavailable:
             latency?.end(.imeCommit, outcome: .unavailable)
-            return .completed(insertion.insertFinalResult(transcript), viaIME: false)
+            return await fallback(transcript, preview: preview, insertion: insertion, settle: settle)
         case .ambiguous:
             latency?.end(.imeCommit, outcome: .ambiguous)
             insertion.cancel()
             return .imeAmbiguous
         }
+    }
+
+    private static func fallback(
+        _ transcript: String, preview: InlinePreviewSession,
+        insertion: FinalTranscriptInsertionSession, settle: () async -> Void
+    ) async -> Route {
+        await preview.discard()
+        guard await !preview.hasUnsafeTarget() else {
+            insertion.cancel()
+            return .completed(.targetRefused, viaIME: false)
+        }
+        if await !insertion.settleReadableBaseline() { await settle() }
+        return .completed(insertion.insertFinalResult(transcript), viaIME: false)
     }
 }

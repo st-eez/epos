@@ -14,8 +14,11 @@ in the captured application's field. Updates are coalesced to at most one per
 100 ms. If Epos is already your selected keyboard input method, the recording
 adopts it with its underlying layout and leaves it selected after cleanup or
 failure. Keeping Epos selected lets ordinary typing use that layout while its
-activated client is ready for native streaming. Otherwise Epos borrows the source
-for the hold and restores the prior source after teardown. A source you choose
+activated client is ready for native streaming. Otherwise Epos acquires the source for the hold. After a successful native
+commit acquired from a keyboard layout, it keeps Epos selected with that layout.
+This avoids switching back to ABC and showing the input-source indicator at
+release. Acquisition failures and borrowed input methods restore the prior source.
+A source you choose
 during dictation is retained. Selecting Epos alone does not start preview:
 the companion must acknowledge an activated client in the captured application.
 
@@ -53,8 +56,8 @@ client. Ordinary keyboard and mouse input retire the session and discard its
 owned draft synchronously before the event reaches the host. Source changes,
 focus loss, host callbacks, and connection loss also retire ownership. The pass
 cannot restart after retirement. An unreachable owner is refused instead of redirecting cleanup into a
-different field in the same application. Provisional text is discarded before
-either final delivery path authorizes a write. Marked text still requires
+different field in the same application. A healthy composition stays visible through its native final commit. A fallback
+write requires acknowledged cleanup first. Marked text still requires
 verification in each target app because rendering and teardown are host dependent.
 
 ## Final delivery
@@ -64,15 +67,30 @@ exposes an editable text context, it also requires the original value, caret, an
 selection. Opaque targets use process, window, and focus signature evidence. An absent or changed
 target refuses delivery. Epos does not restore focus or undo the user's edits.
 
-A healthy preview channel that acknowledged at least one mark can receive the
-final transcript through a single IME `insertText` when native draft readback is
-available. An unreadable native draft uses guarded Unicode events after
-acknowledged cancellation. Epos first cancels the marked
-composition, waits for the readable baseline to settle, and runs the same target
-guard as the keystroke path. Text containing a newline uses the keystroke path.
-Release waits for an outstanding preview reply, without waiting for the preview
-throttle interval. Baseline settlement happens once before final authorization;
-a conclusively refused first mark requires no settlement.
+A healthy preview channel that acknowledged at least one mark commits the final
+transcript through a single IME `insertText`, replacing its owned marked span in
+place. It does not clear the field first. Release waits for an outstanding preview
+reply, without waiting for the preview throttle interval. The target guard permits
+only the exact acknowledged draft between the original prefix and suffix, with
+an empty caret at its end. The companion rechecks the concrete client, selection,
+marked range and uninterrupted session immediately before committing. Hosts with
+unreadable draft strings use that native ownership evidence too.
+
+If the host leaves marked text after `insertText`, the result is ambiguous and
+Epos suppresses a second write. A native acknowledgement still establishes
+acceptance rather than independently verified delivery. Text containing a newline
+uses the keystroke path, as do unavailable preview channels. Those paths cancel
+owned marked text, wait for the readable baseline to settle, then run the original
+target guard. A conclusively refused first mark requires no settlement.
+
+Some Chromium hosts, including the current Codex app, expose the editor and its
+`AXFocused` flag while returning no value for `AXFocusedUIElement`. When that
+specific lookup returns no value, Epos searches only the frontmost application's
+focused window, bounded to 2,048 nodes and a 200 ms work budget with bounded IPC.
+It requires exactly one focused editable field and rechecks the application and
+window after the search. Later checks reuse that element only while the window
+and its positive focused flag remain unchanged. Missing or ambiguous focus still
+refuses delivery.
 
 A foreign composition or a changed selection detected after preview blocks both
 final delivery paths and shows `Not inserted`. Unconfirmed preview cleanup also
@@ -119,18 +137,21 @@ always refuse. Missing activation, an unavailable event barrier, or uncertain
 cleanup uses the HUD or refuses delivery as appropriate. This does not turn an
 unavailable range into proof of absence.
 
-Ghostty's native asynchronous `insertText` can acknowledge a call without
-producing terminal bytes. An unreadable draft therefore finishes with the
-existing guarded Unicode backend after the companion cancels its preedit.
+Ghostty's `insertText` consumes the preedit and delivers committed text without a
+separate preview-clear command. Its current implementation also requires a prior
+native event. A newly launched background fixture can therefore acknowledge the
+call without receiving bytes. The companion checks that the marked span was
+consumed; a still-marked result is ambiguous and cannot trigger a second write.
+Actual terminal bytes still require a live check.
 No Ghostty patch, synthetic wake key, clipboard, corrective backspaces, or external
 service is used. Switching the source only at fn press did not activate Ghostty
 in the October 9 installed hold. Epos can adopt a source selected before dictation;
 its actual client activation still gates every draft.
 
-The redesign is authored and under verification. Direct Ghostty streaming,
-revised drafts, zero-byte cancellation, one final payload, interruption, and
-keyboard-source restoration need an installed app check before replacement
-readiness can be claimed. Concurrent additive input methods remain a limit.
+Steve confirmed live Ghostty streaming on October 15 after enabling the input
+source. The subsequent in-place commit and source-retention changes still need
+installed-app checks for visible continuity, one final payload, interruption and
+ordinary typing before replacement readiness can be claimed. Concurrent additive input methods remain a limit.
 
 Earlier observations are retained in the [feasibility record](../specs/inline-preview-feasibility.md)
 and [session prototype](../specs/preview-session-prototype.md). July 31 dogfood
@@ -228,12 +249,13 @@ Implementation lives in
 attempts to expose Electron's focused accessibility tree.
 
 Tests cover [target guards](../Tests/EposTests/InsertionTargetGuardTests.swift),
+[focus fallback](../Tests/EposTests/FocusedElementSearchTests.swift),
 [focus signatures](../Tests/EposTests/InsertionTargetFocusSignatureTests.swift),
 [Ghostty terminal delivery](../Tests/EposTests/GhosttyInsertionTargetTests.swift),
 [preview lifecycle](../Tests/EposTests/InlinePreviewSessionTests.swift),
 [native activation ordering](../Tests/EposTests/InlinePreviewAcquisitionTests.swift),
 [keyboard-source restoration](../Tests/EposTests/PreviewKeyboardSourceTests.swift),
-[release without throttle delay](../Tests/EposTests/InlinePreviewFinalCancellationTests.swift),
+[release without throttle delay](../Tests/EposTests/InlinePreviewFinalPreparationTests.swift),
 [single baseline settlement](../Tests/EposTests/InlinePreviewSettlementTests.swift),
 [empty preview updates](../Tests/EposTests/InlinePreviewEmptyTests.swift),
 [preview callback isolation](../Tests/EposTests/InlinePreviewCoordinatorTests.swift),

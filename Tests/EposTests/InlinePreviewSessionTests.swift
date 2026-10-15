@@ -338,46 +338,45 @@ final class InlinePreviewSessionTests: XCTestCase {
         return session
     }
 
-    func testFinalCommitSendsCancelThenCommitAndDiscardAddsNoSecondCancel() async {
+    func testFinalCommitPreservesDraftAndDiscardDoesNotCancel() async {
         let transport = FakeInlinePreviewTransport(commitReply: "ok committed 12")
         let gate = Gate()
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
         let eligible = await session.isEligibleForFinalCommit()
         XCTAssertTrue(eligible)
-        let cancelled = await session.cancelCompositionForFinalCommit()
-        XCTAssertTrue(cancelled)
+        let cancelled = await session.prepareFinalCommit()
+        XCTAssertEqual(cancelled, "hello there")
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .committed)
         await session.discard()
 
         await Self.waitForLines(
-            [Self.begin, "mark hello there", "cancel", "commit Hello there.", "end"],
+            [Self.begin, "mark hello there", "commit Hello there.", "end"],
             from: transport
         )
         let report = await session.report()
         XCTAssertTrue(report.committed)
-        XCTAssertTrue(report.cancelAcknowledged)
+        XCTAssertFalse(report.cancelAcknowledged)
         XCTAssertNil(report.failure)
         let timeouts = await transport.replyTimeouts
         XCTAssertEqual(timeouts, [InlinePreviewSession.commitAckTimeout])
     }
 
-    func testProbeRefusedCommitIsSafeAndDiscardOnlyReleasesTheLock() async {
+    func testProbeRefusedCommitCancelsTheDraftBeforeReleasingTheLock() async {
         let transport = FakeInlinePreviewTransport(commitReply: "err locked session gone")
         let gate = Gate()
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
-        let cancelled = await session.cancelCompositionForFinalCommit()
-        XCTAssertTrue(cancelled)
+        let cancelled = await session.prepareFinalCommit()
+        XCTAssertEqual(cancelled, "hello there")
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .refused)
         await session.discard()
 
-        // The composition was already cancelled with an ack, so the discard must
-        // not send a second cancel; it only releases the probe's focus lock.
+        // A conclusive commit refusal leaves the owned draft to discard.
         await Self.waitForLines(
-            [Self.begin, "mark hello there", "cancel", "commit Hello there.", "end"],
+            [Self.begin, "mark hello there", "commit Hello there.", "cancel", "end"],
             from: transport
         )
         let report = await session.report()
@@ -390,8 +389,8 @@ final class InlinePreviewSessionTests: XCTestCase {
         let gate = Gate()
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
-        let cancelled = await session.cancelCompositionForFinalCommit()
-        XCTAssertTrue(cancelled)
+        let cancelled = await session.prepareFinalCommit()
+        XCTAssertEqual(cancelled, "hello there")
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .ambiguous)
 
@@ -401,7 +400,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         await session.discard()
 
         await Self.waitForLines(
-            [Self.begin, "mark hello there", "cancel", "commit Hello there.", "end"],
+            [Self.begin, "mark hello there", "commit Hello there.", "end"],
             from: transport
         )
         let report = await session.report()
@@ -414,8 +413,8 @@ final class InlinePreviewSessionTests: XCTestCase {
         let gate = Gate()
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
-        let cancelled = await session.cancelCompositionForFinalCommit()
-        XCTAssertTrue(cancelled)
+        let cancelled = await session.prepareFinalCommit()
+        XCTAssertEqual(cancelled, "hello there")
         let outcome = await session.commitFinalTranscript("Hello there.")
 
         // The commit was fully written before the probe died, so it may have
@@ -430,8 +429,8 @@ final class InlinePreviewSessionTests: XCTestCase {
         let gate = Gate()
         let session = await makeMarkedSession(transport: transport, gate: gate)
 
-        let cancelled = await session.cancelCompositionForFinalCommit()
-        XCTAssertTrue(cancelled)
+        let cancelled = await session.prepareFinalCommit()
+        XCTAssertEqual(cancelled, "hello there")
         let outcome = await session.commitFinalTranscript("Hello there.")
 
         XCTAssertEqual(outcome, .refused)
@@ -447,8 +446,8 @@ final class InlinePreviewSessionTests: XCTestCase {
 
         let eligible = await session.isEligibleForFinalCommit()
         XCTAssertFalse(eligible)
-        let cancelled = await session.cancelCompositionForFinalCommit()
-        XCTAssertFalse(cancelled)
+        let cancelled = await session.prepareFinalCommit()
+        XCTAssertNil(cancelled)
         let outcome = await session.commitFinalTranscript("Hello there.")
         XCTAssertEqual(outcome, .unavailable)
         await Self.waitForLines([Self.begin], from: transport)
@@ -768,7 +767,7 @@ final class InlinePreviewSessionTests: XCTestCase {
         XCTAssertEqual(backend.inserted, [])
         XCTAssertEqual(insertion.insertedTranscript, "Hello there.")
         await Self.waitForLines(
-            [Self.begin, "mark hello there", "cancel", "commit Hello there.", "end"],
+            [Self.begin, "mark hello there", "commit Hello there.", "end"],
             from: transport
         )
     }

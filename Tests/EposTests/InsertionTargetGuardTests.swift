@@ -5,6 +5,18 @@ import XCTest
 /// trust explicitly: the same refusal means two different things depending on it,
 /// and the xctest host's own trust varies by machine.
 final class InsertionTargetGuardTests: XCTestCase {
+    func testPreviewContextUsesUTF16CaretAndPreservesSurroundingText() {
+        let context = InsertionTargetContext(prefix: "🇨🇦 ", suffix: " suffix")
+        let draft = "café 👩🏽‍💻"
+        let value = context.prefix + draft + context.suffix
+        let caret = InsertionTargetTextRange(location: context.prefix.utf16.count + draft.utf16.count, length: 0)
+        XCTAssertTrue(context.matchesBaseline(value: value, selectedRange: caret, replacingPreview: draft))
+        XCTAssertFalse(context.matchesBaseline(value: value, selectedRange: .init(location: value.count, length: 0), replacingPreview: draft))
+        XCTAssertFalse(context.matchesBaseline(value: value + "edited", selectedRange: caret, replacingPreview: draft))
+        let selection = InsertionTargetContext(prefix: context.prefix, selectedText: "selected", suffix: context.suffix)
+        XCTAssertFalse(selection.matchesBaseline(value: value, selectedRange: caret, replacingPreview: draft))
+    }
+
     /// With Accessibility revoked the baseline is empty and every AX read fails, so
     /// the guard refuses for a reason that has nothing to do with focus. The only
     /// check that can name it — the keystroke backend's own trust read — sits

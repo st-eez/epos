@@ -1,10 +1,10 @@
 import XCTest
 @testable import Epos
 
-final class InlinePreviewFinalCancellationTests: XCTestCase {
+final class InlinePreviewFinalPreparationTests: XCTestCase {
     private static let begin = "begin com.test.app"
 
-    func testFinalCancellationDoesNotWaitForAcknowledgedMarkThrottle() async {
+    func testFinalPreparationDoesNotWaitForAcknowledgedMarkThrottle() async {
         let throttleEntered = expectation(description: "acknowledged mark entered its throttle")
         let throttle = SuspensionGate(entered: throttleEntered)
         let transport = FakeInlinePreviewTransport()
@@ -18,9 +18,9 @@ final class InlinePreviewFinalCancellationTests: XCTestCase {
         await fulfillment(of: [throttleEntered], timeout: 1)
         await preview.mark("queued revision")
 
-        let cancellationFinished = expectation(description: "cancel finished with throttle still closed")
+        let cancellationFinished = expectation(description: "preparation finished with throttle still closed")
         let cancellation = Task {
-            let cancelled = await preview.cancelCompositionForFinalCommit()
+            let cancelled = await preview.prepareFinalCommit()
             cancellationFinished.fulfill()
             return cancelled
         }
@@ -28,20 +28,20 @@ final class InlinePreviewFinalCancellationTests: XCTestCase {
         // Release even on failure so the regression cannot strand its task.
         await throttle.open()
         let cancelled = await cancellation.value
-        XCTAssertTrue(cancelled)
+        XCTAssertEqual(cancelled, "first")
         await preview.mark("late revision")
         let outcome = await preview.commitFinalTranscript("Final text.")
         XCTAssertEqual(outcome, .committed)
         await preview.discard()
         let lines = await transport.lines
-        XCTAssertEqual(lines, [Self.begin, "mark first", "cancel", "commit Final text.", "end"])
+        XCTAssertEqual(lines, [Self.begin, "mark first", "commit Final text.", "end"])
     }
 
-    func testFinalCancellationWaitsForPendingMarkReply() async {
+    func testFinalPreparationWaitsForPendingMarkReply() async {
         await checkPendingMarkReply("ok marked", expectedCancellation: true)
     }
 
-    func testFinalCancellationPreservesPendingMarkSafetyRefusal() async {
+    func testFinalPreparationPreservesPendingMarkSafetyRefusal() async {
         await checkPendingMarkReply("err unsafe unmarked composition", expectedCancellation: false)
     }
 
@@ -50,7 +50,7 @@ final class InlinePreviewFinalCancellationTests: XCTestCase {
         let throttle = SuspensionGate(entered: throttleEntered)
         let secondMarkSent = expectation(description: "second mark is awaiting its reply")
         let transport = SuspendedMarkTransport(secondMarkSent: secondMarkSent)
-        let cancellationStarted = expectation(description: "final cancellation stopped marking")
+        let cancellationStarted = expectation(description: "final preparation stopped marking")
         let preview = InlinePreviewSession(
             transport: transport,
             bundleIdentifier: "com.test.app",
@@ -66,7 +66,7 @@ final class InlinePreviewFinalCancellationTests: XCTestCase {
         await throttle.open()
         await fulfillment(of: [secondMarkSent], timeout: 1)
 
-        let cancellation = Task { await preview.cancelCompositionForFinalCommit() }
+        let cancellation = Task { await preview.prepareFinalCommit() }
         await fulfillment(of: [cancellationStarted], timeout: 1)
         await preview.mark("late revision")
         let linesBeforeReply = await transport.lines
@@ -74,13 +74,13 @@ final class InlinePreviewFinalCancellationTests: XCTestCase {
         await transport.replyToSecondMark(reply)
 
         let cancelled = await cancellation.value
-        XCTAssertEqual(cancelled, expectedCancellation)
+        XCTAssertEqual(cancelled, expectedCancellation ? "second" : nil)
         let unsafe = await preview.hasUnsafeTarget()
         XCTAssertEqual(unsafe, !expectedCancellation)
         let linesAfterReply = await transport.lines
         XCTAssertEqual(
             linesAfterReply,
-            [Self.begin, "mark first", "mark second"] + (expectedCancellation ? ["cancel"] : [])
+            [Self.begin, "mark first", "mark second"]
         )
         if !expectedCancellation {
             let outcome = await preview.commitFinalTranscript("Final text.")

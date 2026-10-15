@@ -4,8 +4,7 @@ import Foundation
 /// application, mirroring the volatile transcript into it, discarding it, and
 /// emitting the per-recording outcome line.
 ///
-/// Preview only — the marked text is always gone before the one authoritative
-/// write. The session it holds is handed to `FinalTranscriptCommitRouter` for the
+/// The session is handed to `FinalTranscriptCommitRouter` for an in-place
 /// IME-commit attempt, which is why `session` is readable from outside.
 @MainActor
 final class InlinePreviewCoordinator {
@@ -171,12 +170,12 @@ final class InlinePreviewCoordinator {
         log.info(report.logLine)
         self.session = nil
         discard = nil
-        releaseKeyboardSource()
+        releaseKeyboardSource(keepingSelected: report.commitMayHaveExecuted)
         return compositionMayLinger
     }
 
-    private func releaseKeyboardSource() {
-        keyboardSource?.release()
+    private func releaseKeyboardSource(keepingSelected: Bool = false) {
+        keyboardSource?.release(keepingSelected: keepingSelected)
         keyboardSource = nil
     }
 }

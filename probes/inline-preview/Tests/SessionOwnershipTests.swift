@@ -75,6 +75,7 @@ enum SessionOwnershipTests {
         deferredShortcutPreservesFinal()
         productionAcquisition()
         uninterruptedLifecycle()
+        commitsOwnedDraftInPlace()
         for (name, key, code) in [("typing", "x", UInt16(7)), ("backspace", "\u{7f}", UInt16(51)),
                                  ("caret", String(UnicodeScalar(NSLeftArrowFunctionKey)!), UInt16(123))] {
             interruptedKey(name, key: key, code: code)
@@ -197,15 +198,13 @@ enum SessionOwnershipTests {
                      "acquisition accepted arbitrary unreadable marked metadata")
         let marked = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .unreadable)
         precondition(acquired.didMark(marked, utf16Length: 5))
-        precondition(acquired.requiresUnicodeFinal && !acquired.finishNativeCommit(),
-                     "unreadable draft was eligible for native final insertion")
-        precondition(acquired.didDiscard(unknown))
-        precondition(acquired.requiresUnicodeFinal && !acquired.finishNativeCommit(),
-                     "cancellation erased unreadable draft delivery policy")
+        precondition(acquired.canOperate(marked) && acquired.finishNativeCommit(),
+                     "owned unreadable draft could not be committed in place")
+        precondition(!acquired.finishNativeCommit(), "native commit repeated its final insertion")
         let absent = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 0), composition: .absent)
         let readable = ProbeSessionOwnership(layoutSession: false, observation: absent)!
         let owned = ProbeSessionOwnership.Observation(selection: caret, marked: NSRange(location: 0, length: 5), composition: .owned)
-        precondition(readable.didMark(owned, utf16Length: 5) && !readable.requiresUnicodeFinal)
+        precondition(readable.didMark(owned, utf16Length: 5))
         precondition(readable.didDiscard(absent) && readable.finishNativeCommit())
         precondition(!readable.finishNativeCommit(), "native commit repeated its final insertion")
     }
@@ -223,6 +222,19 @@ enum SessionOwnershipTests {
         precondition(!fixture.final())
         precondition(!fixture.mark("duplicate"))
         precondition(fixture.view.string == "prefix English final suffix")
+    }
+
+    @MainActor
+    private static func commitsOwnedDraftInPlace() {
+        let fixture = Fixture()
+        precondition(fixture.mark("English draft"))
+        precondition(fixture.policy.canOperate(fixture.observation))
+        precondition(fixture.policy.finishNativeCommit())
+        fixture.view.insertText("English final ", replacementRange: unavailable)
+        precondition(fixture.view.string == "prefix English final suffix")
+        precondition(!fixture.view.hasMarkedText())
+        precondition(fixture.operations == ["mark"], "native finalization discarded the visible draft")
+        precondition(!fixture.policy.finishNativeCommit(), "native finalization repeated its write")
     }
 
     @MainActor

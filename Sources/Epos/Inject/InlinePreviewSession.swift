@@ -12,6 +12,7 @@ struct InlinePreviewReport: Equatable, Sendable {
     var marksSent: Int
     var cancelAcknowledged: Bool
     var committed: Bool
+    var commitMayHaveExecuted: Bool
     var failure: String?
 
     var logLine: String {
@@ -42,17 +43,9 @@ enum InlinePreviewCommitOutcome: Equatable, Sendable {
 /// Mirrors the volatile transcript into the fn-press application as input-method
 /// marked text, for one recording.
 ///
-/// Marked text is preview only; the composition is always dropped before any
-/// write. The one exception to "never commit" is the explicit final handshake
-/// (`cancelCompositionForFinalCommit` + `commitFinalTranscript`), which
-/// `FinalTranscriptCommitRouter` drives only after the shared insertion guard
-/// authorized the write — and which itself starts by dropping the composition.
-/// On the ordinary path `discard()` drops the composition and releases the
-/// probe's focus lock, and the coordinator awaits it before the authoritative
-/// guarded keystroke write, so preview and write can never both land.
-///
-/// Every failure — probe absent, focus lock refused, timeout — degrades to
-/// HUD-only for the rest of the recording instead of propagating.
+/// The healthy final path commits its owned composition in place. Unavailable
+/// preview paths discard it before the guarded keystroke fallback. Unknown
+/// commit outcomes suppress both a second write and further composition edits.
 actor InlinePreviewSession {
     private enum Phase {
         /// `begin` has not resolved yet; marks accumulate but are not sent.
@@ -106,6 +99,7 @@ actor InlinePreviewSession {
     private var cancelAcknowledged = false
     private var compositionCancelled = false
     private var committed = false
+    private var commitMayHaveExecuted = false
     private var failure: String?
     private var unsafeTarget = false
 
@@ -208,16 +202,15 @@ actor InlinePreviewSession {
     /// never came back.
     func discard() async {
         guard phase != .discarded else { return }
-        // After an acked composition cancel there is nothing left to un-mark,
-        // so the final-commit paths (committed, refused, ambiguous) never send
-        // a second `cancel`. `end` only releases the probe's focus lock and can
-        // never touch text, so it is safe even after an ambiguous commit.
+        // A native commit may already have consumed the draft. Never cancel it
+        // after a committed or ambiguous result. A conclusive refusal still
+        // needs owned cleanup before the fallback can write.
         transition(to: .discarded)
         pendingMark = nil
         // Consume a pending begin, mark, or preview-clear reply so its safety refusal
         // cannot arrive after the coordinator has authorized a fallback write.
         await awaitSafetyReply()
-        let shouldCancel = didAttemptMark && !compositionCancelled
+        let shouldCancel = didAttemptMark && !compositionCancelled && !commitMayHaveExecuted
         let shouldEnd = began
 
         if shouldCancel {
@@ -254,78 +247,44 @@ actor InlinePreviewSession {
     /// remains unsafe for either final delivery backend.
     func hasUnsafeTarget() -> Bool { unsafeTarget }
 
-    /// Step 1 of the final IME commit: drop the composition while keeping the
-    /// channel and the probe's focus lock open. The insertion guard must verify
-    /// a field that reads exactly as it did at fn press, and live marked text is
-    /// part of the AX-readable value, so it has to be gone before the guard runs.
-    /// Returns true only on a positive ack. Unconfirmed cleanup blocks both
-    /// final backends because a composition may still occupy the field.
-    func cancelCompositionForFinalCommit(latency: RecordingLatencyDiagnostics? = nil) async -> Bool {
-        guard isEligibleForFinalCommit() else { return false }
-        latency?.begin(.previewCancel)
-        var outcome = RecordingLatencyDiagnostics.Outcome.failed
-        defer { latency?.end(.previewCancel, outcome: outcome) }
+    /// Stops new marks and waits only for the pending native reply. Keep the
+    /// acknowledged composition visible while the target guard authorizes it.
+    func prepareFinalCommit() async -> String? {
+        guard isEligibleForFinalCommit() else { return nil }
         transition(to: .committing)
         pendingMark = nil
-        // Reply alignment is load-bearing: the transport pairs each request
-        // with the next reply line, so an in-flight mark must consume its reply
-        // before this cancel — and the commit after it — can trust theirs.
-        // `committing` stops new marks. Consume only a pending safety reply.
-        // An acknowledged mark's throttle sleep cannot affect reply alignment.
-        // A mark that fails in flight degrades and aborts here.
         await awaitSafetyReply()
-        guard phase == .committing else { return false }
-        guard !unsafeTarget else {
-            outcome = .refused
-            degrade("unsafeTarget")
-            return false
-        }
-        do {
-            let reply = try await transport.send("cancel")
-            if recordUnsafeTarget(reply) {
-                outcome = .refused
-                degrade("unsafeTarget")
-                return false
-            }
-            guard reply.hasPrefix("ok") else {
-                outcome = .refused
-                unsafeTarget = true
-                degrade("commitCancelRefused")
-                return false
-            }
-            cancelAcknowledged = true
-            compositionCancelled = true
-            outcome = .completed
-            return true
-        } catch {
-            unsafeTarget = true
-            degrade("commitCancelFailed")
-            return false
-        }
+        guard phase == .committing, !unsafeTarget, !compositionCancelled,
+              let lastSentMark, !lastSentMark.isEmpty else { return nil }
+        return lastSentMark
     }
 
     /// Step 2: sends the authoritative transcript as one `commit`, which the
     /// probe executes as a single atomic `insertText` at the caret.
     func commitFinalTranscript(_ text: String) async -> InlinePreviewCommitOutcome {
         guard !unsafeTarget else { return .targetUnsafe }
-        guard phase == .committing, compositionCancelled,
+        guard phase == .committing, !compositionCancelled, !commitMayHaveExecuted,
               Self.isCommittableText(text) else {
             return .unavailable
         }
+        commitMayHaveExecuted = true
         do {
             let reply = try await transport.send(
                 "commit \(text)",
                 replyTimeout: Self.commitAckTimeout
             )
             if recordUnsafeTarget(reply) {
+                commitMayHaveExecuted = false
                 degrade("unsafeTarget")
                 return .targetUnsafe
             }
             if reply.hasPrefix("ok committed") {
                 committed = true
+                commitMayHaveExecuted = true
                 return .committed
             }
             if reply.hasPrefix("err") {
+                commitMayHaveExecuted = false
                 // The probe replies `err` only from paths that precede
                 // `insertText`, so a refusal proves the commit did not land.
                 degrade("commitRefused")
@@ -334,24 +293,29 @@ actor InlinePreviewSession {
             // Any other reply means the request/reply pairing can no longer be
             // trusted; the commit may still execute.
             degrade("commitReplyUnexpected")
+            commitMayHaveExecuted = true
             return .ambiguous
         } catch InlinePreviewTransportError.replyTimedOut {
             // Fully sent, no ack: the probe may have executed it. The caller
             // must not fall back to keystrokes — the transcript could land twice.
             degrade("commitAckTimeout")
+            commitMayHaveExecuted = true
             return .ambiguous
         } catch InlinePreviewTransportError.replyPeerClosed {
             // Fully sent, then the probe hung up. It may have inserted the text
             // before dying, so this is ambiguous on exactly the same terms as a
             // missing ack; only the recorded reason differs.
             degrade("commitPeerClosed")
+            commitMayHaveExecuted = true
             return .ambiguous
         } catch InlinePreviewTransportError.replyMalformed {
             degrade("commitReplyMalformed")
+            commitMayHaveExecuted = true
             return .ambiguous
         } catch {
             // Send-side failure: the newline terminator never reached the
             // probe, so the commit line was never parsed, let alone executed.
+            commitMayHaveExecuted = false
             degrade("commitSendFailed")
             return .refused
         }
@@ -366,6 +330,7 @@ actor InlinePreviewSession {
             marksSent: marksSent,
             cancelAcknowledged: cancelAcknowledged,
             committed: committed,
+            commitMayHaveExecuted: commitMayHaveExecuted,
             failure: failure
         )
     }

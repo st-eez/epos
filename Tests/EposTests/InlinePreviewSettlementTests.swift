@@ -95,7 +95,6 @@ final class InlinePreviewSettlementTests: XCTestCase {
 
         XCTAssertEqual(route, .completed(.accepted, viaIME: false))
         XCTAssertEqual(backend.inserted, ["Final text."])
-        XCTAssertEqual(try log.rows().filter { $0["stage"] == "baseline-settle" }.count, 1)
         XCTAssertFalse(try log.rows().contains { $0["stage"] == "composition-settle" })
         let lines = await transport.lines
         XCTAssertEqual(lines.filter { $0 == "cancel" }, ["cancel"])

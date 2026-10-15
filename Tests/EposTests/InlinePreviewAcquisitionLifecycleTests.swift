@@ -12,11 +12,20 @@ final class InlinePreviewAcquisitionLifecycleTests: XCTestCase {
         try await checkCapturedTargetAcquisition(moveField: false)
     }
 
-    private func checkCapturedTargetAcquisition(moveField: Bool) async throws {
+    func testStillMarkedCommitNeitherRetriesNorClearsAndKeepsAcquiredSource() async throws {
+        try await checkCapturedTargetAcquisition(
+            moveField: false, commitReply: "ambiguous native commit left marked text"
+        )
+    }
+
+    private func checkCapturedTargetAcquisition(moveField: Bool, commitReply: String = "ok committed") async throws {
         let waiting = expectation(description: "native activation awaiting acknowledgment")
         let recorder = AcquisitionEventRecorder()
-        let transport = LifecycleAcquisitionTransport(recorder: recorder, waiting: waiting, pendingOnce: true)
-        let restored = expectation(description: "borrowed keyboard source restored")
+        let transport = LifecycleAcquisitionTransport(
+            recorder: recorder, waiting: waiting, pendingOnce: true, commitReply: commitReply
+        )
+        let restored = expectation(description: "borrowed keyboard source restored on failure")
+        restored.isInverted = !moveField
         let access = LifecycleKeyboardAccess(recorder: recorder, restored: restored)
         let target = AcquisitionTargetObserver()
         let backend = RecordingInsertionBackend()
@@ -52,6 +61,7 @@ final class InlinePreviewAcquisitionLifecycleTests: XCTestCase {
             await waitUntil { await transport.lines.contains("mark queued draft") }
             XCTAssertEqual(access.current, PreviewKeyboardSource.companionIdentifier)
             XCTAssertEqual(target.focusReads, 1, "the captured target must be checked before the first draft")
+            target.value = "queued draft"
         }
         let acquiredLines = await transport.lines
         XCTAssertEqual(acquiredLines.first,
@@ -60,11 +70,12 @@ final class InlinePreviewAcquisitionLifecycleTests: XCTestCase {
         let task = recording.task
         recording.release()
         await task?.value
-        if !moveField { await fulfillment(of: [restored], timeout: 1) }
+        if !moveField { await fulfillment(of: [restored], timeout: 0.1) }
         XCTAssertEqual(backend.inserted, [])
         let completedLines = await transport.lines
         XCTAssertEqual(completedLines.filter { $0.hasPrefix("commit ") }, moveField ? [] : ["commit queued draft"])
-        XCTAssertEqual(access.current, "com.test.layout")
+        if !moveField { XCTAssertFalse(completedLines.contains("cancel")) }
+        XCTAssertEqual(access.current, moveField ? "com.test.layout" : PreviewKeyboardSource.companionIdentifier)
     }
 
     func testFailedAcquisitionClosesBeforeRestoringSourceDuringTheHold() async throws {
@@ -284,6 +295,7 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
     private let beginError: InlinePreviewTransportError?
     private let markError: InlinePreviewTransportError?
     private let markReply: String
+    private let commitReply: String
     private var beginCount = 0
     private var beginWaiter: CheckedContinuation<Void, Never>?
     private(set) var lines: [String] = []
@@ -292,7 +304,7 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
         recorder: AcquisitionEventRecorder, waiting: XCTestExpectation? = nil,
         pendingOnce: Bool = false, openFails: Bool = false, beginReply: String = "ok locked",
         beginError: InlinePreviewTransportError? = nil, markError: InlinePreviewTransportError? = nil,
-        markReply: String = "ok"
+        markReply: String = "ok", commitReply: String = "ok committed"
     ) {
         self.recorder = recorder
         self.waiting = waiting
@@ -302,6 +314,7 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
         self.beginError = beginError
         self.markError = markError
         self.markReply = markReply
+        self.commitReply = commitReply
     }
     func open() throws {
         if openFails { throw InlinePreviewTransportError.unavailable }
@@ -325,7 +338,7 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
             if let markError { throw markError }
             return markReply
         }
-        return line.hasPrefix("commit ") ? "ok committed" : "ok"
+        return line.hasPrefix("commit ") ? commitReply : "ok"
     }
     func releaseBegin() {
         beginWaiter?.resume()
@@ -336,6 +349,7 @@ private actor LifecycleAcquisitionTransport: InlinePreviewTransport {
 
 private final class AcquisitionTargetObserver: InsertionTargetObserver {
     var field = "A"
+    var value = ""
     private var capturedField: String?
     private(set) var focusReads = 0
 
@@ -345,8 +359,8 @@ private final class AcquisitionTargetObserver: InsertionTargetObserver {
         focusReads += 1
         return field != capturedField
     }
-    func observedValue() -> String? { "" }
-    func observedSelectedRange() -> InsertionTargetTextRange? { .init(location: 0, length: 0) }
+    func observedValue() -> String? { value }
+    func observedSelectedRange() -> InsertionTargetTextRange? { .init(location: value.utf16.count, length: 0) }
     func requiresTextContextValidation() -> Bool { true }
     func baselineInsertionContext() -> InsertionTargetContext? { .init(prefix: "", suffix: "") }
     func targetApplicationBundleIdentifier() -> String? { "com.test.host" }

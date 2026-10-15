@@ -27,14 +27,15 @@ protocol PreviewKeyboardSourceAccess {
     func select(_ identifier: String) -> Bool
 }
 
-/// A recording adopts an already selected companion or borrows it temporarily.
-/// Teardown preserves the user's selected source.
+/// A recording adopts or acquires the companion. Successful layout-based use
+/// can retain it; failures and borrowed input methods restore the prior source.
 @MainActor
 final class PreviewKeyboardSource {
     static let companionIdentifier = "com.steez.inputmethod.EposProbe"
     static var status: PreviewKeyboardSourceStatus { NativePreviewKeyboardSourceAccess().companionStatus() }
     let acquisitionArgument: String
     private let previousIdentifier: String?
+    private let acquiredFromLayout: Bool
     private let access: any PreviewKeyboardSourceAccess
     private var released = false
 
@@ -46,10 +47,12 @@ final class PreviewKeyboardSource {
             guard access.currentIdentifier() == previous else { return nil }
             self.access = access
             previousIdentifier = nil
+            acquiredFromLayout = false
             acquisitionArgument = "adopt-layout \(previous) \(layout)"
             return
         }
-        let kind = access.currentIsLayout() ? "acquire-layout" : "acquire-method"
+        acquiredFromLayout = access.currentIsLayout()
+        let kind = acquiredFromLayout ? "acquire-layout" : "acquire-method"
         guard access.select(Self.companionIdentifier),
               access.currentIdentifier() == Self.companionIdentifier else {
             // A successful select is not sufficient: activation is acknowledged
@@ -64,10 +67,11 @@ final class PreviewKeyboardSource {
         acquisitionArgument = "\(kind) \(previous) \(layout)"
     }
 
-    func release() {
+    func release(keepingSelected: Bool = false) {
         guard !released else { return }
         released = true
-        if let previousIdentifier, access.currentIdentifier() == Self.companionIdentifier {
+        if !(keepingSelected && acquiredFromLayout),
+           let previousIdentifier, access.currentIdentifier() == Self.companionIdentifier {
             _ = access.select(previousIdentifier)
         }
     }

@@ -20,6 +20,22 @@ final class PreviewKeyboardSourceTests: XCTestCase {
         XCTAssertEqual(access.selections, [PreviewKeyboardSource.companionIdentifier, Self.layout])
     }
 
+    func testSuccessfulCommitKeepsUnderlyingLayoutWithoutSourceSwitchAtRelease() throws {
+        let access = FakeKeyboardSourceAccess(current: Self.layout, layout: Self.layout)
+        let source = try XCTUnwrap(PreviewKeyboardSource(access: access))
+        source.release(keepingSelected: true)
+        source.release()
+        XCTAssertEqual(access.current, PreviewKeyboardSource.companionIdentifier)
+        XCTAssertEqual(access.selections, [PreviewKeyboardSource.companionIdentifier])
+    }
+
+    func testSuccessfulCommitStillRestoresAnotherInputMethod() throws {
+        let access = FakeKeyboardSourceAccess(current: Self.method, layout: Self.layout, isLayout: false)
+        let source = try XCTUnwrap(PreviewKeyboardSource(access: access))
+        source.release(keepingSelected: true)
+        XCTAssertEqual(access.current, Self.method)
+    }
+
     func testBorrowedInputMethodUsesItsUnderlyingLayoutAndRestoresTheMethod() throws {
         let access = FakeKeyboardSourceAccess(current: Self.method, layout: Self.layout, isLayout: false)
         let source = try XCTUnwrap(PreviewKeyboardSource(access: access))

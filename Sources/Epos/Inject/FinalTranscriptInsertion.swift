@@ -90,7 +90,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     /// The shared pre-write verification. Refusal semantics are the keystroke
     /// path's: a changed target cancels the session, after which no write of any
     /// kind can ever be issued.
-    public func authorizeFinalWrite(_ text: String) -> FinalWriteAuthorization {
+    public func authorizeFinalWrite(_ text: String, replacingPreview: String? = nil) -> FinalWriteAuthorization {
         latency?.begin(.targetAuthorization)
         var outcome = RecordingLatencyDiagnostics.Outcome.refused
         defer { latency?.end(.targetAuthorization, outcome: outcome) }
@@ -99,7 +99,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
               !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .refused(.backendRefused)
         }
-        guard targetIsUnchanged() else {
+        guard targetIsUnchanged(replacingPreview: replacingPreview) else {
             // With Accessibility revoked there is no baseline to compare against and
             // every AX read fails, so this refusal fires for a reason that has
             // nothing to do with focus. The keystroke backend's own trust check is
@@ -148,25 +148,17 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         case unverifiable
     }
 
-    /// Bounded wait for the fn-press text context to be readable again before
-    /// the final authorization runs.
+    /// Waits for the original context, optionally containing the acknowledged
+    /// preview, to reach the host's AX tree. In-place commits keep the draft
+    /// visible; fallback writes call this after cancellation. Focus changes stop
+    /// the wait and are refused by the final guard.
     ///
-    /// A Chromium/Electron host applies a composition teardown asynchronously:
-    /// the preview's cancel ack proves the un-mark was issued, not that the
-    /// host reflected it into its AX value, so an immediate guard read can see
-    /// the stale marked text and refuse it as a user edit. Each poll runs the
-    /// guard's own checks — the focus guard first, then the shared readable
-    /// comparison — returning the moment the baseline is back or the focus
-    /// guard's refusal is already certain; a target the user genuinely edited
-    /// never matches and spends the ladder before the guard refuses it as
-    /// before.
-    ///
-    /// Returns false when there is no readable baseline to poll (opaque or
-    /// uncaptured target, or a closed session) so the caller can apply the
-    /// fixed composition settle instead.
+    /// False means there is no readable context to poll. Only the fallback path
+    /// needs a fixed teardown delay in that case.
     @discardableResult
     public func settleReadableBaseline(
-        retryDelaysNanoseconds: [UInt64] = [0, 20_000_000, 60_000_000, 120_000_000]
+        retryDelaysNanoseconds: [UInt64] = [0, 20_000_000, 60_000_000, 120_000_000],
+        replacingPreview: String? = nil
     ) async -> Bool {
         guard !didClose, insertedTranscript == nil,
               target.hasCapturedTarget(),
@@ -182,7 +174,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
                       let context = target.baselineInsertionContext() else {
                     return .unverifiable
                 }
-                return observeReadableContext(against: context).matches ? .restored : .diverged
+                return observeReadableContext(against: context, replacingPreview: replacingPreview).matches ? .restored : .diverged
             }.value
             switch poll {
             case .restored:
@@ -299,7 +291,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     }
 
     /// Shared by preview acquisition and final authorization, before either writes.
-    func targetIsUnchanged() -> Bool {
+    func targetIsUnchanged(replacingPreview: String? = nil) -> Bool {
         guard target.hasCapturedTarget() else {
             // Failure A of the Electron dormant-tree bug: nothing was focusable
             // at fn press, so there is no target to verify, and "target changed"
@@ -317,7 +309,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         guard let context = target.baselineInsertionContext() else {
             return !target.requiresTextContextValidation()
         }
-        let observation = observeReadableContext(against: context)
+        let observation = observeReadableContext(against: context, replacingPreview: replacingPreview)
         guard !observation.matches else { return true }
         guard let value = observation.value else {
             log.info(
@@ -352,7 +344,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
     /// observations come back with the verdict because the guard's refusal
     /// logging needs to name which read failed and by how much.
     private func observeReadableContext(
-        against context: InsertionTargetContext
+        against context: InsertionTargetContext, replacingPreview: String? = nil
     ) -> (matches: Bool, value: String?, selectedRange: InsertionTargetTextRange?) {
         guard let value = target.observedValue() else {
             return (false, nil, nil)
@@ -361,7 +353,7 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
             return (false, value, nil)
         }
         return (
-            context.matchesBaseline(value: value, selectedRange: selectedRange),
+            context.matchesBaseline(value: value, selectedRange: selectedRange, replacingPreview: replacingPreview),
             value,
             selectedRange
         )

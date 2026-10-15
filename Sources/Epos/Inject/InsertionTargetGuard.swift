@@ -33,8 +33,17 @@ public struct InsertionTargetContext: Equatable {
         )
     }
 
-    func matchesBaseline(value: String, selectedRange: InsertionTargetTextRange) -> Bool {
-        value == prefix + selectedText + suffix && selectedRange == self.selectedRange
+    func matchesBaseline(
+        value: String, selectedRange: InsertionTargetTextRange, replacingPreview: String? = nil
+    ) -> Bool {
+        if let replacingPreview {
+            return self.selectedRange.length == 0 && selectedText.isEmpty
+                && value == prefix + replacingPreview + suffix
+                && selectedRange == InsertionTargetTextRange(
+                    location: prefix.utf16.count + replacingPreview.utf16.count, length: 0
+                )
+        }
+        return value == prefix + selectedText + suffix && selectedRange == self.selectedRange
     }
 
     func insertedText(in value: String) -> String? {
@@ -99,11 +108,13 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
 }
 
 /// Live Accessibility-backed observer. Uses the same trust the keystroke backend
-/// already requires; reads only the focused element, never walks the tree.
+/// already requires. A missing focused-element value uses a bounded search of
+/// the focused window for an explicitly focused editor.
 public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private static let focusedElementMessagingTimeout: Float = 0.05
 
     private let systemWide: AXUIElement
+    private let focusedElementSearch = FocusedElementSearch()
     /// The process that owned the focused element at session start. Focus moving to a
     /// different app changes this; an element-handle churn within the same app (a
     /// Chromium/Electron terminal like cmux rebuilds its AX node between keystrokes) does
@@ -376,6 +387,10 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             systemWide, kAXFocusedUIElementAttribute as CFString, &focused
         )
         guard result == .success, let element = focused else {
+            if (result == .noValue || (result == .success && focused == nil)),
+               let element = focusedElementSearch.resolve(in: systemWide) {
+                return .element(element)
+            }
             // A `.success` with no value means "nothing is focused" — same identity
             // failure as an explicit `.noValue`.
             return .failure(result == .success ? .noValue : result)
