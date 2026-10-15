@@ -6,8 +6,9 @@ healthy, unavailable, or disabled, with the same behavior in Codex and Ghostty.
 The panel does not activate Epos or intercept clicks.
 
 The microphone sits below the caret with a gap, or above it when a bottom input
-leaves too little room. Bounded Accessibility reads follow the caret off the main
-actor. Invalid, unavailable, selected, or offscreen caret geometry uses a small
+leaves too little room. The input method supplies native caret geometry with
+preview acknowledgments. Bounded Accessibility reads provide a fallback off the
+main actor. Invalid, unavailable, selected, or offscreen caret geometry uses a small
 cue at the right edge of the target display instead. The cue never shows a
 transcript. While finalizing, it shows a spinner, then disappears when the session
 completes. Error notices expand at the screen edge so their text remains readable.

@@ -10,6 +10,89 @@ final class InlinePreviewSessionTests: XCTestCase {
     private static let target = "com.test.app"
     private static let begin = "begin com.test.app"
 
+    func testAcquisitionWaitsForCompanionSocketWithoutSendingEarly() async {
+        let transport = FakeInlinePreviewTransport(unavailableOpenAttempts: 3)
+        let session = InlinePreviewSession(transport: transport, bundleIdentifier: Self.target, sleep: { _ in })
+        await session.begin()
+        let report = await session.report()
+        let lines = await transport.lines
+        XCTAssertTrue(report.began)
+        XCTAssertEqual(lines, [Self.begin])
+        await session.discard()
+    }
+
+    func testCompanionStartupRetryIsBounded() async {
+        let transport = FakeInlinePreviewTransport(unavailableOpenAttempts: 100)
+        let session = InlinePreviewSession(transport: transport, bundleIdentifier: Self.target, sleep: { _ in })
+        await session.begin()
+        let report = await session.report()
+        let lines = await transport.lines
+        XCTAssertFalse(report.began)
+        XCTAssertEqual(report.failure, "connectFailed")
+        XCTAssertTrue(lines.isEmpty)
+        XCTAssertTrue(report.acquisitionDetail?.contains("error=unavailable") == true)
+    }
+
+    func testDiscardDuringSocketStartupPreventsAcquisition() async {
+        let transport = FakeInlinePreviewTransport(unavailableOpenAttempts: 3)
+        let gate = Gate()
+        let session = InlinePreviewSession(transport: transport, bundleIdentifier: Self.target,
+                                           sleep: { _ in await gate.wait() })
+        let begin = Task { await session.begin() }
+        await Self.waitUntil { await transport.openCount > 0 }
+        await session.discard()
+        await gate.open()
+        await begin.value
+        let lines = await transport.lines
+        XCTAssertTrue(lines.isEmpty)
+    }
+
+    func testNativeCaretPublishesFromBeginAndMarkThenClearsOnDegradation() async {
+        let transport = FakeInlinePreviewTransport(beginReply: "ok locked caret=10,20,1,18",
+                                                   markReply: "ok marked caret=30,20,1,18",
+                                                   failMarksAfter: 1)
+        let recorder = CaretRecorder()
+        let session = InlinePreviewSession(transport: transport, bundleIdentifier: Self.target,
+                                           sleep: { _ in }, onCaretChange: { recorder.record($0) })
+        await session.begin()
+        await session.mark("first")
+        await Self.waitUntil { await session.report().marksSent == 1 }
+        await session.mark("second")
+        await Self.waitUntil { await session.report().failure == "markFailed" }
+        XCTAssertEqual(recorder.snapshot, [CGRect(x: 10, y: 20, width: 1, height: 18),
+                                           CGRect(x: 30, y: 20, width: 1, height: 18), nil])
+        await session.discard()
+    }
+
+    func testClearingPreviewClearsNativeCaret() async {
+        let transport = FakeInlinePreviewTransport(markReply: "ok marked caret=30,20,1,18")
+        let recorder = CaretRecorder()
+        let session = InlinePreviewSession(transport: transport, bundleIdentifier: Self.target,
+                                           sleep: { _ in }, onCaretChange: { recorder.record($0) })
+        await session.begin()
+        await session.mark("first")
+        await Self.waitUntil { await session.report().marksSent == 1 }
+        await session.mark("")
+        await Self.waitUntil { await session.report().cancelAcknowledged }
+        XCTAssertEqual(recorder.snapshot, [nil, CGRect(x: 30, y: 20, width: 1, height: 18), nil])
+        await session.discard()
+    }
+
+    private final class CaretRecorder: @unchecked Sendable {
+        private let lock = NSLock()
+        private var values: [CGRect?] = []
+        func record(_ value: CGRect?) { lock.withLock { values.append(value) } }
+        var snapshot: [CGRect?] { lock.withLock { values } }
+    }
+
+    func testNativeCaretMetadataKeepsAppKitCoordinatesAndRejectsMalformedGeometry() {
+        XCTAssertEqual(InlinePreviewSession.caret(from: "ok marked 3 caret=-100,200,1,18"),
+                       CGRect(x: -100, y: 200, width: 1, height: 18))
+        for value in ["unavailable", "0,0,1", "0,0,1,18,bad", "0,0,bad,18", "nan,0,1,18", "0,0,1,0", "0,0,500,18"] {
+            XCTAssertNil(InlinePreviewSession.caret(from: "ok marked caret=\(value)"))
+        }
+    }
+
     // MARK: - Doubles
 
     /// Thread-safe recorder for the session's marking-activity callback.

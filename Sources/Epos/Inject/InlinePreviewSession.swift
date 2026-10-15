@@ -14,11 +14,13 @@ struct InlinePreviewReport: Equatable, Sendable {
     var committed: Bool
     var commitMayHaveExecuted: Bool
     var failure: String?
+    var acquisitionDetail: String? = nil
 
     var logLine: String {
         "inline preview target=\(bundleIdentifier) began=\(began) " +
             "attemptedMark=\(didAttemptMark) mayHaveRendered=\(mayHaveRendered) marks=\(marksSent) " +
-            "cancelAck=\(cancelAcknowledged) committed=\(committed) failure=\(failure ?? "none")"
+            "cancelAck=\(cancelAcknowledged) committed=\(committed) failure=\(failure ?? "none") " +
+            "acquisition=\(acquisitionDetail ?? "none")"
     }
 }
 
@@ -84,6 +86,7 @@ actor InlinePreviewSession {
     /// coordinator hides the recording pill on it: from here the in-field text
     /// itself shows that dictation is flowing.
     private let onFirstMarkRendered: @Sendable () -> Void
+    private let onCaretChange: @Sendable (CGRect?) -> Void
 
     private var phase: Phase = .pending
     private var pendingMark: String?
@@ -104,6 +107,7 @@ actor InlinePreviewSession {
     private var phraseCommitAmbiguous = false
     private var commitMayHaveExecuted = false
     private var failure: String?
+    private var acquisitionDetail: String?
     private var unsafeTarget = false
 
     init(
@@ -115,7 +119,8 @@ actor InlinePreviewSession {
         validateTarget: @escaping @MainActor @Sendable () -> Bool = { true },
         onAcquisitionFailure: @escaping @MainActor @Sendable () -> Void = {},
         onMarkingActivityChange: @escaping @Sendable (Bool) -> Void = { _ in },
-        onFirstMarkRendered: @escaping @Sendable () -> Void = {}
+        onFirstMarkRendered: @escaping @Sendable () -> Void = {},
+        onCaretChange: @escaping @Sendable (CGRect?) -> Void = { _ in }
     ) {
         self.transport = transport
         self.bundleIdentifier = bundleIdentifier
@@ -126,6 +131,7 @@ actor InlinePreviewSession {
         self.onAcquisitionFailure = onAcquisitionFailure
         self.onMarkingActivityChange = onMarkingActivityChange
         self.onFirstMarkRendered = onFirstMarkRendered
+        self.onCaretChange = onCaretChange
     }
 
     /// Text the line protocol can carry verbatim. A transcript that would need
@@ -141,7 +147,18 @@ actor InlinePreviewSession {
     func begin() async {
         guard phase == .pending else { return }
         do {
-            try await transport.open()
+            var openAttempts = 0
+            while true {
+                openAttempts += 1
+                acquisitionDetail = "openAttempts=\(openAttempts)"
+                do {
+                    try await transport.open()
+                    break
+                } catch InlinePreviewTransportError.unavailable where openAttempts < 11 {
+                    await sleep(.milliseconds(30))
+                    guard phase == .pending else { return await transport.close() }
+                }
+            }
             guard phase == .pending else { return await transport.close() }
             let command = "begin \(bundleIdentifier)" + (acquisitionArgument.map { " \($0)" } ?? "")
             var reply = try await sendSafetyCommand(command)
@@ -154,6 +171,7 @@ actor InlinePreviewSession {
                 guard phase == .pending else { return await transport.close() }
                 reply = try await sendSafetyCommand(command)
             }
+            acquisitionDetail = "\(acquisitionDetail ?? "") reply=\(reply)"
             let targetUnsafe = recordUnsafeTarget(reply)
             guard phase == .pending else { return await transport.close() }
             if targetUnsafe { return await failAcquisition("unsafeTarget") }
@@ -169,8 +187,10 @@ actor InlinePreviewSession {
                 return await failAcquisition("unsafeTarget")
             }
             transition(to: .marking)
+            onCaretChange(Self.caret(from: reply))
             startDrainIfNeeded()
         } catch {
+            acquisitionDetail = "\(acquisitionDetail ?? "open") error=\(String(describing: error))"
             recordUnknownSafetyFailure(error)
             await failAcquisition("connectFailed")
         }
@@ -377,8 +397,19 @@ actor InlinePreviewSession {
             cancelAcknowledged: cancelAcknowledged,
             committed: committed,
             commitMayHaveExecuted: commitMayHaveExecuted || !committedPrefix.isEmpty,
-            failure: failure
+            failure: failure,
+            acquisitionDetail: acquisitionDetail
         )
+    }
+
+    static func caret(from reply: String) -> CGRect? {
+        guard let token = reply.split(separator: " ").last, token.hasPrefix("caret=") else { return nil }
+        let fields = token.dropFirst(6).split(separator: ",", omittingEmptySubsequences: false)
+        guard fields.count == 4 else { return nil }
+        let values = fields.compactMap { Double($0) }
+        guard values.count == 4, values.allSatisfy(\.isFinite) else { return nil }
+        let rect = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        return RecordingIndicatorPlacementPolicy.isUsableCaret(rect) ? rect : nil
     }
 
     private func startDrainIfNeeded() {
@@ -457,6 +488,7 @@ actor InlinePreviewSession {
                 guard phase == .marking else { return }
                 if unsafeTarget { return degrade("unsafeTarget") }
                 guard reply.hasPrefix("ok") else { return degrade("markRefused") }
+                onCaretChange(Self.caret(from: reply))
                 marksSent += 1
                 if marksSent == 1 { onFirstMarkRendered() }
             } catch {
@@ -479,6 +511,7 @@ actor InlinePreviewSession {
             }
             cancelAcknowledged = true
             compositionCancelled = true
+            onCaretChange(nil)
         } catch {
             unsafeTarget = true
             degrade("previewCancelFailed")
@@ -487,6 +520,7 @@ actor InlinePreviewSession {
 
     private func degrade(_ reason: String) {
         guard phase != .discarded else { return }
+        onCaretChange(nil)
         transition(to: .degraded)
         pendingMark = nil
         failure = reason

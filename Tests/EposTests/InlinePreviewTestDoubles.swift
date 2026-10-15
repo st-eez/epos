@@ -5,6 +5,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
     enum Failure: Error { case denied }
 
     private let openThrows: Bool
+    private let unavailableOpenAttempts: Int
     private let beginReply: String
     private let beginError: InlinePreviewTransportError?
     private let markThrows: Bool
@@ -27,6 +28,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
 
     init(
         openThrows: Bool = false,
+        unavailableOpenAttempts: Int = 0,
         beginReply: String = "ok locked",
         beginError: InlinePreviewTransportError? = nil,
         markThrows: Bool = false,
@@ -41,6 +43,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
         onSend: @escaping @Sendable (String) -> Void = { _ in }
     ) {
         self.openThrows = openThrows
+        self.unavailableOpenAttempts = unavailableOpenAttempts
         self.beginReply = beginReply
         self.beginError = beginError
         self.markThrows = markThrows
@@ -58,6 +61,7 @@ actor FakeInlinePreviewTransport: InlinePreviewTransport {
     func open() async throws {
         openCount += 1
         if openThrows { throw Failure.denied }
+        if openCount <= unavailableOpenAttempts { throw InlinePreviewTransportError.unavailable }
     }
 
     func send(_ line: String) async throws -> String {

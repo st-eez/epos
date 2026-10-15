@@ -18,6 +18,7 @@ final class InlinePreviewCoordinator {
     /// speak for a later recording.
     private let onMarkingActivityChange: @MainActor (Bool) -> Void
     private let onFirstMarkRendered: @MainActor () -> Void
+    private let onCaretChange: @MainActor (CGRect?) -> Void
 
     private(set) var session: InlinePreviewSession?
     private var discard: Task<Void, Never>?
@@ -35,7 +36,8 @@ final class InlinePreviewCoordinator {
         keyboardSourceFactory: @escaping @MainActor () -> PreviewKeyboardSource? = { PreviewKeyboardSource() },
         transportFactory: @escaping @MainActor () -> any InlinePreviewTransport = { UnixSocketInlinePreviewTransport() },
         onMarkingActivityChange: @escaping @MainActor (Bool) -> Void,
-        onFirstMarkRendered: @escaping @MainActor () -> Void
+        onFirstMarkRendered: @escaping @MainActor () -> Void,
+        onCaretChange: @escaping @MainActor (CGRect?) -> Void = { _ in }
     ) {
         self.isEnabled = isEnabled
         self.log = log
@@ -44,6 +46,7 @@ final class InlinePreviewCoordinator {
         self.transportFactory = transportFactory
         self.onMarkingActivityChange = onMarkingActivityChange
         self.onFirstMarkRendered = onFirstMarkRendered
+        self.onCaretChange = onCaretChange
     }
 
     func start(
@@ -123,6 +126,12 @@ final class InlinePreviewCoordinator {
                 Task { @MainActor in
                     guard let self, self.generation == generation else { return }
                     self.onFirstMarkRendered()
+                }
+            },
+            onCaretChange: { [weak self] caret in
+                Task { @MainActor in
+                    guard let self, self.generation == generation else { return }
+                    self.onCaretChange(caret)
                 }
             }
         )

@@ -59,6 +59,9 @@ final class EposProbeInputController: IMKInputController {
     nonisolated(unsafe) private static var nativeMarkInFlight = false
     nonisolated(unsafe) private static var nativeCommitInFlight = false
     private var activated = false
+    nonisolated(unsafe) private static var diagnosticConnection: UInt64?
+
+    deinit { ProbeLog.write("controller deinit id=\(ObjectIdentifier(self))") }
 
 #if EPOS_CONTROLLER_TESTS
     static func phraseCallbackStatesForTesting() -> [ProbeSessionOwnership.State] {
@@ -101,7 +104,7 @@ final class EposProbeInputController: IMKInputController {
         activated = true
         Self.activeController = self
         Self.controllers.add(self)
-        ProbeLog.write("activateServer client=\(Self.describe(sender))")
+        ProbeLog.write("activateServer id=\(ObjectIdentifier(self)) client=\(Self.describe(sender))")
     }
 
     override func deactivateServer(_ sender: Any!) {
@@ -110,7 +113,7 @@ final class EposProbeInputController: IMKInputController {
 #endif
         activated = false
         if Self.lockedController === self { Self.interruptSession("deactivate", mayDiscard: true) }
-        ProbeLog.write("deactivateServer client=\(Self.describe(sender))")
+        ProbeLog.write("deactivateServer id=\(ObjectIdentifier(self)) client=\(Self.describe(sender))")
         // The host is tearing this session down. Anything of ours still marked in
         // it comes off now: once the session is gone the composition is no longer
         // addressable, and a host that commits on unmark turns it into text.
@@ -168,7 +171,7 @@ final class EposProbeInputController: IMKInputController {
 
     static func status() -> String {
         let sessions = controllers.allObjects
-            .map { $0.client()?.bundleIdentifier() ?? "?" }
+            .map { "id=\(ObjectIdentifier($0)):active=\($0.activated):bundle=\($0.client()?.bundleIdentifier() ?? "?")" }
             .joined(separator: ",")
         let front = activeController?.client()?.bundleIdentifier() ?? "none"
         return "ok recent=\(front) sessions=[\(sessions)] locked=\(lockedBundleID ?? "-") "
@@ -195,6 +198,10 @@ final class EposProbeInputController: IMKInputController {
     /// activated most recently; anything else must have a live session or the
     /// pass is refused.
     static func begin(expected argument: String, connection: UInt64) -> String {
+        if diagnosticConnection != connection {
+            diagnosticConnection = connection
+            ProbeLog.write("begin state connection=\(connection) selected=\(ProbeInputBarrier.eposIsSelected) \(status())")
+        }
         let parts = argument.split(separator: " ").map(String.init)
         guard let expected = parts.first, parts.count == 1 || (4...6).contains(parts.count),
               parts.count == 1 || ["acquire-layout", "acquire-method", "adopt-layout"].contains(parts[1]) else {
@@ -269,7 +276,9 @@ final class EposProbeInputController: IMKInputController {
         if parts.count >= 4 { client.overrideKeyboard(withKeyboardNamed: parts[3]) }
         guard !policy.isRetired else { return "err unsafe session retired during acquisition" }
         ProbeLog.write("begin locked=\(lockedBundleID ?? "?") connection=\(connection)")
-        return "ok locked \(lockedBundleID ?? "?")"
+        let caret = caretMetadata(client: client)
+        guard session === policy, !policy.isRetired else { return "err unsafe session retired during caret query" }
+        return "ok locked \(lockedBundleID ?? "?")\(caret)"
     }
 
     /// Releases the focus lock only. It must never touch text: Epos sends `end`
@@ -426,7 +435,9 @@ final class EposProbeInputController: IMKInputController {
             return "err unsafe mark readback changed"
         }
         ProbeLog.write("mark len=\(text.count) styled=\(styled) connection=\(connection) client=\(describe(client))")
-        return "ok marked \(text.count) styled=\(styled) client=\(describe(client))"
+        let caret = caretMetadata(client: client)
+        guard session === policy, !policy.isRetired else { return "err unsafe session retired during caret query" }
+        return "ok marked \(text.count) styled=\(styled) client=\(describe(client))\(caret)"
     }
 
     private static func underlinedMarkedText(_ text: String) -> NSAttributedString {
@@ -488,8 +499,7 @@ final class EposProbeInputController: IMKInputController {
     /// themselves. `attributesForCharacterIndex:` is relative to the inline
     /// session and fills a one-pixel-wide rect with the height of the caret
     /// line, in screen coordinates. Hosts differ in which indexes they answer,
-    /// so the end index is probed first (`rect index=N` in the log shows which
-    /// one won). Falls back to `firstRectForCharacterRange:` over the tail of
+    /// so the end index is probed first. Falls back to `firstRectForCharacterRange:` over the tail of
     /// the marked range. Zero/garbage rects reply unavailable.
     static func rect(connection: UInt64) -> String {
         let client: IMKTextInput & NSObjectProtocol
@@ -497,36 +507,37 @@ final class EposProbeInputController: IMKInputController {
         case .refused(let reason): return "err \(reason)"
         case .ready(_, let resolved): client = resolved
         }
+        guard let rect = caretRect(client: client) else { return "err rect unavailable" }
+        return "ok rect \(Double(rect.minX)) \(Double(rect.minY)) \(Double(rect.width)) \(Double(rect.height))"
+    }
+
+    private static func caretMetadata(client: IMKTextInput & NSObjectProtocol) -> String {
+        guard let rect = caretRect(client: client) else { return " caret=unavailable" }
+        return " caret=\(Double(rect.minX)),\(Double(rect.minY)),\(Double(rect.width)),\(Double(rect.height))"
+    }
+
+    private static func caretRect(client: IMKTextInput & NSObjectProtocol) -> NSRect? {
         let markedLength = ((composition?.text ?? "") as NSString).length
         var candidates = [0]
         if markedLength > 0 {
             candidates = markedLength > 1 ? [markedLength, markedLength - 1, 0] : [markedLength, 0]
         }
         var lineRect = NSRect.zero
-        var wonIndex = -1
         for index in candidates {
             var probed = NSRect.zero
             _ = client.attributes(forCharacterIndex: index, lineHeightRectangle: &probed)
             if usableCaretRect(probed) {
-                lineRect = probed
-                wonIndex = index
-                break
+                return probed
             }
         }
-        if wonIndex < 0, markedLength > 0 {
+        if markedLength > 0 {
             var actualRange = NSRange(location: NSNotFound, length: 0)
             lineRect = client.firstRect(
                 forCharacterRange: NSRange(location: markedLength - 1, length: 1),
                 actualRange: &actualRange
             )
         }
-        guard usableCaretRect(lineRect) else {
-            ProbeLog.write("rect unavailable len=\(markedLength) client=\(describe(client))")
-            return "err rect unavailable client=\(describe(client))"
-        }
-        ProbeLog.write("rect index=\(wonIndex) len=\(markedLength) \(lineRect) client=\(describe(client))")
-        return "ok rect \(Double(lineRect.origin.x)) \(Double(lineRect.origin.y)) "
-            + "\(Double(lineRect.size.width)) \(Double(lineRect.size.height))"
+        return usableCaretRect(lineRect) ? lineRect : nil
     }
 
     private static func usableCaretRect(_ rect: NSRect) -> Bool {

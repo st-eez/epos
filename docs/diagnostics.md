@@ -22,6 +22,13 @@ unified log command:
 /usr/bin/log stream --predicate 'subsystem == "com.steez.Epos"' --info --debug
 ```
 
+Cue logs record show, hide, and placement changes, including the target process,
+window frame, and whether positioning used the input method, Accessibility, or
+the screen edge. Acquisition reports include socket attempts and the final native
+begin reply. Companion activation and deactivation include controller identities;
+begin records the live controller registry once per connection. These events
+contain geometry and lifecycle metadata, with no transcript text.
+
 The companion keeps its own log at `~/Library/Caches/EposProbe/probe.log`; inspect
 it when debugging marked text.
 Failed keyboard-source acquisition logs its native status as `missing`,

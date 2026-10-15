@@ -642,6 +642,8 @@ public final class AppCoordinator: ObservableObject {
             inlinePreviewMirroring = active
         case .firstMarkRendered:
             break
+        case .caretChanged(let caret):
+            cues.updateNativeCaret(caret)
         case .captureFailed:
             finishRecording()
             flashMicrophoneUnavailableNotice()

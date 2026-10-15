@@ -10,6 +10,7 @@ final class RecordingSession {
         case transcript(final: String, partial: String, display: String)
         case previewActivity(Bool)
         case firstMarkRendered
+        case caretChanged(CGRect?)
         case captureFailed
         case recognitionFailedWhileHeld
         case inserting
@@ -70,6 +71,10 @@ final class RecordingSession {
             self.latency?.end(.firstMarkAcknowledged)
             guard self.phase == .held else { return }
             self.onEvent(self, .firstMarkRendered)
+        },
+        onCaretChange: { [weak self] caret in
+            guard let self, self.phase != .finished else { return }
+            self.onEvent(self, .caretChanged(caret))
         }
     )
 

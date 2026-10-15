@@ -28,6 +28,11 @@ final class RecordingCuePresenter<PillContent: View> {
         pill.show(notice: notice, newRecording: newRecording)
     }
 
+    func updateNativeCaret(_ caret: CGRect?) {
+        guard pillVisible else { return }
+        pill.updateNativeCaret(caret)
+    }
+
     func hidePill() {
         pillVisible = false
         pill.hide()

@@ -14,6 +14,10 @@ public final class RecordingIndicatorController {
     private(set) var targetPID: pid_t?
     private let frontmostProcessIdentifier: @MainActor () -> pid_t?
     private var targetScreen: NSScreen?
+    private var nativeCaret: CGRect?
+    private var nativeCaretWindow: CGRect?
+    private var lastGeometry = RecordingCaretGeometry()
+    private var placementMode: String?
     private static let panelSize = CGSize(width: 34, height: 34)
     private static let noticeSize = CGSize(width: 224, height: 40)
     private static let showFadeDuration: TimeInterval = 0.12
@@ -32,7 +36,7 @@ public final class RecordingIndicatorController {
         guard IndicatorWindowPolicy.canPresentWindows else { return }
         guard panel == nil else { return }
         let frame = NSRect(origin: .zero, size: Self.panelSize)
-        let panel = NSPanel(
+        let panel = RecordingIndicatorPanel(
             contentRect: frame,
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
@@ -40,7 +44,7 @@ public final class RecordingIndicatorController {
         )
         panel.isFloatingPanel = true
         panel.level = .floating
-        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle]
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = false
         panel.backgroundColor = .clear
@@ -61,6 +65,9 @@ public final class RecordingIndicatorController {
             placementTask?.cancel()
             placementTask = nil
             targetPID = frontmostProcessIdentifier()
+            nativeCaret = nil
+            lastGeometry = RecordingCaretGeometry()
+            placementMode = nil
         }
         guard IndicatorWindowPolicy.canPresentWindows else { return }
         guard let panel else {
@@ -84,6 +91,13 @@ public final class RecordingIndicatorController {
             updatePlacement(RecordingCaretGeometry())
         }
         fadeIn(panel)
+        log.info("cue show pid=\(targetPID ?? -1) notice=\(notice) window=\(panel.windowNumber) frame=\(panel.frame) visible=\(panel.isVisible) activeSpace=\(panel.isOnActiveSpace)")
+    }
+
+    public func updateNativeCaret(_ caret: CGRect?) {
+        nativeCaret = caret.flatMap { RecordingIndicatorPlacementPolicy.isUsableCaret($0) ? $0 : nil }
+        nativeCaretWindow = lastGeometry.window
+        updatePlacement(lastGeometry)
     }
 
     private func fadeIn(_ panel: NSPanel) {
@@ -103,7 +117,10 @@ public final class RecordingIndicatorController {
         placementTask?.cancel()
         placementTask = nil
         targetPID = nil
+        nativeCaret = nil
+        placementMode = nil
         guard let panel, panel.isVisible else { return }
+        log.info("cue hide window=\(panel.windowNumber) frame=\(panel.frame) alpha=\(panel.alphaValue)")
         visibilityGeneration += 1
         let generation = visibilityGeneration
         NSAnimationContext.runAnimationGroup { context in
@@ -119,12 +136,22 @@ public final class RecordingIndicatorController {
         }
     }
 
+    func resolveCaret(_ geometry: RecordingCaretGeometry, primaryScreenHeight: CGFloat) -> CGRect? {
+        if let window = geometry.window {
+            if let nativeCaretWindow, nativeCaretWindow != window { nativeCaret = nil }
+            nativeCaretWindow = window
+        }
+        lastGeometry = geometry
+        if let caret = geometry.caret {
+            return RecordingIndicatorPlacementPolicy.appKitRect(fromAX: caret, primaryScreenHeight: primaryScreenHeight)
+        }
+        return nativeCaret
+    }
+
     private func updatePlacement(_ geometry: RecordingCaretGeometry) {
         guard let panel else { return }
         let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
-        let caret = geometry.caret.map {
-            RecordingIndicatorPlacementPolicy.appKitRect(fromAX: $0, primaryScreenHeight: primaryHeight)
-        }
+        let caret = resolveCaret(geometry, primaryScreenHeight: primaryHeight)
         let window = geometry.window.map {
             RecordingIndicatorPlacementPolicy.appKitRect(fromAX: $0, primaryScreenHeight: primaryHeight)
         }
@@ -139,13 +166,29 @@ public final class RecordingIndicatorController {
         }
         guard let visible = targetScreen?.visibleFrame else { return }
         let sameApplication = frontmostProcessIdentifier() == targetPID
-        let frame = RecordingIndicatorPlacementPolicy.frame(
+        let placement = RecordingIndicatorPlacementPolicy.placement(
             caret: sameApplication && !showsNotice ? caret : nil,
             in: visible,
             indicatorSize: showsNotice ? Self.noticeSize : Self.panelSize
         )
+        let frame = placement.frame
         panel.setFrame(frame, display: false)
+        let mode: String
+        if showsNotice { mode = "notice" }
+        else if !sameApplication { mode = "edge-focus-moved" }
+        else if placement.besideCaret {
+            mode = geometry.caret == nil ? "caret-input-method" : "caret-accessibility"
+        } else { mode = "edge-caret-unavailable" }
+        if mode != placementMode {
+            placementMode = mode
+            log.info("cue placement mode=\(mode) pid=\(targetPID ?? -1) frame=\(frame) caret=\(String(describing: caret)) targetWindow=\(String(describing: window))")
+        }
     }
+}
+
+private final class RecordingIndicatorPanel: NSPanel {
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
 }
 
 private extension CGRect {
@@ -163,20 +206,22 @@ struct RecordingIndicatorPlacementPolicy {
         CGRect(x: rect.minX, y: primaryScreenHeight - rect.maxY, width: rect.width, height: rect.height)
     }
 
-    nonisolated static func frame(caret: CGRect?, in visibleFrame: CGRect, indicatorSize: CGSize) -> CGRect {
+    nonisolated static func placement(
+        caret: CGRect?, in visibleFrame: CGRect, indicatorSize: CGSize
+    ) -> (frame: CGRect, besideCaret: Bool) {
         let safe = visibleFrame.insetBy(dx: 8, dy: 8)
         if let caret, isUsableCaret(caret), safe.contains(CGPoint(x: caret.midX, y: caret.midY)) {
             let x = min(max(caret.maxX + 6, safe.minX), safe.maxX - indicatorSize.width)
             for y in [caret.minY - 6 - indicatorSize.height, caret.maxY + 6] {
                 let candidate = CGRect(origin: CGPoint(x: x, y: y), size: indicatorSize)
-                if safe.contains(candidate) { return candidate }
+                if safe.contains(candidate) { return (candidate, true) }
             }
         }
-        return CGRect(
+        return (CGRect(
             x: safe.maxX - indicatorSize.width,
             y: safe.midY - indicatorSize.height / 2,
             width: indicatorSize.width,
             height: indicatorSize.height
-        )
+        ), false)
     }
 }
