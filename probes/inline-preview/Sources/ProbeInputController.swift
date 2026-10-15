@@ -48,6 +48,15 @@ final class EposProbeInputController: IMKInputController {
     nonisolated(unsafe) private static var nativeMarkInFlight = false
     private var activated = false
 
+#if EPOS_CONTROLLER_TESTS
+    static func stageUnreachableCompositionForTesting(connection: UInt64) {
+        lockedConnection = connection
+        lockedBundleID = "test.host"
+        composition = Composition(controller: nil, client: nil, bundleID: "test.host", connection: connection,
+                                  range: NSRange(location: 0, length: 1), text: "x")
+    }
+#endif
+
     override func activateServer(_ sender: Any!) {
         super.activateServer(sender)
         activated = true
@@ -230,6 +239,10 @@ final class EposProbeInputController: IMKInputController {
         guard lockedConnection == connection else { return "err preview pass is not owned by this connection" }
         let previous = lockedBundleID ?? "-"
         session?.retire("end")
+        // An unsafe readback can leave a record we no longer have authority to
+        // clear. Relinquish that record without touching host text. It must not
+        // block a later recording in another client.
+        if composition?.connection == connection { composition = nil }
         barrier?.stop()
         barrier = nil
         restoreKeyboardSource()
@@ -252,6 +265,7 @@ final class EposProbeInputController: IMKInputController {
         if lockedConnection == connection { interruptSession("disconnect", mayDiscard: true) }
         if composition?.connection == connection {
             clearComposition(reason: "connection \(connection) \(reason)")
+            if composition?.connection == connection { composition = nil }
         }
         if lockedConnection == connection {
             ProbeLog.write("release connection=\(connection) unlocked=\(lockedBundleID ?? "-") reason=\(reason)")
@@ -357,7 +371,12 @@ final class EposProbeInputController: IMKInputController {
                                       bundleID: current.bundleID, connection: current.connection,
                                       range: observedRange, text: text)
         }
-        guard policy.didMark(observe(client, expected: composition), utf16Length: (text as NSString).length) else {
+        let readback = observe(client, expected: composition)
+        guard policy.didMark(readback, utf16Length: (text as NSString).length) else {
+            ProbeLog.write("mark readback refused expectedUTF16=\((text as NSString).length) "
+                + "selection=\(readback.selection.location),\(readback.selection.length) "
+                + "marked=\(readback.marked.location),\(readback.marked.length) "
+                + "state=\(readback.composition) client=\(describe(client))")
             return "err unsafe mark readback changed"
         }
         ProbeLog.write("mark len=\(text.count) styled=\(styled) connection=\(connection) client=\(describe(client))")

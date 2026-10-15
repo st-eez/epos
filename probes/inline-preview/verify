@@ -35,6 +35,19 @@ sdk_path="$(/usr/bin/xcrun --sdk macosx --show-sdk-path)"
 /usr/bin/xcrun swiftc \
   -sdk "$sdk_path" -target arm64-apple-macos26.0 \
   -module-cache-path "$verify_dir/ModuleCache" -warnings-as-errors \
+  -D EPOS_CONTROLLER_TESTS -o "$verify_dir/ControllerLifecycleTests" \
+  "$probe_dir/Sources/ProbeSupport.swift" \
+  "$probe_dir/Sources/ProbePreviewSafety.swift" \
+  "$probe_dir/Sources/ProbeSessionOwnership.swift" \
+  "$probe_dir/Sources/ProbeInputBarrier.swift" \
+  "$probe_dir/../../Sources/Epos/Hotkey/DictationShortcut.swift" \
+  "$probe_dir/Sources/ProbeInputController.swift" \
+  "$probe_dir/Tests/ControllerLifecycleTests.swift"
+"$verify_dir/ControllerLifecycleTests"
+
+/usr/bin/xcrun swiftc \
+  -sdk "$sdk_path" -target arm64-apple-macos26.0 \
+  -module-cache-path "$verify_dir/ModuleCache" -warnings-as-errors \
   -D EPOS_SESSION_PROTOTYPE -o "$verify_dir/SessionPrototype" \
   "$probe_dir"/Sources/*.swift \
   "$probe_dir/../../Sources/Epos/Hotkey/DictationShortcut.swift"

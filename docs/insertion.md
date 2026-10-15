@@ -95,6 +95,10 @@ refuses delivery.
 A foreign composition or a changed selection detected after preview blocks both
 final delivery paths and shows `Not inserted`. Unconfirmed preview cleanup also
 blocks delivery, because an opaque target cannot prove the composition is gone.
+Ending or disconnecting that session relinquishes its stale composition record
+without clearing unverified host text. A failed preview in one app must not block
+the next recording in another app. Native mark-readback failures log the expected
+length, actual selection and marked ranges, and ownership state without transcript text.
 Other conclusive commit refusals or commands that could not be sent completely
 can fall back to guarded keystrokes. If the complete command was
 sent and its acknowledgment is lost or malformed, delivery is ambiguous.
