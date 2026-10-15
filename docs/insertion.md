@@ -67,8 +67,7 @@ A controlled October 15 Codex check displayed native underlined `E`, revised it
 to `F` and `Epos test`, then committed `Epos verified` in place. Screenshots and
 the editor's Accessibility value confirmed the final phrase and its removal.
 The companion acknowledged each operation. This check exercised the companion
-directly, not speech recognition or Epos's final Accessibility guard. The latter
-still needs to account for Codex reporting its empty editor's placeholder as text.
+directly, not speech recognition or Epos's final Accessibility guard.
 
 ## Final delivery
 
@@ -85,6 +84,14 @@ only the exact acknowledged draft between the original prefix and suffix, with
 an empty caret at its end. The companion rechecks the concrete client, selection,
 marked range and uninterrupted session immediately before committing. Hosts with
 unreadable draft strings use that native ownership evidence too.
+
+CSS-generated placeholders can appear as the empty editor's Accessibility value,
+as observed in Codex. When the baseline value equals the field's description,
+Epos keeps that literal baseline and records the ambiguity. An acknowledged native
+draft may resolve it only when the original caret was at zero and the complete
+current value and caret exactly match that draft. Ordinary final delivery and
+fallback continue to require the literal baseline. No application is excluded
+from streaming by this check.
 
 If the host leaves marked text after `insertText`, the result is ambiguous and
 Epos suppresses a second write. A native acknowledgement still establishes

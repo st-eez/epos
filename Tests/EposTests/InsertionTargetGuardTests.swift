@@ -5,6 +5,28 @@ import XCTest
 /// trust explicitly: the same refusal means two different things depending on it,
 /// and the xctest host's own trust varies by machine.
 final class InsertionTargetGuardTests: XCTestCase {
+    func testNativeDraftDisambiguatesAnEchoedPlaceholderWithoutChangingBaseline() throws {
+        let label = "Write a message"
+        let context = try XCTUnwrap(AXInsertionTargetObserver.context(
+            in: label, selectedRange: .init(location: 0, length: 0),
+            applicationBundleIdentifier: nil, role: nil, help: nil, description: label
+        ))
+        let draft = "café 👩🏽‍💻"
+        let caret = InsertionTargetTextRange(location: draft.utf16.count, length: 0)
+        XCTAssertTrue(context.matchesBaseline(value: draft, selectedRange: caret, replacingPreview: draft))
+        XCTAssertTrue(context.matchesBaseline(value: draft + label, selectedRange: caret, replacingPreview: draft),
+                      "actual text equal to the label must remain literal")
+        XCTAssertTrue(context.matchesBaseline(value: label, selectedRange: .init(location: 0, length: 0)))
+        XCTAssertFalse(context.matchesBaseline(value: "", selectedRange: .init(location: 0, length: 0)),
+                       "ordinary final delivery must not assume a label is empty text")
+        XCTAssertFalse(context.matchesBaseline(value: draft + "changed", selectedRange: caret, replacingPreview: draft))
+        XCTAssertFalse(context.matchesBaseline(value: draft, selectedRange: .init(location: 0, length: 0), replacingPreview: draft))
+        let literal = InsertionTargetContext(prefix: "", suffix: label)
+        XCTAssertFalse(literal.matchesBaseline(value: draft, selectedRange: caret, replacingPreview: draft))
+        let selected = InsertionTargetContext(prefix: "", selectedText: label, suffix: "", valueMayBePlaceholder: true)
+        XCTAssertFalse(selected.matchesBaseline(value: draft, selectedRange: caret, replacingPreview: draft))
+    }
+
     func testPreviewContextUsesUTF16CaretAndPreservesSurroundingText() {
         let context = InsertionTargetContext(prefix: "🇨🇦 ", suffix: " suffix")
         let draft = "café 👩🏽‍💻"

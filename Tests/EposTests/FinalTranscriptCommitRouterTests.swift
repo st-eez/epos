@@ -89,15 +89,36 @@ final class FinalTranscriptCommitRouterTests: XCTestCase {
     private final class ReadableTargetObserver: InsertionTargetObserver {
         var value = "before hello there after"
         var selection = InsertionTargetTextRange(location: 18, length: 0)
+        var context = InsertionTargetContext(prefix: "before ", suffix: " after")
         func captureBaseline() {}
         func hasCapturedTarget() -> Bool { true }
         func focusChangedSinceStart() -> Bool { false }
         func observedValue() -> String? { value }
         func observedSelectedRange() -> InsertionTargetTextRange? { selection }
         func requiresTextContextValidation() -> Bool { true }
-        func baselineInsertionContext() -> InsertionTargetContext? { .init(prefix: "before ", suffix: " after") }
+        func baselineInsertionContext() -> InsertionTargetContext? { context }
         func targetApplicationBundleIdentifier() -> String? { "com.test.app" }
         func targetWindowTitle() -> String? { nil }
+    }
+
+    func testEchoedPlaceholderAllowsOneOwnedNativeCommit() async {
+        let transport = ScriptedTransport()
+        let preview = await makeHealthyPreview(transport: transport)
+        let backend = RecordingBackend()
+        let target = ReadableTargetObserver()
+        target.context = .init(prefix: "", suffix: "Write a message", valueMayBePlaceholder: true)
+        target.value = "hello there"
+        target.selection = .init(location: target.value.utf16.count, length: 0)
+        let route = await FinalTranscriptCommitRouter.attemptIMECommit(
+            transcript: Self.transcript, preview: preview,
+            insertion: makeInsertion(backend: backend, observer: target)
+        )
+        XCTAssertEqual(route, .completed(.accepted, viaIME: true))
+        XCTAssertTrue(backend.inserted.isEmpty)
+        let lines = await transport.lines
+        XCTAssertFalse(lines.contains("cancel"))
+        XCTAssertEqual(lines.filter { $0.hasPrefix("commit ") }, ["commit \(Self.transcript)"])
+        await preview.discard()
     }
 
     func testReadablePreviewCommitsInPlaceWithoutClearingItsVisibleText() async {

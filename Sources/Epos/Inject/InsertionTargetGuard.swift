@@ -17,12 +17,14 @@ public struct InsertionTargetContext: Equatable {
     public let selectedText: String
     public let suffix: String
     public let selectedRange: InsertionTargetTextRange
+    public let valueMayBePlaceholder: Bool
 
     public init(
         prefix: String,
         selectedText: String = "",
         suffix: String,
-        selectedRange: InsertionTargetTextRange? = nil
+        selectedRange: InsertionTargetTextRange? = nil,
+        valueMayBePlaceholder: Bool = false
     ) {
         self.prefix = prefix
         self.selectedText = selectedText
@@ -31,12 +33,22 @@ public struct InsertionTargetContext: Equatable {
             location: prefix.utf16.count,
             length: selectedText.utf16.count
         )
+        self.valueMayBePlaceholder = valueMayBePlaceholder
     }
 
     func matchesBaseline(
         value: String, selectedRange: InsertionTargetTextRange, replacingPreview: String? = nil
     ) -> Bool {
         if let replacingPreview {
+            // CSS-generated placeholders can appear as AXValue. Only the native
+            // commit path supplies an acknowledged draft, whose exact value and
+            // caret can disambiguate that label from actual surrounding text.
+            if valueMayBePlaceholder, prefix.isEmpty, selectedText.isEmpty,
+               self.selectedRange == InsertionTargetTextRange(location: 0, length: 0),
+               value == replacingPreview,
+               selectedRange == InsertionTargetTextRange(location: replacingPreview.utf16.count, length: 0) {
+                return true
+            }
             return self.selectedRange.length == 0 && selectedText.isEmpty
                 && value == prefix + replacingPreview + suffix
                 && selectedRange == InsertionTargetTextRange(
@@ -172,7 +184,8 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
                 selectedRange: selectedRange,
                 applicationBundleIdentifier: homeApplicationBundleIdentifier,
                 role: isGhostty ? rawStringAttribute(of: baseline, kAXRoleAttribute as String) : nil,
-                help: isGhostty ? rawStringAttribute(of: baseline, kAXHelpAttribute as String) : nil
+                help: isGhostty ? rawStringAttribute(of: baseline, kAXHelpAttribute as String) : nil,
+                description: rawStringAttribute(of: baseline, kAXDescriptionAttribute as String)
             )
         }
         homeHasReadableTextContext = insertionContext != nil
@@ -327,7 +340,8 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
         selectedRange: InsertionTargetTextRange,
         applicationBundleIdentifier: String?,
         role: String?,
-        help: String?
+        help: String?,
+        description: String? = nil
     ) -> InsertionTargetContext? {
         // Ghostty's terminal AXValue is the rendered screen, and its range is a
         // terminal selection. Only this confirmed surface uses opaque focus checks.
@@ -357,7 +371,8 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             prefix: String(value[..<start]),
             selectedText: String(value[start..<end]),
             suffix: String(value[end...]),
-            selectedRange: selectedRange
+            selectedRange: selectedRange,
+            valueMayBePlaceholder: !value.isEmpty && value == description
         )
     }
 
