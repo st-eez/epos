@@ -6,6 +6,8 @@
 //   ready <input-source-id>      exit 0 if any matching keyboard method is ready
 //   registered <input-source-id> exit 0 if a matching keyboard method is registered
 //   list [substring]             print matching input source ids
+//   current|layout               print the selected source or underlying layout id
+//   select <input-source-id>     select an already enabled keyboard method
 import Carbon
 import Foundation
 
@@ -39,11 +41,24 @@ func isReady(_ source: TISInputSource) -> Bool {
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 guard let command = arguments.first else {
-    FileHandle.standardError.write(Data("usage: tisctl.swift find|ready|registered|register|enable|list [arg]\n".utf8))
+    FileHandle.standardError.write(Data("usage: tisctl.swift find|ready|registered|register|enable|list|current|layout|select [arg]\n".utf8))
     exit(64)
 }
 
 switch command {
+case "current", "layout":
+    let source = command == "current" ? TISCopyCurrentKeyboardInputSource() : TISCopyCurrentKeyboardLayoutInputSource()
+    guard let source = source?.takeRetainedValue(),
+          let identifier = stringProperty(source, kTISPropertyInputSourceID) else { exit(1) }
+    print(identifier)
+
+case "select":
+    guard arguments.count > 1,
+          let found = allSources().first(where: {
+              stringProperty($0, kTISPropertyInputSourceID) == arguments[1] && isReady($0)
+          }) else { exit(1) }
+    exit(TISSelectInputSource(found) == noErr ? 0 : 1)
+
 case "find":
     guard arguments.count > 1, let found = source(matching: arguments[1]) else { exit(1) }
     let category = stringProperty(found, kTISPropertyInputSourceCategory) ?? "?"

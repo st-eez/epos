@@ -52,6 +52,16 @@ if [[ "$1" == swiftc ]]; then
 fi
 command="$3"
 case "$command" in
+  current)
+    if [[ "$EPOS_INSTALL_CHECK_MODE" == selection-unreadable ]]; then exit 1; fi
+    if [[ -e "$EPOS_INSTALL_CHECK_ROOT/current" ]]; then cat "$EPOS_INSTALL_CHECK_ROOT/current"
+    elif [[ "$EPOS_INSTALL_CHECK_MODE" == selected* ]]; then echo com.steez.inputmethod.EposProbe
+    else echo com.apple.keylayout.ABC; fi
+    exit 0 ;;
+  layout) echo com.apple.keylayout.ABC; exit 0 ;;
+  select)
+    if [[ "$EPOS_INSTALL_CHECK_MODE" == selected-restore-fails ]]; then exit 1; fi
+    echo "$4" > "$EPOS_INSTALL_CHECK_ROOT/current"; exit 0 ;;
   ready)
     if [[ "$EPOS_INSTALL_CHECK_MODE" == disabled || "$EPOS_INSTALL_CHECK_MODE" == interrupted-migration ]]; then exit 1; fi
     if [[ "$EPOS_INSTALL_CHECK_MODE" == unregistered && ! -e "$EPOS_INSTALL_CHECK_ROOT/registered" ]]; then exit 1; fi
@@ -81,7 +91,15 @@ touch "$EPOS_INSTALL_CHECK_ROOT/replaced"
 cp -R "$1" "$2"
 ''',
                 "security": "#!/bin/bash\nexit 0\n",
-                "pkill": "#!/bin/bash\nexit 0\n",
+                "pkill": r'''#!/bin/bash
+echo "pkill $*" >> "$EPOS_INSTALL_CHECK_ROOT/calls"
+if [[ "$EPOS_INSTALL_CHECK_MODE" == selected-user-changed ]]; then
+  echo com.test.other-input-method > "$EPOS_INSTALL_CHECK_ROOT/current"
+else
+  echo com.apple.keylayout.ABC > "$EPOS_INSTALL_CHECK_ROOT/current"
+fi
+exit 0
+''',
                 "killall": '#!/bin/bash\necho "killall $*" >> "$EPOS_INSTALL_CHECK_ROOT/calls"\n',
                 "lsregister": r'''#!/bin/bash
 echo "lsregister $*" >> "$EPOS_INSTALL_CHECK_ROOT/calls"
@@ -106,7 +124,9 @@ fi
                 self.assertIn(f"lsregister -u {legacy}", calls)
                 self.assertTrue(any("lsregister -u " in call and "epos-companion-stage." in call for call in calls))
                 if result.returncode == 0:
-                    self.assertIn(" ready ", calls[-1], "readiness must be checked after staging cleanup")
+                    cleanup = max(i for i, call in enumerate(calls) if "lsregister -u " in call)
+                    readiness = max(i for i, call in enumerate(calls) if " ready " in call)
+                    self.assertLess(cleanup, readiness, "readiness must be checked after staging cleanup")
             return result, calls, (installed / "Contents/MacOS/EposProbe").read_text(), legacy.exists()
 
     def test_same_metadata_upgrade_keeps_registration_and_skips_agent_restarts(self):
@@ -115,6 +135,31 @@ fi
         self.assertEqual(executable, "new executable")
         self.assertFalse(any(" register " in call or call.startswith("lsregister -f") for call in calls))
         self.assertFalse(any(call.startswith("killall ") for call in calls))
+        self.assertFalse(any(" select " in call for call in calls))
+
+    def test_selected_companion_is_restored_after_replacement(self):
+        result, calls, _, _ = self.run_install("selected")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("restored the selected Epos", result.stdout)
+        selection = next(i for i, call in enumerate(calls) if " select " in call)
+        readiness = max(i for i, call in enumerate(calls) if " ready " in call)
+        self.assertGreater(selection, readiness)
+
+    def test_new_source_chosen_during_install_is_preserved(self):
+        result, calls, _, _ = self.run_install("selected-user-changed")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(any(" select " in call for call in calls))
+
+    def test_selection_restoration_failure_is_reported(self):
+        result, _, _, _ = self.run_install("selected-restore-fails")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("prior keyboard selection could not be restored", result.stderr)
+
+    def test_unreadable_selection_stops_before_replacing_the_companion(self):
+        result, calls, executable, _ = self.run_install("selection-unreadable")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(executable, "original")
+        self.assertFalse(any(call.startswith("pkill ") for call in calls))
 
     def test_changed_metadata_registers_the_installed_path(self):
         result, calls, _, _ = self.run_install("changed-metadata")

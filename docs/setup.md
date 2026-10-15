@@ -26,6 +26,10 @@ and the keyboard method is registered, the installer keeps that registration and
 input-agent restarts. It checks all matching sources for an enabled, selectable
 keyboard method before and after replacement. A registered but disabled source
 is reported as unavailable; the installer never enables it automatically.
+If Epos was selected immediately before replacing the companion, the installer
+restores that selection when macOS falls back to its underlying layout. It
+preserves a different input source selected during installation. Registration
+readiness alone does not establish which input method is selected or activated.
 The app can use its recording pill while the companion is unavailable.
 When Stream into field is on, the menu reports a missing or disabled input
 source. For a disabled source, Keyboard settings opens the setup pane. Under

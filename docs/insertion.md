@@ -148,10 +148,13 @@ service is used. Switching the source only at fn press did not activate Ghostty
 in the October 9 installed hold. Epos can adopt a source selected before dictation;
 its actual client activation still gates every draft.
 
-Steve confirmed live Ghostty streaming on October 15 after enabling the input
-source. The subsequent in-place commit and source-retention changes still need
-installed-app checks for visible continuity, one final payload, interruption and
-ordinary typing before replacement readiness can be claimed. Concurrent additive input methods remain a limit.
+Steve confirmed live Ghostty streaming and text staying visible on release on
+October 15 with signed build `67e89fe`, after reselecting Epos following the upgrade.
+Recordings `73f924ce` and `1b99b83a` each acknowledged one native commit with no
+preview cancellation or Unicode fallback. Their native commit calls took 4.0 and
+5.9 ms. Terminal byte readback remains unavailable. Interruption, other host apps
+and ordinary typing still need installed checks before replacement readiness can
+be claimed. Concurrent additive input methods remain a limit.
 
 Earlier observations are retained in the [feasibility record](../specs/inline-preview-feasibility.md)
 and [session prototype](../specs/preview-session-prototype.md). July 31 dogfood

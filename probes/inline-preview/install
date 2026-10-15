@@ -14,6 +14,7 @@ verify_only=false
 was_ready=false
 same_metadata=false
 staging_dir=""
+restore_layout=""
 
 [[ "${1:-}" == "--verify-only" ]] && verify_only=true
 
@@ -51,6 +52,21 @@ poll_registration() {
     sleep 2
   done
   return 1
+}
+
+restore_keyboard_selection() {
+  [[ -n "$restore_layout" ]] || return 0
+  local current
+  current="$(tisctl current)" || return 1
+  # Terminating a selected IME can select its underlying layout. Restore only
+  # that transition; preserve another input source chosen during installation.
+  if [[ "$current" == "$restore_layout" ]]; then
+    if ! tisctl select "$source_id" || [[ "$(tisctl current)" != "$source_id" ]]; then
+      echo "error: companion installed, but its prior keyboard selection could not be restored" >&2
+      return 1
+    fi
+    echo "restored the selected Epos keyboard input method"
+  fi
 }
 
 if [[ "$verify_only" == false ]]; then
@@ -106,6 +122,10 @@ if [[ "$verify_only" == false ]]; then
 
   echo "== install =="
   mkdir -p "$HOME/Library/Input Methods"
+  prior_selection="$(tisctl current)"
+  if [[ "$prior_selection" == "$source_id" ]]; then
+    restore_layout="$(tisctl layout)"
+  fi
   /usr/bin/pkill -x EposProbe >/dev/null 2>&1 || true
   find "$installed_bundle" -depth -delete 2>/dev/null || true
   /usr/bin/ditto "$staged_bundle" "$installed_bundle"
@@ -129,6 +149,7 @@ fi
 echo "== verify =="
 if poll_registration 10; then
   if tisctl ready "$source_id"; then
+    restore_keyboard_selection || exit 2
     echo "registered live; keyboard source ready"
     exit 0
   fi
@@ -141,6 +162,7 @@ if [[ "$verify_only" == false && "$same_metadata" == false ]]; then
   /usr/bin/killall lsd cfprefsd >/dev/null 2>&1 || true
   if poll_registration 20; then
     if tisctl ready "$source_id"; then
+      restore_keyboard_selection || exit 2
       echo "registered live; keyboard source ready"
       exit 0
     fi
