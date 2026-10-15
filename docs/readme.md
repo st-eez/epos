@@ -39,7 +39,7 @@ Search terms include common user wording and implementation names.
 | Corrections editor, Literal and Name modes, developer tokens | custom words, names, spoken symbols | [Corrections](corrections.md#dictionary-and-editor) |
 | Dictionary upgrades and protected storage | migration, saved corrections, data protection | [Corrections](corrections.md#persistence) |
 | Learn corrections, observed edits, suggestion review | learning, user edits, rule suggestions | [Corrections](corrections.md#learning-and-suggestions) |
-| Recording pill, live meter, start and release sounds, notices | HUD, recording indicator, beeps | [Recording feedback](recording-feedback.md) |
+| Cursor microphone, screen-edge fallback, start and release sounds, notices | HUD, recording indicator, beeps | [Recording feedback](recording-feedback.md) |
 | Edge glow, intensity, thickness, color, Ember aura | border glow, recording animation, aura | [Recording feedback](recording-feedback.md#edge-glow) |
 | Launch at login and saved preferences | startup, preferences, autostart | [Settings](settings.md) |
 | Quit and menu status | tray icon, menu bar, exit | [Settings](settings.md#menu-actions) |

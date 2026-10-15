@@ -5,6 +5,7 @@ Configurable input controls added to scope on 2026-10-02.
 Native keyboard-session preview redesign added to scope on 2026-10-09.
 Continuous preview finalization added to scope on 2026-10-15.
 Incremental native phrase commits added to scope on 2026-10-15.
+Cursor microphone feedback added to scope on 2026-10-15.
 
 Start at [docs/readme.md](../docs/readme.md) for the current feature map, implementation, tests, and verification limits. This document governs product scope and design. Historical validation below does not establish the current installed app's behavior.
 
@@ -44,7 +45,7 @@ Built and validated after the original baseline and promoted from the backlog. L
 - **Opt-in audio sample capture** (`Audio/DogfoodTap.swift`). Per-recording `.wav` capture to `~/Library/Application Support/Epos/recordings/` as local eval material. Application Support, not the cache: these recordings are the frozen evaluation corpus and macOS purges caches under disk pressure. Off by default, gated by `Settings.saveAudioSamples`. Empty and failed transcription sessions are retained when capture is enabled because their audio is the evidence needed to distinguish silence, wrong-input, capture, and recognizer failures.
 - **On-disk diagnostic log** (`Diagnostics/EposLogger.swift` → `DiagnosticLogSink`). Mirrors `os.Logger` events to a size-capped, rotated app-owned log under `~/Library/Caches/Epos/logs/` (writes direct events instead of polling the unified-log store). This is a local dogfood/debug surface; transcript-bearing diagnostic text for transcript timing is redacted by default and requires `EPOS_DIAGNOSTIC_TRANSCRIPT_TEXT=1`. Disable logs entirely with `EPOS_DIAGNOSTIC_LOGS=0`.
 - **Target-aware insertion guard** (`Inject/InsertionTargetGuard.swift`, wired into `Inject/FinalTranscriptInsertion.swift`). Backlog #11. The session captures the focused Accessibility element and any readable value, caret, and selection at shortcut press. Immediately before final delivery it checks that the original application and field are still focused. Keystroke delivery also requires unchanged observable text context; an owned native composition uses the companion checks described below. Opaque Electron targets use the stable process and focus signature instead of pretending their value is readable. Any mismatch refuses the entire insertion; Epos does not refocus, append elsewhere, or delete text. AX I/O is bounded with `AXUIElementSetMessagingTimeout` so a wedged accessibility server cannot stall finalization. Two Chromium-host accommodations keep the guard usable there without weakening it: `Inject/ElectronAccessibilityWaker.swift` sets the Electron-documented `AXManualAccessibility` attribute on every app the user activates (never unset; a no-op on hosts without the attribute), because Chromium keeps its accessibility tree unbuilt until an assistive client announces itself and an unwoken tree makes the shortcut-press capture see no focused element at all; and before the final authorization the session waits out a bounded ladder for the readable baseline to be restored (`settleReadableBaseline` — run only for a recording whose preview mark may still be drawn, polling the guard's own shared comparison including its focus checks), because Chromium reflects a composition teardown into its AX value asynchronously and an immediate read mistakes stale marked text for a user edit. Every refusal leg of the readable-context comparison logs its reason with lengths and ranges only. The pure decision is unit-tested with fake observations; live Accessibility behavior requires the installed signed app.
-- **Conservative final cleanup** (`Speech/TranscriptDeterministicCleaner.swift`; applied per recording by `App/AppCoordinator.swift`). Always on, no toggle. Removes only hard fillers (`um`/`uh`/`er`/`hmm`, with an acronym guard), collapses stuttered function-word repeats from a closed allow-list, and writes standalone numeric ordinals as words (`1st` -> `first`). It runs on the streamed HUD text and, after canonicalization, on the authoritative final transcript, so the one guarded write can never re-type text the user already saw cleaned. Everything ambiguous survives: "you know", bare or comma-delimited `so`/`like`, emphatic and grammatical doublings, and grammar shape. Spoken-symbol conversion remains solely owned by `TranscriptCanonicalizer`.
+- **Conservative final cleanup** (`Speech/TranscriptDeterministicCleaner.swift`; applied per recording by `App/AppCoordinator.swift`). Always on, no toggle. Removes only hard fillers (`um`/`uh`/`er`/`hmm`, with an acronym guard), collapses stuttered function-word repeats from a closed allow-list, and writes standalone numeric ordinals as words (`1st` -> `first`). It runs on the streamed field text and, after canonicalization, on the authoritative final transcript, so the one guarded write can never re-type text the user already saw cleaned. Everything ambiguous survives: "you know", bare or comma-delimited `so`/`like`, emphatic and grammatical doublings, and grammar shape. Spoken-symbol conversion remains solely owned by `TranscriptCanonicalizer`.
 - **Opt-in LLM polish — shipped, benchmarked, removed 2026-07-29.** Backlog #6. An opt-in `Settings.polishEnabled` polish stage (FoundationModels guided generation by default, a local Ollama engine behind `EPOS_POLISH_ENGINE` for dogfooding, a content-retention guard, and a deterministic fallback) shipped and stayed default-off. The 2026-06-07 local-model benchmark found no model with a safe operating point above the deterministic transforms above: the only safe configuration did nothing the deterministic cleaner does not already do, at gigabytes of resident memory. The whole stack — policy, guard, engines, prompts, HTTP client, menu toggle, and eval harnesses — was deleted rather than carried as dead maintenance surface. Full record: `specs/polish-model-benchmark.md`; earlier design notes in `specs/llm-polish-probe.md` and `specs/ollama-polish-levers/`. Do not re-add an LLM rewrite stage without new evidence that clears that bar.
 - **Guarded phrase insertion** (`Inject/FinalTranscriptInsertion.swift`, `Inject/TextInsertionBackend.swift`). Epos captures the focused field at shortcut press. An eligible native session commits corrected, cleaned recognition phrases while held, keeps unfinished text marked, and commits only the remainder on release. Each phrase is delivered once. Native commits check captured focus and companion ownership. A lost acknowledgement suppresses every further write. After any native phrase has committed, failures preserve it and report incomplete delivery instead of replaying the whole transcript. Without a usable native session, the original whole-transcript Unicode path remains guarded by the captured value, caret and selection. No clipboard or corrective backspaces are used.
 - **Inline preview (native keyboard input method)** (`Inject/InlinePreviewSession.swift`, `Inject/PreviewKeyboardSource.swift`, companion `probes/inline-preview/`). Epos adopts its already selected companion without changing the user's source, or acquires it during a hold. A successful native commit acquired from a keyboard layout keeps Epos selected with that layout; failures and borrowed input methods restore the prior source unless the user chose another. Both paths preserve the underlying keyboard mapping. Actual companion activation, readable empty selection, and concrete client/connection ownership authorize an uninterrupted draft session. An unavailable initial marked range requires actual Epos activation with an adopted layout or acquisition from a keyboard layout; known foreign composition is refused. Drafts use native marked text, with range checks and readable text equality when supported. Keyboard and mouse interaction, focus or source changes, host teardown, and connection loss retire the session. Healthy owned drafts commit in place after the guard accounts for the preview. Unavailable preview channels use guarded Unicode delivery after cleanup. Missing source, activation, or companion Accessibility uses the HUD. The October 9 redesign still requires installed Ghostty acceptance; historical palette feasibility and isolated experiments do not certify it. See [insertion.md](../docs/insertion.md) and the Text injection design below.
@@ -63,7 +64,7 @@ Sources/Epos/
     AppCoordinatorInputControls.swift # guarded input preferences and recorder suspension
     RecordingSession.swift      # one hold owns capture, recognition, preview, final delivery and teardown
     StartReadinessProbe.swift   # can a press open a dictation: grants + model + capture format
-    RecordingCuePresenter.swift # which cue is up: screen-edge glow, pill, or neither
+    RecordingCuePresenter.swift # microphone cue lifetime and optional screen-edge glow
     InlinePreviewCoordinator.swift # one recording's inline-preview session lifecycle
     CorrectionEvidenceRecorder.swift # evidence row + post-insertion watch for the user's edit
   Permissions/
@@ -84,7 +85,7 @@ Sources/Epos/
     DictationShortcut.swift     # persisted validated binding, fn default
     ShortcutRecording.swift    # recorder candidate and release reducer
   UI/
-    RecordingIndicator.swift    # floating HUD: state + audio meter + volatile transcript preview
+    RecordingIndicator.swift    # cursor microphone, progress, and failure notices
     MenuBarView.swift           # MenuBarExtra: status, quit, open permissions
     ShortcutRecorderView.swift  # native key-window recorder from the menu
     CorrectionsEditorView.swift # correction-rule editor window (+ CorrectionDraft, CorrectionDraftRow)
@@ -110,7 +111,7 @@ A session completes cleanup before the coordinator returns to idle and replays a
 ```
 DictationHotkey.press
   -> AppCoordinator.startRecording
-     -> RecordingIndicator.show (edge glow, or the pill)
+     -> RecordingIndicator.show (cursor microphone and optional edge glow)
      -> AudioCapture.start (16 kHz mono Float32 buffers) — first, so the start cue is
         an honest "mic is hot"; buffers queue in CapturePreRoll until the analyzer exists
      -> RecordingCue.playStart
@@ -123,7 +124,7 @@ DictationHotkey.release
      -> AudioCapture.stop
      -> Transcriber.finalize -> String
      -> TranscriptCanonicalizer.canonicalize(finalText)   # correction layer, Shipped Since Baseline
-     -> TranscriptDeterministicCleaner.streamClean(...)   # same conservative cleanup the HUD streamed
+     -> TranscriptDeterministicCleaner.streamClean(...)   # same conservative cleanup the field preview used
      -> FinalTranscriptInsertionSession verifies the shortcut-press target and writes once
      -> RecordingIndicator.hide   # after insertion, or after visibly reporting "Not inserted"
 ```
@@ -166,19 +167,18 @@ The menu microphone picker defaults to System default. Choosing an available inp
 
 ### Recording indicator
 
-A single `NSPanel` (borderless, non-activating, click-through, floats above all), rendered as a compact HUD:
+A non-activating, click-through panel shows a tiny microphone throughout recording,
+independent of inline preview availability. Voice amplitude brightens the microphone.
+It sits beside and below the text caret, clear of its line. When reliable caret
+geometry is unavailable or there is no room, it uses a compact screen-edge position
+on the target display. Codex and Ghostty use the same placement and lifetime rules.
+Caret reads are bounded, off the main actor, and stop when the cue hides.
 
-- A status dot whose color signals state (idle / recording / finalizing).
-- A live amplitude meter from the audio tap (RMS over a small window).
-- One tail-truncated line of volatile transcript text while recording.
-- A brief visible red notice whenever a dictation cannot complete normally, naming
-  which stage failed: "Not inserted" (the shortcut-press target is no longer safe),
-  "Mic lost" (the microphone died mid-hold), "Recognition lost" (the recognizer
-  stopped mid-hold; what it heard first is still written at release), and
-  "Not ready" (the session never started). Silence is never an acceptable outcome
-  for a dictation the user held fn and spoke into.
-
-The preview is memory-only and clears with the recording session. No persistent history, frontmost-app icon, waveform history, or draggable position. Centered above the active screen's bottom edge, fixed.
+During finalization the same cue shows progress, then disappears on completion.
+Failures expand to a readable screen-edge notice for approximately 2.5 seconds.
+The indicator never displays a duplicate transcript, changes focus, or intercepts
+input. Existing optional edge-glow styling remains independent of this cue.
+No persistent history, frontmost-app icon, waveform history, or draggable position.
 
 ### Text injection
 

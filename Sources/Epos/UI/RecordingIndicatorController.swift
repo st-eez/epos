@@ -1,10 +1,6 @@
 import AppKit
 import SwiftUI
 
-/// Floating borderless `NSPanel` that hosts a SwiftUI view supplied by the caller.
-/// A `Window` scene cannot give us non-activating + floats-above-all behavior, so we
-/// manage the panel directly. Position is centered horizontally, ~60pt above the
-/// active screen's bottom edge.
 @MainActor
 public final class RecordingIndicatorController {
     private var panel: NSPanel?
@@ -13,11 +9,21 @@ public final class RecordingIndicatorController {
     /// show can never order out the re-shown panel.
     private var visibilityGeneration = 0
 
-    private static let panelSize = CGSize(width: 360, height: 110)
+    private var placementTask: Task<Void, Never>?
+    private var showsNotice = false
+    private(set) var targetPID: pid_t?
+    private let frontmostProcessIdentifier: @MainActor () -> pid_t?
+    private var targetScreen: NSScreen?
+    private static let panelSize = CGSize(width: 34, height: 34)
+    private static let noticeSize = CGSize(width: 224, height: 40)
     private static let showFadeDuration: TimeInterval = 0.12
     private static let hideFadeDuration: TimeInterval = 0.18
 
-    public init() {}
+    public init(frontmostProcessIdentifier: @escaping @MainActor () -> pid_t? = {
+        NSWorkspace.shared.frontmostApplication?.processIdentifier
+    }) {
+        self.frontmostProcessIdentifier = frontmostProcessIdentifier
+    }
 
     /// Build the floating panel and host the supplied SwiftUI content. Idempotent —
     /// subsequent calls are no-ops; the first content sticks. Under XCTest no
@@ -50,17 +56,33 @@ public final class RecordingIndicatorController {
         self.panel = panel
     }
 
-    /// Reposition to the active screen's bottom-center, order front, and fade
-    /// in. Also the live restore path when the inline preview degrades
-    /// mid-recording and for the failure notice flashes. A show landing during
-    /// a hide fade reclaims the panel from whatever alpha the fade reached.
-    public func show() {
+    public func show(notice: Bool = false, newRecording: Bool = false) {
+        if newRecording || targetPID == nil {
+            placementTask?.cancel()
+            placementTask = nil
+            targetPID = frontmostProcessIdentifier()
+        }
         guard IndicatorWindowPolicy.canPresentWindows else { return }
         guard let panel else {
             log.error("show() called before attach(content:); ignoring")
             return
         }
-        repositionToActiveScreen(panel)
+        showsNotice = notice
+        if placementTask == nil {
+            targetScreen = NSScreen.main ?? NSScreen.screens.first
+            updatePlacement(RecordingCaretGeometry())
+            placementTask = Task { [weak self] in
+                while !Task.isCancelled {
+                    guard let pid = self?.targetPID else { return }
+                    let geometry = await RecordingCaretReader.read(processIdentifier: pid)
+                    guard !Task.isCancelled else { return }
+                    self?.updatePlacement(geometry)
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+            }
+        } else {
+            updatePlacement(RecordingCaretGeometry())
+        }
         fadeIn(panel)
     }
 
@@ -78,6 +100,9 @@ public final class RecordingIndicatorController {
     /// Fade out, then order out — the pill yields to the text that just landed
     /// in the field instead of blinking off.
     public func hide() {
+        placementTask?.cancel()
+        placementTask = nil
+        targetPID = nil
         guard let panel, panel.isVisible else { return }
         visibilityGeneration += 1
         let generation = visibilityGeneration
@@ -94,48 +119,64 @@ public final class RecordingIndicatorController {
         }
     }
 
-    private func repositionToActiveScreen(_ panel: NSPanel) {
-        let screen = NSScreen.main ?? NSScreen.screens.first
-        guard let visible = screen?.visibleFrame else { return }
-        let frame = RecordingIndicatorPlacementPolicy.bottomCenterFrame(
+    private func updatePlacement(_ geometry: RecordingCaretGeometry) {
+        guard let panel else { return }
+        let primaryHeight = NSScreen.screens.first?.frame.maxY ?? 0
+        let caret = geometry.caret.map {
+            RecordingIndicatorPlacementPolicy.appKitRect(fromAX: $0, primaryScreenHeight: primaryHeight)
+        }
+        let window = geometry.window.map {
+            RecordingIndicatorPlacementPolicy.appKitRect(fromAX: $0, primaryScreenHeight: primaryHeight)
+        }
+        if let caret, let screen = NSScreen.screens.first(where: {
+            $0.frame.contains(CGPoint(x: caret.midX, y: caret.midY))
+        }) {
+            targetScreen = screen
+        } else if let window, let screen = NSScreen.screens.max(by: {
+            $0.frame.intersection(window).area < $1.frame.intersection(window).area
+        }), screen.frame.intersects(window) {
+            targetScreen = screen
+        }
+        guard let visible = targetScreen?.visibleFrame else { return }
+        let sameApplication = frontmostProcessIdentifier() == targetPID
+        let frame = RecordingIndicatorPlacementPolicy.frame(
+            caret: sameApplication && !showsNotice ? caret : nil,
             in: visible,
-            indicatorSize: Self.panelSize
+            indicatorSize: showsNotice ? Self.noticeSize : Self.panelSize
         )
         panel.setFrame(frame, display: false)
     }
 }
 
-struct RecordingIndicatorPlacementPolicy {
-    nonisolated static let fallbackBottomInset: CGFloat = 60
+private extension CGRect {
+    var area: CGFloat { isNull ? 0 : width * height }
+}
 
-    nonisolated static func bottomCenterFrame(
-        in visibleFrame: CGRect,
-        indicatorSize: CGSize
-    ) -> CGRect {
-        let visibleFrame = visibleFrame.standardized
-        let indicatorSize = CGSize(
-            width: max(0, indicatorSize.width),
-            height: max(0, indicatorSize.height)
-        )
-        let x = clamped(
-            visibleFrame.midX - indicatorSize.width / 2,
-            lower: visibleFrame.minX,
-            upper: visibleFrame.maxX - indicatorSize.width
-        )
-        let y = clamped(
-            visibleFrame.minY + fallbackBottomInset,
-            lower: visibleFrame.minY,
-            upper: visibleFrame.maxY - indicatorSize.height
-        )
-        return CGRect(origin: CGPoint(x: x, y: y), size: indicatorSize)
+struct RecordingIndicatorPlacementPolicy {
+    nonisolated static func isUsableCaret(_ rect: CGRect) -> Bool {
+        [rect.origin.x, rect.origin.y, rect.width, rect.height].allSatisfy(\.isFinite)
+            && rect.width >= 0 && rect.width <= 32 && rect.height >= 4 && rect.height <= 120
     }
 
-    private nonisolated static func clamped(
-        _ value: CGFloat,
-        lower: CGFloat,
-        upper: CGFloat
-    ) -> CGFloat {
-        guard upper >= lower else { return lower }
-        return min(max(value, lower), upper)
+    // Accessibility uses a top-left origin on the primary display; AppKit uses bottom-left.
+    nonisolated static func appKitRect(fromAX rect: CGRect, primaryScreenHeight: CGFloat) -> CGRect {
+        CGRect(x: rect.minX, y: primaryScreenHeight - rect.maxY, width: rect.width, height: rect.height)
+    }
+
+    nonisolated static func frame(caret: CGRect?, in visibleFrame: CGRect, indicatorSize: CGSize) -> CGRect {
+        let safe = visibleFrame.insetBy(dx: 8, dy: 8)
+        if let caret, isUsableCaret(caret), safe.contains(CGPoint(x: caret.midX, y: caret.midY)) {
+            let x = min(max(caret.maxX + 6, safe.minX), safe.maxX - indicatorSize.width)
+            for y in [caret.minY - 6 - indicatorSize.height, caret.maxY + 6] {
+                let candidate = CGRect(origin: CGPoint(x: x, y: y), size: indicatorSize)
+                if safe.contains(candidate) { return candidate }
+            }
+        }
+        return CGRect(
+            x: safe.maxX - indicatorSize.width,
+            y: safe.midY - indicatorSize.height / 2,
+            width: indicatorSize.width,
+            height: indicatorSize.height
+        )
     }
 }

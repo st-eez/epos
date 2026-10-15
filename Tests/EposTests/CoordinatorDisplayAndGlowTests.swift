@@ -85,7 +85,6 @@ final class CoordinatorDisplayAndGlowTests: XCTestCase {
         coordinator.handlePartialTranscript(Self.disfluentRaw)
 
         XCTAssertEqual(coordinator.displayText, cleaned)
-        XCTAssertEqual(coordinator.hudTranscriptPreview, cleaned)
         // Guard against a silent no-op: the whole point is that the user does not
         // watch the raw recognizer text and then see it rewritten by the write.
         XCTAssertNotEqual(coordinator.displayText, Self.disfluentRaw)

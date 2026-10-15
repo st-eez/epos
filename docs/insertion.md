@@ -44,7 +44,7 @@ the preview pass. Later text starts a new composition.
 The signed app installer installs the companion in lockstep with Epos. The local
 installer leaves it uninstalled. The companion needs live registration and input
 source consent. A missing companion, unidentified target, refused focus lock, or
-failed channel restores the recording pill and its transcript for that hold.
+failed channel leaves the microphone cue visible and uses guarded final delivery.
 The menu toggle can disable inline preview.
 
 Preview is skipped when the captured target has selected text. Before every mark,

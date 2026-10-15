@@ -99,14 +99,11 @@ final class SmokeTests: XCTestCase {
         XCTAssertEqual(clamped.blue, 0)
     }
 
-    func testRecordingIndicatorMeterRespondsToSpeechRange() {
-        let quietHeights = (0..<5).map { RecordingIndicatorSurface.barHeight($0, amplitude: 0.005) }
-        let speechHeights = (0..<5).map { RecordingIndicatorSurface.barHeight($0, amplitude: 0.03) }
-        let loudHeights = (0..<5).map { RecordingIndicatorSurface.barHeight($0, amplitude: 0.08) }
-
-        XCTAssertGreaterThan(speechHeights.reduce(0, +), quietHeights.reduce(0, +))
-        XCTAssertGreaterThan(loudHeights.reduce(0, +), speechHeights.reduce(0, +))
-        XCTAssertGreaterThan(loudHeights.max() ?? 0, quietHeights.max() ?? 0)
+    func testRecordingMicrophoneBrightensWithSpeech() {
+        XCTAssertGreaterThan(RecordingIndicatorSurface.microphoneOpacity(0.03),
+                             RecordingIndicatorSurface.microphoneOpacity(0.005))
+        XCTAssertEqual(RecordingIndicatorSurface.microphoneOpacity(1), 1)
+        XCTAssertEqual(RecordingIndicatorSurface.microphoneOpacity(-1), 0.55)
     }
 
     func testRecordingIndicatorLabelsFinalizationStages() {
@@ -122,25 +119,6 @@ final class SmokeTests: XCTestCase {
             RecordingIndicatorSurface.statusText(state: .finalizing, finalizationPhase: .inserting),
             "Updating"
         )
-    }
-
-    func testIndicatorBottomCenterPlacement() {
-        let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let pillSize = CGSize(width: 144, height: 36)
-
-        let fallback = RecordingIndicatorPlacementPolicy.bottomCenterFrame(
-            in: screen,
-            indicatorSize: pillSize
-        )
-        XCTAssertEqual(fallback.size.width, pillSize.width, accuracy: 0.001)
-        XCTAssertEqual(fallback.size.height, pillSize.height, accuracy: 0.001)
-        XCTAssertEqual(fallback.midX, screen.midX, accuracy: 0.001)
-        XCTAssertEqual(
-            fallback.minY,
-            screen.minY + RecordingIndicatorPlacementPolicy.fallbackBottomInset,
-            accuracy: 0.001
-        )
-        XCTAssertTrue(screen.contains(fallback))
     }
 
     func testLocalInstallDoesNotRegisterInputMethod() throws {

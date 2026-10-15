@@ -62,13 +62,6 @@ public final class AppCoordinator: ObservableObject {
     /// into the shortcut-press field (begin acked, channel healthy this whole recording).
     @Published public private(set) var inlinePreviewMirroring = false
 
-    /// What the HUD's transcript line shows: empty while the inline preview is
-    /// mirroring the same text into the field, so the utterance appears once.
-    /// Disabled, skipped, begin-refused, and degraded previews (including
-    /// mid-recording degradation) all leave `inlinePreviewMirroring` false, which
-    /// restores today's HUD line exactly.
-    public var hudTranscriptPreview: String { inlinePreviewMirroring ? "" : displayText }
-
     /// True while the screen-edge glow is on. Internal so tests can pin it.
     var edgeGlowVisible: Bool { cues.edgeGlowVisible }
     var pillVisible: Bool { cues.pillVisible }
@@ -459,14 +452,16 @@ public final class AppCoordinator: ObservableObject {
         let generation = (noticeFlashGenerations[notice] ?? 0) + 1
         noticeFlashGenerations[notice] = generation
         self[keyPath: notice] = true
-        cues.showPill()
+        cues.showPill(notice: true)
         noticeExpiryScheduler(Self.noticeFlashDuration) { [weak self] in
             guard let self, self.noticeFlashGenerations[notice] == generation,
                   self[keyPath: notice] else { return }
             self[keyPath: notice] = false
             // A newer notice may have flashed while this one was up; it owns the
             // pill until its own expiry.
-            if self.state == .idle, !self.anyNoticeVisible { self.cues.hidePill() }
+            if !self.anyNoticeVisible {
+                if self.state == .idle { self.cues.hidePill() } else { self.cues.showPill() }
+            }
         }
     }
 
@@ -644,9 +639,9 @@ public final class AppCoordinator: ObservableObject {
             partial = rawPartial
             displayText = display
         case .previewActivity(let active):
-            inlinePreviewMirroringDidChange(active)
+            inlinePreviewMirroring = active
         case .firstMarkRendered:
-            if state == .recording, inlinePreviewMirroring { cues.hidePill() }
+            break
         case .captureFailed:
             finishRecording()
             flashMicrophoneUnavailableNotice()
@@ -693,55 +688,17 @@ public final class AppCoordinator: ObservableObject {
 
     // MARK: - Indicator presentation
 
-    /// Internal so glow-lifetime tests can drive the presentation without a live
-    /// audio pipeline.
     func presentIndicatorForRecordingStart() {
-        // Delayed cue checks belong to the hold that requested them.
-        let recordingID = currentRecordingID
-        cues.presentForRecordingStart(
-            glowEnabled: settings.edgeGlow.enabled,
-            previewEnabled: inlinePreviewEnabled,
-            previewStillUnconfirmed: { [weak self] in
-                guard let self else { return false }
-                return self.currentRecordingID == recordingID
-                    && self.state == .recording
-                    && !self.inlinePreviewMirroring
-            }
-        )
+        cues.presentForRecordingStart(glowEnabled: settings.edgeGlow.enabled)
     }
 
-    /// Whether the glow — rather than the pill — is the right indicator for the
-    /// recording in progress. With the preview on the glow tracks the channel
-    /// it advertises; with it off the glow owns every recording.
-    private var glowOwnsCurrentRecording: Bool {
-        state == .recording && (!inlinePreviewEnabled || inlinePreviewMirroring)
-    }
-
-    /// A glow style change has to reach the recording already in progress; the cue
-    /// can never be left advertising something that is no longer true. Internal so
-    /// the settings facade can call it.
     func applyEdgeGlowStyleToCurrentRecording(_ style: EdgeGlowSettings) {
         cues.applyEdgeGlowStyle(style)
         if style.enabled {
             cues.prewarmEdgeGlow()
-            // Enabled mid-recording: light it now, and the pill (if it was the
-            // indicator) yields as usual.
-            if glowOwnsCurrentRecording {
-                cues.showEdgeGlow()
-                // The pill yields only while the preview mirrors the same text
-                // into the field; otherwise it is the only view of the volatile
-                // transcript and has to stay.
-                if inlinePreviewMirroring { cues.hidePill() }
-            }
+            if state == .recording { cues.showEdgeGlow() }
         } else {
-            // Disabled mid-recording: the pill must take over — hiding the
-            // glow alone would leave a hot mic with no cue at all until
-            // release (codex review, blocking).
-            let handOffToPill = cues.edgeGlowVisible && state == .recording
             cues.hideEdgeGlow()
-            if handOffToPill {
-                cues.showPill()
-            }
         }
     }
 
@@ -760,30 +717,6 @@ public final class AppCoordinator: ObservableObject {
         transport: (any InlinePreviewTransport)? = nil
     ) -> InlinePreviewSession? {
         stagedSession().makeInlinePreviewSession(bundleIdentifier: bundleIdentifier, transport: transport)
-    }
-
-    /// The preview's channel became (or stopped being) healthy enough to mirror.
-    ///
-    /// A mid-recording degrade makes the HUD the only feedback again, so the pill
-    /// comes back (with its transcript line, in the same update) and the glow
-    /// retires with the channel it advertises. Activation is the mirror image: a
-    /// begin ack slower than the fallback deadline arrives AFTER the pill took over
-    /// — the glow reclaims the recording and the pill yields, otherwise the first
-    /// mark would hide the pill and leave NO mic-hot cue at all (review finding,
-    /// e90dcae..). On the fast path both calls are no-ops. At finalize
-    /// `finishInlinePreview` clears the flag with state != .recording, skipping this.
-    private func inlinePreviewMirroringDidChange(_ active: Bool) {
-        inlinePreviewMirroring = active
-        guard state == .recording else { return }
-        if active, settings.edgeGlow.enabled {
-            // With the glow disabled the pill stays the pre-text indicator; the
-            // first mark hides it.
-            cues.showEdgeGlow()
-            cues.hidePill()
-        } else if !active {
-            cues.hideEdgeGlow()
-            cues.showPill()
-        }
     }
 
     func stageFinalizationSessions(

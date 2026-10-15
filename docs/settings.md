@@ -16,7 +16,7 @@ own window.
 | Learn corrections | Off | Enables transcript and observed edit evidence for new recordings |
 | Ignore speaker audio | Off | Enables microphone voice processing at the next shortcut press |
 | Stream into field | On | Attempts inline marked text through the companion on the next recording |
-| Edge glow | On | Selects the screen edge capture cue; changes apply to a current hold |
+| Edge glow | On | Adds a screen edge glow alongside the microphone cue; changes apply to a current hold |
 | Glow intensity | 0.85 | Brightness multiplier, constrained to 0.4 through 1.6 |
 | Glow thickness | 1.0 | Width multiplier, constrained to 0.6 through 1.6 |
 | Ember aura | Off | Selects the fixed ember palette |

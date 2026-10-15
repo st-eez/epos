@@ -502,62 +502,36 @@ final class InlinePreviewSessionTests: XCTestCase {
     }
 
     @MainActor
-    func testHudTranscriptLineSuppressedWhileMirroringAndRestoredOnDegradation() async {
-        let coordinator = AppCoordinator(
-            textInsertion: SilentInsertionBackend(),
-            settings: Settings(),
-            inlinePreviewEnabled: true,
-            autoStart: false
-        )
-        let transport = FakeInlinePreviewTransport(markThrows: true)
-        guard let session = coordinator.makeInlinePreviewSession(
-            bundleIdentifier: Self.target,
-            transport: transport
-        ) else { return XCTFail("expected a preview session") }
-
-        coordinator.handlePartialTranscript("hello world")
-        XCTAssertEqual(coordinator.hudTranscriptPreview, "hello world")
-
-        await session.begin()
-        await waitForMirroring(true, on: coordinator)
-        XCTAssertEqual(coordinator.hudTranscriptPreview, "")
-
-        // Mid-recording degradation must restore the HUD's transcript line.
-        await session.mark("hello world")
-        await waitForMirroring(false, on: coordinator)
-        XCTAssertEqual(coordinator.hudTranscriptPreview, "hello world")
-    }
-
-    @MainActor
-    func testHudTranscriptLineStaysWhenBeginIsRefused() async {
-        let coordinator = AppCoordinator(
-            textInsertion: SilentInsertionBackend(),
-            settings: Settings(),
-            inlinePreviewEnabled: true,
-            autoStart: false
-        )
-        let transport = FakeInlinePreviewTransport(beginReply: "err no client session")
-        guard let session = coordinator.makeInlinePreviewSession(
-            bundleIdentifier: Self.target,
-            transport: transport
-        ) else { return XCTFail("expected a preview session") }
-
-        coordinator.handlePartialTranscript("hello")
-        await session.begin()
-        // Give any stray activity hop a chance to land before asserting.
-        try? await Task.sleep(nanoseconds: 20_000_000)
-
-        XCTAssertFalse(coordinator.inlinePreviewMirroring)
-        XCTAssertEqual(coordinator.hudTranscriptPreview, "hello")
+    func testCursorCueRemainsVisibleInCodexAndGhosttyWithAndWithoutPreview() async {
+        for bundle in ["com.openai.codex", "com.mitchellh.ghostty"] {
+            for begins in [true, false] {
+                let coordinator = AppCoordinator(
+                    textInsertion: SilentInsertionBackend(), settings: Settings(),
+                    inlinePreviewEnabled: true, autoStart: false
+                )
+                let transport = FakeInlinePreviewTransport(beginReply: begins ? "ok locked" : "err no client session")
+                guard let session = coordinator.makeInlinePreviewSession(bundleIdentifier: bundle, transport: transport)
+                else { return XCTFail("expected a preview session") }
+                coordinator.stageFinalizationSessions(inlinePreview: session, insertion: nil)
+                coordinator.state = .recording
+                coordinator.presentIndicatorForRecordingStart()
+                XCTAssertTrue(coordinator.pillVisible)
+                await session.begin()
+                await waitForMirroring(begins, on: coordinator)
+                coordinator.handlePartialTranscript("hello")
+                if begins { await Self.waitUntil { await session.report().marksSent == 1 } }
+                XCTAssertTrue(coordinator.pillVisible, "cue must stay visible in \(bundle)")
+                coordinator.finishRecording()
+                XCTAssertTrue(coordinator.pillVisible, "finalization retains the cue")
+                await session.discard()
+            }
+        }
     }
 
     // MARK: - Edge glow lifetime
 
-    /// The glow frames the WHOLE held dictation: on through streaming (unlike
-    /// the pill it occludes nothing), out at release, and it retires the
-    /// moment the preview channel it advertises degrades.
     @MainActor
-    func testEdgeGlowPersistsThroughStreamingEndsAtReleaseAndOnDegrade() async {
+    func testRecordingCuesPersistThroughPreviewDegradation() async {
         let coordinator = AppCoordinator(
             textInsertion: SilentInsertionBackend(),
             settings: Settings(),
@@ -585,45 +559,12 @@ final class InlinePreviewSessionTests: XCTestCase {
         await Self.waitUntil { await session.report().marksSent == 1 }
         XCTAssertTrue(coordinator.edgeGlowVisible)
 
-        // A degrade retires the glow with the channel it advertises.
+        XCTAssertTrue(coordinator.pillVisible)
         coordinator.handlePartialTranscript("hello again")
         await Self.waitUntil { await session.report().failure == "markFailed" }
         await waitForMirroring(false, on: coordinator)
-        XCTAssertFalse(coordinator.edgeGlowVisible)
-    }
-
-    /// The fallback deadline vs a slow begin ack: past the deadline the glow
-    /// retires to the pill, and when the late ack finally activates mirroring
-    /// the glow must reclaim the recording — otherwise the first mark hides
-    /// the pill and the user is left with no mic-hot cue at all (review
-    /// finding on the persistent-glow change).
-    @MainActor
-    func testSlowBeginAckRetiresGlowThenGlowReclaimsOnActivation() async {
-        let coordinator = AppCoordinator(
-            textInsertion: SilentInsertionBackend(),
-            settings: Settings(),
-            inlinePreviewEnabled: true,
-            autoStart: false
-        )
-        let transport = FakeInlinePreviewTransport()
-        guard let session = coordinator.makeInlinePreviewSession(
-            bundleIdentifier: Self.target,
-            transport: transport
-        ) else { return XCTFail("expected a preview session") }
-        coordinator.stageFinalizationSessions(inlinePreview: session, insertion: nil)
-        coordinator.state = .recording
-
-        // fn press: the glow lights before the channel has confirmed.
-        coordinator.presentIndicatorForRecordingStart()
         XCTAssertTrue(coordinator.edgeGlowVisible)
-
-        // No begin ack within the deadline: the glow retires (pill takes over).
-        await Self.waitUntil { await MainActor.run { !coordinator.edgeGlowVisible } }
-
-        // The late ack activates mirroring: the glow reclaims the recording.
-        await session.begin()
-        await waitForMirroring(true, on: coordinator)
-        await Self.waitUntil { await MainActor.run { coordinator.edgeGlowVisible } }
+        XCTAssertTrue(coordinator.pillVisible)
     }
 
     /// With the glow disabled in settings, the pill is the indicator and the
@@ -849,7 +790,7 @@ final class InlinePreviewSessionTests: XCTestCase {
     }
 
     @MainActor
-    func testHudTranscriptMatchesDisplayTextWheneverPreviewIsOff() {
+    func testDisplayTextRemainsAvailableWithoutPreview() {
         let coordinator = AppCoordinator(
             textInsertion: SilentInsertionBackend(),
             settings: Settings(),
@@ -860,7 +801,6 @@ final class InlinePreviewSessionTests: XCTestCase {
         coordinator.handlePartialTranscript("hello")
 
         XCTAssertFalse(coordinator.inlinePreviewMirroring)
-        XCTAssertEqual(coordinator.hudTranscriptPreview, coordinator.displayText)
-        XCTAssertEqual(coordinator.hudTranscriptPreview, "hello")
+        XCTAssertEqual(coordinator.displayText, "hello")
     }
 }
