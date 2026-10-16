@@ -89,7 +89,19 @@ struct AnalyzerPreparationMetrics: Codable {
     let rssAfterIdleBytes: UInt64?
 }
 
+struct RecognitionReplayEvent: Codable {
+    let milliseconds: Double
+    let isFinal: Bool
+    let text: String
+}
+
+struct RecognitionReplayTimeline: Codable {
+    let releaseMilliseconds: Double
+    let events: [RecognitionReplayEvent]
+}
+
 struct AnalyzerPreparationResult {
+    let recognitionTimeline: RecognitionReplayTimeline
     let transcript: String
     let contextReadback: [String]
     let metrics: AnalyzerPreparationMetrics
@@ -118,8 +130,10 @@ enum SignedAnalyzerPreparationTranscriber {
             var committed = ""
             var volatile = ""
             var firstResult: ContinuousClock.Instant?
+            var events: [(instant: ContinuousClock.Instant, isFinal: Bool, text: String)] = []
             for try await result in module.results {
                 let text = String(result.text.characters)
+                events.append((.now, result.isFinal, text))
                 if firstResult == nil, !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     firstResult = .now
                 }
@@ -130,7 +144,7 @@ enum SignedAnalyzerPreparationTranscriber {
                     volatile = text
                 }
             }
-            return (text: (committed + volatile).trimmingCharacters(in: .whitespacesAndNewlines), firstResult: firstResult)
+            return (text: (committed + volatile).trimmingCharacters(in: .whitespacesAndNewlines), firstResult: firstResult, events: events)
         }
 
         do {
@@ -160,12 +174,20 @@ enum SignedAnalyzerPreparationTranscriber {
             try await analyzer.start(inputSequence: trackedInput)
             let analyzerStartMilliseconds = milliseconds(since: startStarted)
             let feed = try await audio.feed(into: continuation, holdStarted: holdStarted)
+            let actualRelease = ContinuousClock.now
             let released = holdStarted.advanced(by: .seconds(audio.durationSeconds))
             continuation.finish()
             try await analyzer.finalizeAndFinishThroughEndOfInput()
             let collected = try await collector.value
             try audio.verifyFrames(submitted: feed.submittedFrames, consumed: consumedFrames.value)
             return AnalyzerPreparationResult(
+                recognitionTimeline: RecognitionReplayTimeline(
+                    releaseMilliseconds: milliseconds(from: holdStarted, to: actualRelease),
+                    events: collected.events.map {
+                        RecognitionReplayEvent(milliseconds: milliseconds(from: holdStarted, to: $0.instant),
+                                               isFinal: $0.isFinal, text: $0.text)
+                    }
+                ),
                 transcript: collected.text,
                 contextReadback: contextReadback,
                 metrics: AnalyzerPreparationMetrics(

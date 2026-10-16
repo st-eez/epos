@@ -9,8 +9,7 @@ final class RecordingPhraseTests: XCTestCase {
         let transport = FakeInlinePreviewTransport()
         var display = ""
         let recording = try makeRecording(backend: backend, transport: transport, rules: [
-            .init(canonical: "Epos", aliases: ["epose"]),
-            .init(canonical: "REWRITTEN", aliases: ["works next"])
+            .init(canonical: "Epos", aliases: ["epose"])
         ]) { event in
             if case .transcript(_, _, let text) = event { display = text }
         }
@@ -99,6 +98,63 @@ final class RecordingPhraseTests: XCTestCase {
         XCTAssertEqual(result.output, " Marco")
     }
 
+    func testCorrectionContinuationStaysMarkedUntilSafeBoundary() async throws {
+        let backend = RecordingInsertionBackend()
+        let transport = FakeInlinePreviewTransport()
+        var display = ""
+        let recording = try makeRecording(backend: backend, transport: transport, rules: [
+            .init(canonical: "DevKit", aliases: ["dev kit tools"])
+        ]) { if case .transcript(_, _, let text) = $0 { display = text } }
+        let preview = await stage(recording, backend: backend, transport: transport)
+        recording.handleFinalTranscriptSegment("Start.")
+        await recording.commitConfirmedPhraseIfHeld()
+        recording.handleFinalTranscriptSegment(" 🙂 Use dev")
+        await recording.commitConfirmedPhraseIfHeld()
+        recording.handlePartialTranscript(" kit")
+        XCTAssertEqual(display, "Start. 🙂 Use dev kit")
+        recording.handleFinalTranscriptSegment(" kit")
+        await recording.commitConfirmedPhraseIfHeld()
+        let deferredLines = await transport.lines
+        XCTAssertEqual(deferredLines.filter { $0.hasPrefix("seal ") }, ["seal Start."])
+        recording.handleFinalTranscriptSegment(" tools now.")
+        await recording.commitConfirmedPhraseIfHeld()
+        XCTAssertEqual(display, "Start. 🙂 Use DevKit now.")
+        let lines = await transport.lines
+        XCTAssertEqual(lines.filter { $0.hasPrefix("seal ") }, ["seal Start.", "seal  🙂 Use DevKit now."])
+        await preview.discard()
+    }
+
+    func testNameContextAndReleaseResolveDeferredPhrase() async throws {
+        for (first, next, expected) in [
+            ("Mark", " pushed the fix.", "Marco pushed the fix."),
+            ("Ask mark", " by tomorrow.", "Ask mark by tomorrow."),
+            ("Use dash", " dash fix.", "Use --fix."),
+            ("Use dev", "", "Use dev")
+        ] {
+            let backend = RecordingInsertionBackend()
+            let transport = FakeInlinePreviewTransport()
+            var display = ""
+            let recording = try makeRecording(backend: backend, transport: transport, rules: [
+                .init(canonical: "Marco", aliases: ["mark"], matchStrategy: .personNameSlot),
+                .init(canonical: "DevKit", aliases: ["dev kit"])
+            ]) { if case .transcript(_, _, let text) = $0 { display = text } }
+            let preview = await stage(recording, backend: backend, transport: transport)
+            recording.handleFinalTranscriptSegment(first)
+            await recording.commitConfirmedPhraseIfHeld()
+            let deferredLines = await transport.lines
+            XCTAssertFalse(deferredLines.contains { $0.hasPrefix("seal") })
+            recording.release()
+            recording.handleFinalTranscriptSegment(next)
+            XCTAssertEqual(display, expected)
+            let route = await recording.commitFinalTranscript(display)
+            XCTAssertEqual(route, .completed(.accepted, viaIME: true))
+            let lines = await transport.lines
+            XCTAssertEqual(lines.filter { $0.hasPrefix("commit ") }, ["commit " + expected])
+            XCTAssertTrue(backend.inserted.isEmpty)
+            await preview.discard()
+        }
+    }
+
     private func makeRecording(
         backend: RecordingInsertionBackend, transport: FakeInlinePreviewTransport,
         transcriber: FakeTranscriber = FakeTranscriber(), rules: [TranscriptCanonicalizer.Rule] = [],
@@ -121,7 +177,9 @@ final class RecordingPhraseTests: XCTestCase {
     private func stage(
         _ recording: RecordingSession, backend: RecordingInsertionBackend, transport: FakeInlinePreviewTransport
     ) async -> InlinePreviewSession {
-        let preview = InlinePreviewSession(transport: transport, bundleIdentifier: "com.test.app", sleep: { _ in })
+        let preview = recording.makeInlinePreviewSession(
+            bundleIdentifier: "com.test.app", transport: transport, sleep: { _ in }
+        )!
         recording.stageFinalizationSessions(
             inlinePreview: preview,
             insertion: FinalTranscriptInsertionSession(insertionSession: backend.startInsertionSession(), target: StableOpaqueObserver())

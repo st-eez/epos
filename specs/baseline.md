@@ -5,6 +5,7 @@ Configurable input controls added to scope on 2026-10-02.
 Native keyboard-session preview redesign added to scope on 2026-10-09.
 Continuous preview finalization added to scope on 2026-10-15.
 Incremental native phrase commits added to scope on 2026-10-15.
+Selective deferral for correction context added on 2026-10-16.
 Cursor microphone feedback added to scope on 2026-10-15.
 
 Start at [docs/readme.md](../docs/readme.md) for the current feature map, implementation, tests, and verification limits. This document governs product scope and design. Historical validation below does not establish the current installed app's behavior.
@@ -13,7 +14,7 @@ A clean-sheet rebuild of Epos as a minimal dictation app on top of Apple's `Spee
 
 ## Product
 
-Hold the dictation shortcut, which defaults to fn, to record and preview volatile text. Confirmed recognition phrases are corrected, cleaned and committed through the owned native session while held. Only the unfinished phrase remains provisional. Release delivers the remaining text into the field captured at press. If the target or its selection changes, Epos stops writing and reports the refusal; confirmed phrases already delivered remain in place. The menu offers a shortcut recorder and microphone picker.
+Hold the dictation shortcut, which defaults to fn, to record and preview volatile text. Confirmed recognition phrases are corrected, cleaned and committed through the owned native session while held. Unfinished text and confirmed phrases whose trailing correction needs more context remain provisional. Release delivers the remaining text into the field captured at press. If the target or its selection changes, Epos stops writing and reports the refusal; confirmed phrases already delivered remain in place. The menu offers a shortcut recorder and microphone picker.
 
 ## Constraints
 
@@ -218,8 +219,11 @@ Concurrent additive input methods remain a verification limit.
 
 Each confirmed phrase is delivered exactly once. A native phrase commit keeps the
 same client, connection and event barrier, then records the new empty-selection
-baseline before another provisional phrase. Corrections freeze with each confirmed
-phrase; later speech can supply context for new corrections but cannot rewrite
+baseline before another provisional phrase. A confirmed phrase remains marked when its raw suffix is an incomplete dictionary
+alias, a name alias awaiting following context, or a spoken dash awaiting a flag
+continuation. Live preview continues on every recognition event. The next safe
+confirmed boundary commits the accumulated text, and release always resolves the
+remainder. Corrections freeze only at that commit; later speech cannot rewrite
 committed text or match an alias across that boundary. Cleanup retains the full
 corrected transcript as context. Trailing whitespace and commas stay provisional
 so cleanup can repair a filler seam without changing committed text. Before any

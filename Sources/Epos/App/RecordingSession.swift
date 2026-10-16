@@ -336,6 +336,8 @@ final class RecordingSession {
         guard phase == .held, let session = preview.session,
               let insertion = textInsertionSession,
               !displayText.isEmpty else { return }
+        let rawSuffix = (finalText as NSString).substring(from: committedRawUTF16)
+        guard !canonicalizer.shouldDeferPhraseCommit(rawSuffix) else { return }
         let result = renderTranscript(finalText)
         var text = result.display
         while let last = text.last, last.isWhitespace || last == "," { text.removeLast() }

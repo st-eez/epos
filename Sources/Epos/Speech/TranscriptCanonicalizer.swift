@@ -55,6 +55,7 @@ public struct TranscriptCanonicalizer: Sendable {
     /// so a longer phrase wins over a shorter one it contains. `canonicalize` just runs
     /// these — it never recompiles regexes or re-sorts per call.
     private let specs: [CorrectionRuleMatchSpec]
+    private let phraseBoundary: CorrectionPhraseBoundary
 
     public static let defaultRules: [Rule] = CorrectionRuleCompiler.compile(
         records: CorrectionDictionary.defaultRecords
@@ -62,6 +63,7 @@ public struct TranscriptCanonicalizer: Sendable {
 
     public init(rules: [Rule] = Self.defaultRules) {
         self.rules = rules
+        self.phraseBoundary = CorrectionPhraseBoundary(rules: rules)
         self.specs = Self.compile(rules.map { (rule: $0, recordID: nil) })
     }
 
@@ -69,6 +71,7 @@ public struct TranscriptCanonicalizer: Sendable {
     init(records: [CorrectionRecord]) {
         let compiled = CorrectionRuleCompiler.compileWithSources(records: records)
         self.rules = compiled.map(\.rule)
+        self.phraseBoundary = CorrectionPhraseBoundary(rules: self.rules)
         self.specs = Self.compile(compiled.map { (rule: $0.rule, recordID: $0.record.id) })
     }
 
@@ -96,6 +99,10 @@ public struct TranscriptCanonicalizer: Sendable {
             output: (result.output as NSString).substring(from: offset),
             appliedRecordIDs: result.appliedRecordIDs
         )
+    }
+
+    func shouldDeferPhraseCommit(_ rawSuffix: String) -> Bool {
+        phraseBoundary.needsContinuation(rawSuffix)
     }
 
     /// Canonical vocabulary to feed the recognizer as best-effort `AnalysisContext`

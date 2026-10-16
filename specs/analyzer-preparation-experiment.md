@@ -79,6 +79,11 @@ EPOS_EVAL_LIMIT=6 EPOS_PREPARE_REPEATS=2 EPOS_PREPARE_IDLE_SECONDS=2 \
 `EPOS_EVAL_RECORDINGS_DIR` overrides the saved WAV directory. Set
 `EPOS_PREPARE_IDLE_SECONDS=300` for a sampled five-minute retention experiment.
 Use `EPOS_PREPARE_FIRST_ARM` to choose which arm starts a new evaluation process.
+Use `EPOS_PREPARE_ONLY_ARM=unprepared` to capture a single pass using the production Speech preset without the preparation comparisons. Each successful new row
+also includes `recognitionTimeline`, containing the actual release time and every
+partial/final result with its text and receipt time relative to hold start.
+Older rows without this field remain readable. The original nominal-release
+metrics retain their existing definition.
 The JSONL rows and adjacent summary preserve those settings and trial order.
 Use a unique output filename for another run. The measured original is
 `.build/evals/analyzer-preparation-f7118f7-20261002.jsonl`.

@@ -31,6 +31,15 @@ enum SignedAnalyzerPreparationEvalHost {
         }
         let firstArm = AnalyzerPreparationArm(rawValue: environment["EPOS_PREPARE_FIRST_ARM"] ?? "unprepared")
         guard let firstArm else { throw PreparationEvalError.invalidConfiguration("unknown first arm") }
+        let onlyArm: AnalyzerPreparationArm?
+        if let value = environment["EPOS_PREPARE_ONLY_ARM"] {
+            guard let arm = AnalyzerPreparationArm(rawValue: value) else {
+                throw PreparationEvalError.invalidConfiguration("unknown only arm")
+            }
+            onlyArm = arm
+        } else {
+            onlyArm = nil
+        }
         let corpus = try ConfirmedEvalCorpus.load(from: corpusURL)
         let entries = Array(corpus.entries.prefix(limit))
         for entry in entries {
@@ -58,7 +67,7 @@ enum SignedAnalyzerPreparationEvalHost {
                 let audio = try await AnalyzerPreparationAudio.load(
                     recording: recordings.appendingPathComponent(entry.file), locale: locale
                 )
-                for arm in rotatedArms(by: firstOffset + repeatIndex + entryIndex) {
+                for arm in onlyArm.map({ [$0] }) ?? rotatedArms(by: firstOffset + repeatIndex + entryIndex) {
                     let watchdog = Task {
                         try? await Task.sleep(for: .seconds(audio.durationSeconds + idleSeconds + 30))
                         guard !Task.isCancelled else { return }
@@ -94,7 +103,7 @@ enum SignedAnalyzerPreparationEvalHost {
                         transcript: transcript, productionOutput: cleaned,
                         transcriptScore: WordErrorScoring.score(reference: entry.reference, hypothesis: transcript),
                         productionOutputScore: WordErrorScoring.score(reference: entry.reference, hypothesis: cleaned),
-                        error: error
+                        error: error, recognitionTimeline: result?.recognitionTimeline
                     )
                     rows.append(row)
                     try handle.write(contentsOf: encoder.encode(row))
@@ -150,5 +159,6 @@ struct AnalyzerPreparationEvalRow: Codable {
     let transcriptScore: WordErrorScore
     let productionOutputScore: WordErrorScore
     let error: String?
+    var recognitionTimeline: RecognitionReplayTimeline?
 }
 #endif

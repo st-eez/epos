@@ -1,7 +1,8 @@
 # Insertion
 
 Epos captures the destination at shortcut press. The companion input method shows
-unfinished text as native marked text and commits confirmed phrases while held.
+unfinished text as native marked text. Confirmed phrases commit while held once
+their corrections have enough context.
 Release delivers the remaining text. Without a usable native session, Epos keeps
 the guarded whole-transcript Unicode delivery path.
 
@@ -24,7 +25,11 @@ the companion must acknowledge an activated client in the captured application.
 
 Each update supplies the complete unfinished phrase to `setMarkedText`, replacing
 Epos's owned preview span. Confirmed phrases already committed remain ordinary
-text. Corrections freeze when a phrase commits. Later phrases retain preceding
+text. A confirmed phrase stays marked if its trailing words could continue a
+dictionary alias, need following name context, or complete a spoken dash flag.
+Preview still updates on every event. The next safe final commits the accumulated
+phrase; release resolves any remaining suffix. Corrections freeze when a phrase
+commits. Later phrases retain preceding
 raw context for their corrections, but cannot rewrite confirmed text or match
 aliases across that boundary. Cleanup keeps the full corrected transcript as
 context. Trailing whitespace and commas remain provisional so filler removal can
@@ -80,8 +85,9 @@ The captured target guard checks the application and field. Keystroke delivery
 also requires the original Accessibility value, caret, and selection when exposed. Opaque targets use process, window, and focus signature evidence. An absent or changed
 target refuses delivery. Epos does not restore focus or undo the user's edits.
 
-A healthy preview channel commits each confirmed phrase through IME `insertText`,
-replacing its owned marked span in place. It retains the same native client,
+A healthy preview channel uses IME `insertText` to commit confirmed phrases once
+their corrections have enough context. This replaces its owned marked span in
+place. It retains the same native client,
 connection and event barrier, and captures the new empty-selection baseline.
 Release commits only the remaining phrase. If everything is already committed,
 release performs no further insertion and clears an obsolete owned draft if needed. It does not clear the field first. Release waits for an outstanding preview

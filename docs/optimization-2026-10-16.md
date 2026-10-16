@@ -1,6 +1,8 @@
 # Epos performance and accuracy investigation
 
-October 16, 2026. Source revision `46f480a`. Investigation and recommendations only.
+October 16, 2026. Initial investigation at source revision `46f480a`.
+The [implementation and actual-event follow-up](phrase-deferral-2026-10-16.md)
+records the subsequent selective-deferral change and its verification.
 
 The strongest accuracy candidate is to defer native phrase commits when a
 correction still needs the next words. The next performance experiment is to
