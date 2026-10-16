@@ -49,6 +49,7 @@ Search terms include common user wording and implementation names.
 | Save audio samples and local evidence storage | WAV, recordings, dogfood samples | [Diagnostics](diagnostics.md#saved-audio-and-correction-evidence) |
 | Reliability audit, corpus labeling, confirmation, benchmarks | WER, accuracy, corpus quality | [Diagnostics](diagnostics.md#evaluation-tools) |
 | Current confirmed accuracy and correction assessment | word errors, exact transcripts, verified baseline | [Accuracy and performance evidence](accuracy-performance.md) |
+| Ranked accuracy and latency optimization candidates | phrase boundaries, commit deferral, audio cadence | [October 16 optimization investigation](optimization-2026-10-16.md) |
 | Paced analyzer preparation comparison | prewarming, prepareToAnalyze, recognition speed, memory | [Preparation experiment](../specs/analyzer-preparation-experiment.md) |
 
 ## Replacement readiness
