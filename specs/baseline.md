@@ -252,9 +252,12 @@ After a successful commit acquired from a keyboard layout, keep Epos selected
 with that same underlying layout so release does not switch back to ABC and show
 the system input-source indicator. Failed acquisition restores the prior source;
 another input method or a source the user selects is preserved. When the standard
-AX focused-element lookup returns no value, a bounded search of the frontmost
-application's focused window may use an editable element whose AXFocused flag is
-true. Missing, changed or ambiguous focus still refuses insertion.
+AX focused-element lookup is unavailable, query the frontmost application's
+focused field and verify its focused window. Recheck the application, window,
+and field before accepting that fallback. If the application lookup is also
+unavailable, a bounded search of its focused window may use exactly one editable
+element whose AXFocused flag is true. Permission errors, invalid elements, and
+missing, changed or ambiguous focus still refuse insertion.
 
 The historical
 [session prototype](preview-session-prototype.md) remains an experiment; its fresh

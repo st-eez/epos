@@ -99,8 +99,8 @@ public final class NullInsertionTargetObserver: InsertionTargetObserver {
 }
 
 /// Live Accessibility-backed observer. Uses the same trust the keystroke backend
-/// already requires. A missing focused-element value uses a bounded search of
-/// the focused window for an explicitly focused editor.
+/// already requires. An unavailable global lookup uses the frontmost app's
+/// focus, then a bounded search for an explicitly focused editor.
 public final class AXInsertionTargetObserver: InsertionTargetObserver {
     private static let focusedElementMessagingTimeout: Float = 0.05
 
@@ -136,7 +136,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             // is where a revoked Accessibility grant first shows up. Naming it here
             // is what stops the refusal it causes from reading as a moved target.
             if AXIsProcessTrusted() {
-                log.info("insertion guard: no focused element at session start; focus guard inactive")
+                log.info("insertion guard: no focused element at session start; \(focusedElementSearch.failureDetail)")
             } else {
                 log.error(
                     "insertion guard: Accessibility permission is not granted; "
@@ -182,7 +182,7 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
             // therefore safe to refuse and unsafe to guess about.
             log.info(
                 "insertion guard: focused element unreadable before final insertion " +
-                    "(AXError \(error.rawValue)); refusing insertion"
+                    "(AXError \(error.rawValue), \(focusedElementSearch.failureDetail)); refusing insertion"
             )
             return true
         }
@@ -373,22 +373,9 @@ public final class AXInsertionTargetObserver: InsertionTargetObserver {
     }
 
     private func copyFocusedElementDetailed() -> FocusedElementRead {
-        var focused: CFTypeRef?
-        let result = AXUIElementCopyAttributeValue(
-            systemWide, kAXFocusedUIElementAttribute as CFString, &focused
-        )
-        guard result == .success, let element = focused else {
-            if (result == .noValue || (result == .success && focused == nil)),
-               let element = focusedElementSearch.resolve(in: systemWide) {
-                return .element(element)
-            }
-            // A `.success` with no value means "nothing is focused" — same identity
-            // failure as an explicit `.noValue`.
-            return .failure(result == .success ? .noValue : result)
+        guard let element = focusedElementSearch.resolve(in: systemWide) else {
+            return .failure(focusedElementSearch.lastError)
         }
-        // CFTypeRef of an AXUIElement; force-cast is safe — the attribute is
-        // documented to return an AXUIElementRef.
-        // swiftlint:disable:next force_cast
-        return .element(element as! AXUIElement)
+        return .element(element)
     }
 }

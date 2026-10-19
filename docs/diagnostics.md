@@ -35,6 +35,15 @@ close the channel and preserve the existing write-safety rules.
 
 The companion keeps its own log at `~/Library/Caches/EposProbe/probe.log`; inspect
 it when debugging marked text.
+Target capture failures record the global Accessibility error, the application
+error when queried, and the failed fallback stage. These distinguish an unreadable
+focused window from a refused editor search without logging field content.
+Standalone Swift focus probes must initialize `NSApplication.shared` before
+querying system-wide focus. Without AppKit initialization, a probe can report an
+immediate `cannotComplete` while the installed app can resolve the same target.
+Kosmos can park hidden windows far offscreen, where Chromium omits its editor
+subtree. Use `kosmos peek` for hidden-window inspection and label background
+field checks separately from actual foreground target capture.
 Failed keyboard-source acquisition logs its native status as `missing`,
 `disabled`, `available`, or `selected`. Registration alone does not establish
 that macOS has enabled the input source. The Stream into field menu shows setup

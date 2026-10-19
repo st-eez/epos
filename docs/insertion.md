@@ -107,14 +107,17 @@ newline in the remainder travels through an encoded native commit command. Those
 owned marked text, wait for the readable baseline to settle, then run the original
 target guard. A conclusively refused first mark requires no settlement.
 
-Some Chromium hosts, including the current Codex app, expose the editor and its
-`AXFocused` flag while returning no value for `AXFocusedUIElement`. When that
-specific lookup returns no value, Epos searches only the frontmost application's
-focused window, bounded to 2,048 nodes and a 200 ms work budget with bounded IPC.
-It requires exactly one focused editable field and rechecks the application and
-window after the search. Later checks reuse that element only while the window
-and its positive focused flag remain unchanged. Missing or ambiguous focus still
-refuses delivery.
+When the system-wide focus lookup has no value, cannot complete, or is unsupported,
+Epos queries the frontmost application's focused field directly. It requires the
+field to belong to that application's focused window and rechecks the application,
+window, and field before accepting it. Permission and invalid-element errors
+still refuse delivery.
+Some Chromium hosts expose only the editor's `AXFocused` flag. If the application
+lookup is also unavailable, Epos searches its focused window, bounded to 2,048
+nodes and a 200 ms work budget with bounded IPC. It requires exactly one focused
+editable field and rechecks the application and window afterward. Cached search
+results require the same checks and a positive focused flag. Missing or ambiguous
+focus still refuses delivery.
 
 A foreign composition or a changed selection detected after preview blocks both
 final delivery paths and shows `Not inserted`. Unconfirmed preview cleanup also
