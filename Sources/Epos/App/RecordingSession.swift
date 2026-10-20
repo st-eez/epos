@@ -175,6 +175,24 @@ final class RecordingSession {
             recordingID: recordingID,
             latency: latency
         )
+        if let failure = textInsertionSession?.initialTargetFailure {
+            latency?.end(.targetBaseline, outcome: .refused)
+            latency?.abandon(.firstRecognizerResult)
+            latency?.abandon(.firstDisplayPublication)
+            latency?.abandon(.firstMarkAcknowledged)
+            log.error("recording setup refused: destination unavailable")
+            reliability?.emit(failure == .accessibilityUntrusted ? .accessibilityUntrusted : .targetRefused)
+            stopMicrophone()
+            clearAudioCallbacks()
+            dogfood.stop(keeping: settings.saveAudioSamples)
+            cancelTextInsertionSession()
+            complete(
+                finalCharacters: 0,
+                startNotice: failure == .accessibilityUntrusted ? "No access" : "Field unavailable",
+                failed: true
+            )
+            return
+        }
         latency?.end(.targetBaseline)
         let capturedInsertion = textInsertionSession
         preview.start(

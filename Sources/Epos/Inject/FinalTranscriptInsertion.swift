@@ -60,6 +60,11 @@ public final class FinalTranscriptInsertionSession: @unchecked Sendable {
         target.captureBaseline()
     }
 
+    var initialTargetFailure: FinalInsertionResult? {
+        guard !target.hasCapturedTarget() else { return nil }
+        return isAccessibilityTrusted() ? .targetRefused : .accessibilityUntrusted
+    }
+
     public func insertFinalResult(_ text: String) -> FinalInsertionResult {
         if case .refused(let result) = authorizeFinalWrite(text) {
             return result

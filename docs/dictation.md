@@ -5,7 +5,9 @@
 Hold the configured shortcut with the destination field focused. The default is
 fn; the menu's Shortcut recorder can change it. Epos opens the microphone, plays a
 start sound after capture starts, and captures the destination's insertion
-context. Release the shortcut to stop capture, play the release sound, finalize recognition,
+context. If no destination was captured, Epos closes the microphone immediately
+and shows `Field unavailable`, or `No access` when Accessibility permission is
+missing. Recognition does not start for that hold. Release the shortcut to stop capture, play the release sound, finalize recognition,
 and attempt one authoritative final write.
 
 The coordinator moves through idle, recording, and finalizing. Each hold has

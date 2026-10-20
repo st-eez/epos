@@ -142,6 +142,15 @@ capture; existing saved material remains on disk or in preferences.
 
 ## Evaluation tools
 
+Use silent saved-audio replay for repeated recognition measurements. Before any
+speaker playback, tell Steve its purpose and duration and wait for his go.
+Check the actual output device and Epos's selected microphone before an acoustic
+test. A file played to headphones does not establish microphone capture. Keep
+route mistakes and speech from other people separate from controlled trials.
+Use bounded native text tests for delivery, with independent field or terminal
+evidence. Keep native IME results separate from keystroke results. Do not ask
+Steve to dictate-test the app.
+
 Run these from the repository root. Use `--help` for Python command options.
 
 | Command | Purpose |

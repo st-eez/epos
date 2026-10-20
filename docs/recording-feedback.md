@@ -41,6 +41,7 @@ their own lifetimes so finalization does not hide an active failure.
 | Mic blocked | Microphone access is missing |
 | Speech blocked | Speech Recognition access is missing |
 | Not ready | A session could not open |
+| Field unavailable | No destination could be captured at the start of the hold |
 | Mic lost | Capture failed during a hold |
 | Recognition lost | Recognition failed during a hold |
 | Not inserted | The final target or backend refused delivery |

@@ -5,6 +5,22 @@ import XCTest
 /// trust explicitly: the same refusal means two different things depending on it,
 /// and the xctest host's own trust varies by machine.
 final class InsertionTargetGuardTests: XCTestCase {
+    func testInitialTargetFailureDistinguishesMissingFieldFromMissingAccess() {
+        for trusted in [false, true] {
+            let backend = FinalRecordingBackend()
+            let observer = FinalTargetObserver()
+            observer.capturedTarget = false
+            let session = FinalTranscriptInsertionSession(
+                insertionSession: backend.startInsertionSession(),
+                target: observer,
+                isAccessibilityTrusted: { trusted }
+            )
+            XCTAssertEqual(session.initialTargetFailure, trusted ? .targetRefused : .accessibilityUntrusted)
+            XCTAssertEqual(backend.operations, [])
+            session.cancel()
+        }
+    }
+
     /// With Accessibility revoked the baseline is empty and every AX read fails, so
     /// the guard refuses for a reason that has nothing to do with focus. The only
     /// check that can name it — the keystroke backend's own trust read — sits
@@ -36,6 +52,7 @@ final class InsertionTargetGuardTests: XCTestCase {
             isAccessibilityTrusted: { XCTFail("trust must not be read on the accepting path"); return true }
         )
 
+        XCTAssertNil(session.initialTargetFailure)
         XCTAssertEqual(session.insertFinalResult("terminal text"), .accepted)
     }
 
@@ -522,6 +539,7 @@ final class InsertionTargetGuardTests: XCTestCase {
 }
 
 private final class FinalTargetObserver: InsertionTargetObserver {
+    var capturedTarget = true
     var focusChanged = false
     var value: String?
     var range: InsertionTargetTextRange?
@@ -541,7 +559,7 @@ private final class FinalTargetObserver: InsertionTargetObserver {
     }
 
     func captureBaseline() {}
-    func hasCapturedTarget() -> Bool { true }
+    func hasCapturedTarget() -> Bool { capturedTarget }
     func focusChangedSinceStart() -> Bool { focusChanged }
     func observedValue() -> String? { value }
     func observedSelectedRange() -> InsertionTargetTextRange? { range }

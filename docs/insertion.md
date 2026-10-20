@@ -84,6 +84,8 @@ directly, not speech recognition or Epos's final Accessibility guard.
 The captured target guard checks the application and field. Keystroke delivery
 also requires the original Accessibility value, caret, and selection when exposed. Opaque targets use process, window, and focus signature evidence. An absent or changed
 target refuses delivery. Epos does not restore focus or undo the user's edits.
+An absent initial target ends capture immediately, before recognition starts,
+and shows `Field unavailable` or `No access`. A later hold captures a fresh target.
 
 A healthy preview channel uses IME `insertText` to commit confirmed phrases once
 their corrections have enough context. This replaces its owned marked span in

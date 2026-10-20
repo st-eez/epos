@@ -15,13 +15,15 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
     private func makeCoordinator(
         audio: FakeMicrophoneCapture,
         events: RecordingStartEventLog? = nil,
-        settings: Settings = Settings()
+        settings: Settings = Settings(),
+        transcriber: FakeTranscriber = FakeTranscriber(),
+        target: LoggingInsertionTargetObserver? = nil
     ) -> AppCoordinator {
         let coordinator = AppCoordinator(
             audio: audio,
-            transcriber: FakeTranscriber(),
+            transcriber: transcriber,
             textInsertion: NoOpInsertionBackend(),
-            insertionTargetObserverFactory: { LoggingInsertionTargetObserver(events: events) },
+            insertionTargetObserverFactory: { target ?? LoggingInsertionTargetObserver(events: events) },
             settings: settings,
             permissions: .stub(),
             inlinePreviewEnabled: false,
@@ -141,19 +143,53 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
         coordinator.finishRecording()
         await coordinator.transcriptionTask?.value
     }
+
+    func testMissingDestinationStopsImmediatelyAndTheNextValidHoldCanRecord() async {
+        let audio = FakeMicrophoneCapture()
+        let transcriber = FakeTranscriber()
+        let target = LoggingInsertionTargetObserver(events: nil)
+        target.capturedTarget = false
+        let coordinator = makeCoordinator(audio: audio, transcriber: transcriber, target: target)
+
+        coordinator.startRecording()
+        await Task.yield()
+
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertFalse(audio.isCapturing)
+        XCTAssertFalse(transcriber.didStart)
+        XCTAssertNil(audio.onBuffer)
+        XCTAssertNil(audio.onAmplitude)
+        XCTAssertNil(audio.onRawBuffer)
+        XCTAssertNil(audio.onCaptureFailure)
+        XCTAssertTrue(coordinator.startUnavailable)
+        XCTAssertTrue(["Field unavailable", "No access"].contains(coordinator.startNotice))
+        XCTAssertFalse(coordinator.edgeGlowVisible)
+
+        coordinator.finishRecording()
+        target.capturedTarget = true
+        coordinator.startRecording()
+        XCTAssertEqual(coordinator.state, .recording)
+        XCTAssertTrue(audio.isCapturing)
+        XCTAssertFalse(coordinator.startUnavailable)
+        coordinator.finishRecording()
+        await coordinator.transcriptionTask?.value
+        XCTAssertTrue(transcriber.didStart)
+        XCTAssertEqual(coordinator.state, .idle)
+    }
 }
 
 /// Records the one thing this test file cares about: when the fn-press AX baseline
 /// was captured.
 private final class LoggingInsertionTargetObserver: InsertionTargetObserver {
     private let events: RecordingStartEventLog?
+    var capturedTarget = true
 
     init(events: RecordingStartEventLog?) {
         self.events = events
     }
 
     func captureBaseline() { events?.append("ax-baseline") }
-    func hasCapturedTarget() -> Bool { true }
+    func hasCapturedTarget() -> Bool { capturedTarget }
     func focusChangedSinceStart() -> Bool { false }
     func observedValue() -> String? { nil }
     func observedSelectedRange() -> InsertionTargetTextRange? { nil }
