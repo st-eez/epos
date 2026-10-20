@@ -155,8 +155,86 @@ final class RecordingPhraseTests: XCTestCase {
         }
     }
 
+    func testPhraseAcknowledgmentStalls() async throws {
+        guard let output = ProcessInfo.processInfo.environment["EPOS_PHRASE_STALL_OUTPUT"] else {
+            throw XCTSkip("Set EPOS_PHRASE_STALL_OUTPUT to run the controlled acknowledgment experiment")
+        }
+        var results: [PhraseStallResult] = []
+        for repetition in 0..<3 {
+            let delays = [0, 5, 20, 100, 400]
+            for offset in delays.indices {
+                let delay = delays[(offset + repetition) % delays.count]
+                results.append(try await runStall(delay: delay, releaseDuringReply: false, ambiguous: false))
+            }
+        }
+        results.append(try await runStall(delay: 100, releaseDuringReply: true, ambiguous: false))
+        results.append(try await runStall(delay: 500, releaseDuringReply: true, ambiguous: true))
+        try JSONEncoder().encode(results).write(to: URL(fileURLWithPath: output), options: .atomic)
+    }
+
+    private func runStall(delay: Int, releaseDuringReply: Bool, ambiguous: Bool) async throws -> PhraseStallResult {
+        let firstMark = expectation(description: "first preview sent")
+        let sealSent = expectation(description: "first phrase sent")
+        let tailPublished = expectation(description: "queued events published")
+        let transport = DelayedPhraseTransport(delay: delay, ambiguous: ambiguous) { line in
+            if line == "mark First" { firstMark.fulfill() }
+            if line == "seal First." { sealSent.fulfill() }
+        }
+        let backend = RecordingInsertionBackend()
+        let transcriber = FakeTranscriber()
+        var queuedAt = ContinuousClock.now
+        var publicationDelay: Double?
+        var displays: [String] = []
+        let recording = try makeRecording(backend: backend, transport: transport, transcriber: transcriber) { event in
+            if case .transcript(_, _, let text) = event {
+                displays.append(text)
+                if text == "First. tail. end", publicationDelay == nil {
+                    publicationDelay = phraseMilliseconds(queuedAt.duration(to: .now))
+                    tailPublished.fulfill()
+                }
+            }
+        }
+        recording.start(format: try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)))
+        let deadline = ContinuousClock.now + .seconds(1)
+        while !transcriber.didStart, ContinuousClock.now < deadline { await Task.yield() }
+        XCTAssertTrue(transcriber.didStart)
+        transcriber.emit(.partial("First"))
+        await fulfillment(of: [firstMark], timeout: 1)
+        transcriber.emit(.final("First."))
+        await fulfillment(of: [sealSent], timeout: 1)
+        queuedAt = .now
+        transcriber.emit(.partial(" tail"))
+        transcriber.emit(.final(" tail."))
+        transcriber.emit(.partial(" end"))
+        if releaseDuringReply { recording.release() }
+        await fulfillment(of: [tailPublished], timeout: 3)
+        if !releaseDuringReply { recording.release() }
+        await recording.task?.value
+        let lines = await transport.lines
+        let replyAt = await transport.firstReplyAt
+        let remainingReplyDelay = max(0, phraseMilliseconds(queuedAt.duration(to: try XCTUnwrap(replyAt))))
+        let publicationMilliseconds = try XCTUnwrap(publicationDelay)
+        XCTAssertGreaterThanOrEqual(publicationMilliseconds, remainingReplyDelay)
+        let writes = lines.filter { $0.hasPrefix("seal ") || $0.hasPrefix("commit ") }
+        XCTAssertTrue(backend.inserted.isEmpty)
+        XCTAssertTrue(displays.contains("First. tail"), "superseded partial was still consumed")
+        XCTAssertTrue(displays.contains("First. tail."), "queued final was retained")
+        if ambiguous {
+            XCTAssertEqual(writes, ["seal First."], "an unknown first write forbids further insertion")
+        } else if releaseDuringReply {
+            XCTAssertEqual(writes, ["seal First.", "commit  tail. end"])
+        } else {
+            XCTAssertEqual(writes, ["seal First.", "seal  tail.", "commit  end"])
+        }
+        return PhraseStallResult(
+            delayMilliseconds: delay, releaseDuringReply: releaseDuringReply, ambiguous: ambiguous,
+            queuedToReplyMilliseconds: remainingReplyDelay,
+            queuedToLastPublicationMilliseconds: publicationMilliseconds, writes: writes
+        )
+    }
+
     private func makeRecording(
-        backend: RecordingInsertionBackend, transport: FakeInlinePreviewTransport,
+        backend: RecordingInsertionBackend, transport: any InlinePreviewTransport,
         transcriber: FakeTranscriber = FakeTranscriber(), rules: [TranscriptCanonicalizer.Rule] = [],
         onEvent: @escaping (RecordingSession.Event) -> Void = { _ in }
     ) throws -> RecordingSession {
@@ -196,4 +274,49 @@ private struct PhraseKeyboardSource: PreviewKeyboardSourceAccess {
     func layoutIdentifier() -> String? { "com.test.layout" }
     func companionIsAvailable() -> Bool { true }
     func select(_ identifier: String) -> Bool { false }
+}
+
+private struct PhraseStallResult: Encodable {
+    let delayMilliseconds: Int
+    let releaseDuringReply: Bool
+    let ambiguous: Bool
+    let queuedToReplyMilliseconds: Double
+    let queuedToLastPublicationMilliseconds: Double
+    let writes: [String]
+}
+
+private func phraseMilliseconds(_ duration: Duration) -> Double {
+    Double(duration.components.seconds) * 1_000 + Double(duration.components.attoseconds) / 1e15
+}
+
+private actor DelayedPhraseTransport: InlinePreviewTransport {
+    let delay: Int
+    let ambiguous: Bool
+    let onSend: @Sendable (String) -> Void
+    private(set) var lines: [String] = []
+    private var seals = 0
+    private(set) var firstReplyAt: ContinuousClock.Instant?
+
+    init(delay: Int, ambiguous: Bool, onSend: @escaping @Sendable (String) -> Void) {
+        self.delay = delay
+        self.ambiguous = ambiguous
+        self.onSend = onSend
+    }
+    func open() async throws {}
+    func close() async {}
+    func send(_ line: String) async throws -> String {
+        lines.append(line)
+        onSend(line)
+        if line.hasPrefix("seal ") {
+            seals += 1
+            if seals == 1 {
+                try await Task.sleep(for: .milliseconds(delay))
+                firstReplyAt = .now
+                if ambiguous { throw InlinePreviewTransportError.replyTimedOut }
+            }
+            return "ok committed 1"
+        }
+        if line.hasPrefix("commit") { return "ok committed 1" }
+        return "ok"
+    }
 }

@@ -164,6 +164,7 @@ final class StartReadinessTests: XCTestCase {
         coordinator.bindHotkey()
         coordinator.captureFormat = AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1)
         coordinator.startRecording()
+        XCTAssertEqual(coordinator.state, .recording)
 
         grants.accessibility = .granted
         _ = coordinator.snapshotPermissions()
@@ -190,6 +191,7 @@ final class StartReadinessTests: XCTestCase {
             audio: FakeMicrophoneCapture(),
             transcriber: FakeTranscriber(),
             textInsertion: NoOpInsertionBackend(),
+            insertionTargetObserverFactory: { StableOpaqueObserver() },
             settings: Settings(),
             permissions: grants.gate,
             inlinePreviewEnabled: false,

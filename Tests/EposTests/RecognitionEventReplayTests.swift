@@ -19,14 +19,24 @@ final class RecognitionEventReplayTests: XCTestCase {
         try Data().write(to: outputURL, options: .atomic)
         let handle = try FileHandle(forWritingTo: outputURL)
         defer { try? handle.close() }
-        for row in rows {
-            let result = try await replay(row)
-            try handle.write(contentsOf: JSONEncoder().encode(result))
-            try handle.write(contentsOf: Data("\n".utf8))
+        let compareSchedules = environment["EPOS_REPLAY_COMPARE_SCHEDULES"] == "1"
+        for (index, row) in rows.enumerated() {
+            let intervals = compareSchedules ? [100, 33, 16, 0] : [100]
+            let offset = index % intervals.count
+            let rotated = Array(intervals[offset...]) + Array(intervals[..<offset])
+            let tasks = rotated.map { interval in
+                Task { try await self.replay(row, throttleMilliseconds: interval) }
+            }
+            defer { tasks.forEach { $0.cancel() } }
+            for task in tasks {
+                let result = try await task.value
+                try handle.write(contentsOf: JSONEncoder().encode(result))
+                try handle.write(contentsOf: Data("\n".utf8))
+            }
         }
     }
 
-    private func replay(_ row: CapturedRecognition) async throws -> RecognitionReplayOutput {
+    private func replay(_ row: CapturedRecognition, throttleMilliseconds: Int) async throws -> RecognitionReplayOutput {
         let backend = RecordingInsertionBackend()
         let trace = ReplayTransportTrace()
         let transport = FakeInlinePreviewTransport(onSend: { trace.record($0) })
@@ -56,21 +66,30 @@ final class RecognitionEventReplayTests: XCTestCase {
                 }
             }
         )
-        let preview = try XCTUnwrap(recording.makeInlinePreviewSession(bundleIdentifier: "com.test.app", transport: transport))
+        let preview = try XCTUnwrap(recording.makeInlinePreviewSession(
+            bundleIdentifier: "com.test.app", transport: transport,
+            sleep: { _ in
+                if throttleMilliseconds == 0 { await Task.yield() }
+                else { try? await Task.sleep(for: .milliseconds(throttleMilliseconds)) }
+            }
+        ))
         recording.stageFinalizationSessions(
             inlinePreview: preview,
             insertion: FinalTranscriptInsertionSession(insertionSession: backend.startInsertionSession(), target: StableOpaqueObserver())
         )
         await preview.begin()
         let started = trace.started
-        var released = false
+        var releaseMilliseconds = 0.0
+        let releaseTask = Task {
+            try await ContinuousClock().sleep(
+                until: started.advanced(by: .milliseconds(row.recognitionTimeline.releaseMilliseconds)), tolerance: .zero
+            )
+            recording.release()
+            releaseMilliseconds = trace.elapsedMilliseconds()
+        }
+        defer { releaseTask.cancel() }
         var eventProcessing: [Double] = []
         for (index, event) in row.recognitionTimeline.events.enumerated() {
-            if !released, row.recognitionTimeline.releaseMilliseconds <= event.milliseconds {
-                try await ContinuousClock().sleep(until: started.advanced(by: .milliseconds(row.recognitionTimeline.releaseMilliseconds)), tolerance: .zero)
-                recording.release()
-                released = true
-            }
             try await ContinuousClock().sleep(until: started.advanced(by: .milliseconds(event.milliseconds)), tolerance: .zero)
             eventIndex = index
             eventStarted = .now
@@ -82,13 +101,12 @@ final class RecognitionEventReplayTests: XCTestCase {
             }
             eventProcessing.append(replayMilliseconds(from: eventStarted, to: .now))
         }
-        if !released {
-            try await ContinuousClock().sleep(until: started.advanced(by: .milliseconds(row.recognitionTimeline.releaseMilliseconds)), tolerance: .zero)
-            recording.release()
-        }
+        try await releaseTask.value
         recording.promotePartialTranscriptAsFallbackFinalIfNeeded()
         let route = await recording.commitFinalTranscript(display)
+        let completionMilliseconds = trace.elapsedMilliseconds()
         await preview.discard()
+        await preview.awaitDrainCompletion()
         let commands = trace.commands
         let delivered = try commands.filter { $0.line.hasPrefix("seal") || $0.line.hasPrefix("commit") }.map {
             try decodePayload($0.line)
@@ -96,8 +114,12 @@ final class RecognitionEventReplayTests: XCTestCase {
         XCTAssertEqual(route, .completed(.accepted, viaIME: true), row.file)
         XCTAssertEqual(delivered, display, row.file)
         XCTAssertTrue(backend.inserted.isEmpty, row.file)
+        guard route == .completed(.accepted, viaIME: true), delivered == display,
+              backend.inserted.isEmpty else { throw InvalidCapture(file: row.file) }
         return RecognitionReplayOutput(
             file: row.file, referenceDesignation: row.referenceDesignation,
+            repeatIndex: row.repeatIndex, throttleMilliseconds: throttleMilliseconds,
+            releaseMilliseconds: releaseMilliseconds, completionMilliseconds: completionMilliseconds,
             delivered: delivered, route: String(describing: route),
             score: TranscriptEvalScoring.wordErrorScore(reference: row.reference, hypothesis: delivered),
             publications: publications, commands: commands, eventProcessingMilliseconds: eventProcessing
@@ -132,6 +154,7 @@ private struct CapturedRecognition: Decodable {
     let file: String
     let reference: String
     let referenceDesignation: String
+    let repeatIndex: Int?
     let correctionDictionaryRecords: [CorrectionRecord]
     let transcript: String
     let error: String?
@@ -161,6 +184,10 @@ private struct CapturedRecognition: Decodable {
 private struct RecognitionReplayOutput: Encodable {
     let file: String
     let referenceDesignation: String
+    let repeatIndex: Int?
+    let throttleMilliseconds: Int
+    let releaseMilliseconds: Double
+    let completionMilliseconds: Double
     let delivered: String
     let route: String
     let score: TranscriptWordErrorScore

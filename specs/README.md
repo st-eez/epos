@@ -8,6 +8,7 @@
 @recording-stage-timing - first recognizer result, cleaned display publication, acknowledged mark, startup stages, accepted write, readback, p50 and p95
 @analyzer-preparation-experiment - prepareToAnalyze, prewarming, paced saved audio, first result, memory cost, preparation decision
 @recognition-comparison-experiment - silent A/B, matched vocabulary, fast results, confidence attributes, held-out accuracy and latency gate
+@preview-scheduling-experiment - silent event replay, preview intervals, coalescing, phrase acknowledgment stalls, production promotion evidence
 @intended-transcript-accuracy - ground-truth .wav WER, ASR context eval, Apple alternatives, confidence diagnostics, canonicalizer wins, dogfood residual direction
 @correction-candidate-gate - scripts/correct, frozen signed transcript arm, confirmed development and holdout, zero-regression WER gate
 @raw-stt-benchmark-results - raw saved .wav STT benchmark, Apple vs Whisper large-v3-turbo vs Parakeet vs IBM Granite, WER, RTFx, memory footprint
