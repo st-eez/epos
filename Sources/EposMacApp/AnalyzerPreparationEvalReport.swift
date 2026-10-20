@@ -4,12 +4,13 @@ import Foundation
 enum AnalyzerPreparationEvalReport {
     static func render(rows: [AnalyzerPreparationEvalRow], output: URL) -> String {
         var lines = [
-            "Analyzer preparation evaluation. Saved audio paced at its audio rate.",
+            "Speech configuration evaluation. Saved audio paced at its audio rate.",
             "First trial is ordinal 1; Speech service coldness is unknown.",
             "Advanced preparation reports work before the hold separately.",
         ]
         for arm in AnalyzerPreparationArm.allCases {
             let armRows = rows.filter { $0.arm == arm }
+            guard !armRows.isEmpty else { continue }
             let metrics = armRows.compactMap(\.metrics)
             let errors = armRows.reduce(0) { $0 + $1.productionOutputScore.wordErrors }
             let words = armRows.reduce(0) { $0 + $1.productionOutputScore.referenceWordCount }

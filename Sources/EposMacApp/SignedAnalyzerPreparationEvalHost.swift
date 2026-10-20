@@ -29,19 +29,15 @@ enum SignedAnalyzerPreparationEvalHost {
         guard idleSeconds.isFinite, (0...300).contains(idleSeconds) else {
             throw PreparationEvalError.invalidConfiguration("idle seconds must be between 0 and 300")
         }
-        let firstArm = AnalyzerPreparationArm(rawValue: environment["EPOS_PREPARE_FIRST_ARM"] ?? "unprepared")
+        let arms = try configuredArms(environment: environment)
+        let firstArm = AnalyzerPreparationArm(rawValue: environment["EPOS_PREPARE_FIRST_ARM"] ?? arms[0].rawValue)
         guard let firstArm else { throw PreparationEvalError.invalidConfiguration("unknown first arm") }
-        let onlyArm: AnalyzerPreparationArm?
-        if let value = environment["EPOS_PREPARE_ONLY_ARM"] {
-            guard let arm = AnalyzerPreparationArm(rawValue: value) else {
-                throw PreparationEvalError.invalidConfiguration("unknown only arm")
-            }
-            onlyArm = arm
-        } else {
-            onlyArm = nil
+        guard let firstOffset = arms.firstIndex(of: firstArm) else {
+            throw PreparationEvalError.invalidConfiguration("first arm must belong to the selected arms")
         }
         let corpus = try ConfirmedEvalCorpus.load(from: corpusURL)
-        let entries = Array(corpus.entries.prefix(limit))
+        let entries = Array(try selectedEntries(corpus.entries, designation: environment["EPOS_EVAL_DESIGNATION"]).prefix(limit))
+        guard !entries.isEmpty else { throw PreparationEvalError.invalidConfiguration("no selected recordings") }
         for entry in entries {
             let digest = try ApplePresetEvalProvenance.fileSHA256(recordings.appendingPathComponent(entry.file))
             guard digest == entry.audioSHA256 else {
@@ -61,13 +57,12 @@ enum SignedAnalyzerPreparationEvalHost {
         let handle = try FileHandle(forWritingTo: output)
         defer { try? handle.close() }
         var rows: [AnalyzerPreparationEvalRow] = []
-        let firstOffset = AnalyzerPreparationArm.allCases.firstIndex(of: firstArm) ?? 0
         for repeatIndex in 0..<repeats {
             for (entryIndex, entry) in entries.enumerated() {
                 let audio = try await AnalyzerPreparationAudio.load(
                     recording: recordings.appendingPathComponent(entry.file), locale: locale
                 )
-                for arm in onlyArm.map({ [$0] }) ?? rotatedArms(by: firstOffset + repeatIndex + entryIndex) {
+                for arm in rotatedArms(arms, by: firstOffset + repeatIndex + entryIndex) {
                     let watchdog = Task {
                         try? await Task.sleep(for: .seconds(audio.durationSeconds + idleSeconds + 30))
                         guard !Task.isCancelled else { return }
@@ -103,7 +98,9 @@ enum SignedAnalyzerPreparationEvalHost {
                         transcript: transcript, productionOutput: cleaned,
                         transcriptScore: WordErrorScoring.score(reference: entry.reference, hypothesis: transcript),
                         productionOutputScore: WordErrorScoring.score(reference: entry.reference, hypothesis: cleaned),
-                        error: error, recognitionTimeline: result?.recognitionTimeline
+                        error: error, recognitionTimeline: result?.recognitionTimeline,
+                        firstUsefulResultMilliseconds: result?.recognitionTimeline
+                            .firstUsefulResultMilliseconds(canonicalizer: snapshot.canonicalizer)
                     )
                     rows.append(row)
                     try handle.write(contentsOf: encoder.encode(row))
@@ -130,8 +127,32 @@ enum SignedAnalyzerPreparationEvalHost {
         URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
     }
 
-    private static func rotatedArms(by offset: Int) -> [AnalyzerPreparationArm] {
-        let arms = AnalyzerPreparationArm.allCases
+    static func configuredArms(environment: [String: String]) throws -> [AnalyzerPreparationArm] {
+        guard environment["EPOS_PREPARE_ARMS"] == nil || environment["EPOS_PREPARE_ONLY_ARM"] == nil else {
+            throw PreparationEvalError.invalidConfiguration("select either arms or only arm")
+        }
+        guard let value = environment["EPOS_PREPARE_ARMS"] ?? environment["EPOS_PREPARE_ONLY_ARM"] else {
+            return AnalyzerPreparationArm.preparationArms
+        }
+        let names = value.split(separator: ",", omittingEmptySubsequences: false).map(String.init)
+        let arms = names.compactMap(AnalyzerPreparationArm.init(rawValue:))
+        guard arms.count == names.count, !arms.isEmpty, Set(arms).count == arms.count else {
+            throw PreparationEvalError.invalidConfiguration("arms must be distinct known names")
+        }
+        return arms
+    }
+
+    static func selectedEntries(
+        _ entries: [ConfirmedEvalCorpus.Entry], designation: String?
+    ) throws -> [ConfirmedEvalCorpus.Entry] {
+        guard let designation else { return entries }
+        guard let selected = ReferenceDesignation(rawValue: designation) else {
+            throw PreparationEvalError.invalidConfiguration("unknown reference designation")
+        }
+        return entries.filter { $0.designation == selected }
+    }
+
+    static func rotatedArms(_ arms: [AnalyzerPreparationArm], by offset: Int) -> [AnalyzerPreparationArm] {
         let split = offset % arms.count
         return Array(arms[split...] + arms[..<split])
     }
@@ -160,5 +181,6 @@ struct AnalyzerPreparationEvalRow: Codable {
     let productionOutputScore: WordErrorScore
     let error: String?
     var recognitionTimeline: RecognitionReplayTimeline?
+    var firstUsefulResultMilliseconds: Double?
 }
 #endif

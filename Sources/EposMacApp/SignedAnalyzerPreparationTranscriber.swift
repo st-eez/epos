@@ -9,6 +9,21 @@ enum AnalyzerPreparationArm: String, CaseIterable, Codable {
     case unprepared
     case inline
     case advance
+    case noFastResults = "no-fast-results"
+    case noConfidence = "no-confidence"
+
+    static let preparationArms: [Self] = [.unprepared, .inline, .advance]
+
+    var preset: SpeechTranscriber.Preset {
+        let production = Transcriber.speechPreset
+        return SpeechTranscriber.Preset(
+            transcriptionOptions: production.transcriptionOptions,
+            reportingOptions: self == .noFastResults
+                ? production.reportingOptions.subtracting([.fastResults]) : production.reportingOptions,
+            attributeOptions: self == .noConfidence
+                ? production.attributeOptions.subtracting([.transcriptionConfidence]) : production.attributeOptions
+        )
+    }
 }
 
 struct AnalyzerPreparationAudio: @unchecked Sendable {
@@ -98,6 +113,17 @@ struct RecognitionReplayEvent: Codable {
 struct RecognitionReplayTimeline: Codable {
     let releaseMilliseconds: Double
     let events: [RecognitionReplayEvent]
+
+    func firstUsefulResultMilliseconds(canonicalizer: TranscriptCanonicalizer) -> Double? {
+        var committed = ""
+        for event in events {
+            let raw = committed + event.text
+            if event.isFinal { committed = raw }
+            let display = TranscriptDeterministicCleaner.streamClean(canonicalizer.canonicalize(raw))
+            if !display.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return event.milliseconds }
+        }
+        return nil
+    }
 }
 
 struct AnalyzerPreparationResult {
@@ -118,7 +144,7 @@ enum SignedAnalyzerPreparationTranscriber {
         let rssBefore = residentMemoryBytes()
         let setupStarted = ContinuousClock.now
         var holdStarted = setupStarted
-        let module = SpeechTranscriber(locale: locale, preset: Transcriber.speechPreset)
+        let module = SpeechTranscriber(locale: locale, preset: arm.preset)
         let analyzer = SpeechAnalyzer(modules: [module])
         let (stream, continuation) = AsyncStream<(AnalyzerInput, UInt64)>.makeStream(bufferingPolicy: .bufferingOldest(512))
         let consumedFrames = PreparationFrameCount()
@@ -156,10 +182,11 @@ enum SignedAnalyzerPreparationTranscriber {
                 throw ApplePresetContextError.readbackMismatch
             }
             let preparationStarted = ContinuousClock.now
-            if arm != .unprepared {
+            let preparesAnalyzer = arm == .inline || arm == .advance
+            if preparesAnalyzer {
                 try await analyzer.prepareToAnalyze(in: audio.format)
             }
-            let preparationMilliseconds = arm == .unprepared ? 0 : milliseconds(since: preparationStarted)
+            let preparationMilliseconds = preparesAnalyzer ? milliseconds(since: preparationStarted) : 0
             let rssAtReadiness = residentMemoryBytes()
             var rssAfterIdle: UInt64?
             var setupBeforeHoldMilliseconds = 0.0

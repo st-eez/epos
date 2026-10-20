@@ -1,5 +1,8 @@
 # Analyzer preparation experiment
 
+The [recognition comparison](recognition-comparison-experiment.md) reuses this
+paced evaluator with explicit arms and a development or holdout filter.
+
 Date: 2026-10-01.
 
 ## Question
