@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Disposable raw tty. It never executes received bytes or writes their contents."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,7 @@ def main():
     state_file = directory / "terminal.json"
     stop_file = directory / "stop-fixture"
     received = bytearray()
+    rendered = 0
     final = b"EPOS final token"
     alpha = b"EPOS draft alpha"
     beta = b"EPOS draft beta"
@@ -39,6 +41,7 @@ def main():
         value = {
             "pid": os.getpid(), "nonce": sys.argv[2], "running": running,
             "byteCount": len(received), "exactFinal": received == final,
+            "sha256": hashlib.sha256(received).hexdigest(),
             "containsFinal": final in received, "containsAlpha": alpha in received,
             "containsBeta": beta in received, "xCount": received.count(b"x"),
             "backspaceCount": received.count(b"\x7f") + received.count(b"\x08"),
@@ -90,9 +93,10 @@ def main():
                 event("input")
                 if len(received) > 4096:
                     break
-                # Render only our exact known payload, never arbitrary input.
-                if received == final:
-                    os.write(sys.stdout.fileno(), final)
+                tokens = received[1:] if received.startswith(b"x") else received
+                if tokens == final * (len(tokens) // len(final)):
+                    os.write(sys.stdout.fileno(), received[rendered:])
+                    rendered = len(received)
             save(True)
     finally:
         termios.tcsetattr(descriptor, termios.TCSANOW, original)

@@ -11,8 +11,9 @@ the guarded whole-transcript Unicode delivery path.
 Stream into field defaults on. A companion keyboard InputMethodKit bundle in
 `~/Library/Input Methods/EposProbe.app` receives preview commands over a per-user
 Unix socket. It renders the same cleaned provisional transcript as marked text
-in the captured application's field. Updates are coalesced to at most one per
-100 ms. If Epos is already your selected keyboard input method, the recording
+in the captured application's field. Updates wait for the preceding native reply
+without an added scheduling delay. Revisions arriving during that request coalesce
+to the latest text. If Epos is already your selected keyboard input method, the recording
 adopts it with its underlying layout and leaves it selected after cleanup or
 failure. Keeping Epos selected lets ordinary typing use that layout while its
 activated client is ready for native streaming. Otherwise Epos acquires the source for the hold. After a successful native

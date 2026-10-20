@@ -113,7 +113,7 @@ actor InlinePreviewSession {
         transport: InlinePreviewTransport,
         bundleIdentifier: String,
         acquisitionArgument: String? = nil,
-        throttle: Duration = .milliseconds(100),
+        throttle: Duration = .zero,
         sleep: @escaping @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) },
         validateTarget: @escaping @MainActor @Sendable () -> Bool = { true },
         onAcquisitionFailure: @escaping @MainActor @Sendable () -> Void = {},

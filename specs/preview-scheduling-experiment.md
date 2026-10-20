@@ -98,17 +98,18 @@ keystroke writes.
 | Acknowledgment only | 0.28 ms | 0.30 ms | 679 / 679 | +2.56 / +4.93 ms | fail, write volume |
 
 The 33 ms interval reduced stale interval p95 by 68.32 and 68.36 ms, with
-8.81 and 7.85 percent more marks. It is the first candidate to validate against a
+8.81 and 7.85 percent more marks. It was the first candidate selected to validate against a
 native target. The 16 ms interval reduced staleness further, but its first
 repeat's release result was within 0.10 ms of the 5 ms screening limit.
 That boundary is too close to timing noise to treat as a robust release result.
-Acknowledgment only coalescing more than doubled writes and fails the frozen
-25 percent limit.
+Acknowledgment only coalescing more than doubled writes and failed that replay's
+25 percent limit. The later native comparison below replaces this unmeasured
+mark-count constraint with native cost measurements.
 
 Transcript handler wall time p95 ranged from 1.08 to 1.22 ms across arms and
 repeats. This includes scheduling and awaits, so it is not CPU consumption.
-The fake transport measures no host rendering work. Production remains at
-100 ms, pending native evidence for the 33 ms candidate.
+The fake transport measures no host rendering work. At this replay stage,
+production remained at 100 ms pending native evidence.
 
 The actual recording loop passed 17 controlled phrase reply scenarios. For each
 configured delay, three runs queued a partial, a final, and another partial while
@@ -145,3 +146,109 @@ Local ignored evidence is under `.build/scheduling-replay-20261020/`.
 280 runs, `analysis.json` contains the paired checks and aggregates,
 `stalls.json` contains all 17 controlled scenarios, and
 `native-diagnostics.json` records the log inspection. Raw transcripts stay local.
+
+## Native comparison protocol
+
+Steve challenged the need for any fixed delay and requested a native comparison
+before installation. The earlier 25 percent mark-count cap is a replay screening
+choice, not a measured native capacity limit. A higher call count alone does not
+establish a user-visible regression.
+
+`NativePreviewSchedulingTests` compares the actual `InlinePreviewSession` at
+100 ms and zero through `UnixSocketInlinePreviewTransport` and the normal
+installed companion. It requires an explicitly authorized foreground Ghostty
+fixture, captures its target with the production Accessibility observer, and
+checks the expected process and synthetic window title. Companion ownership,
+selection, input-event retirement and final-commit checks remain active.
+No microphone or speaker is needed for this component comparison. Stop Epos and
+any other owned probe driver before connecting, because a new companion peer
+supersedes the previous one. Record the original app, source and foreground state;
+restore and independently verify all three afterward. The harness refuses while
+Epos is running and claims a single-use run directory before source acquisition.
+
+Use a fresh private directory and the existing raw terminal fixture. Supply a
+JSON configuration containing `targetPID`, `companionPID`, `fixturePID` and
+`nonce`, with the nonce matching the fixture's `EPOS-SESSION-` title.
+Set `EPOS_NATIVE_SCHEDULING_CONFIG` to that file and run the optimized test package.
+After `source-ready` appears, deliver one ordinary `x` to the owned terminal,
+verify its arrival, then create `start`. This establishes an actual native key
+event before Ghostty's `insertText`; the priming byte is included in every
+independent delivery check. It is fixture setup, not a product wake key.
+
+Six pairs alternate arm order and repeat three workloads twice. They cover short
+bursts, drafts of roughly 1,900 characters, and release during an unfinished native mark transport call. Each paired arm publishes the same 25 updates on the same intended
+deadlines over 1.4 seconds. Short and long workloads release at 1.55 seconds. The
+pending-call workload releases when its last draft enters the transport; the
+evidence must confirm that call is unfinished. This includes socket queue time
+and does not establish that the native client has received the request. Intended and actual publication times are
+retained so late producers cannot masquerade as faster preview delivery. The transport records call-entry
+and reply-completion timestamps. Each final must deliver exactly `EPOS final token`; the
+receiver's cumulative byte count and SHA-256 verify all twelve commits. A separate
+zero-delay trial pauses at `visual-ready` for a screenshot of its marked text.
+Create `finish-visual` to commit, then inspect the final screenshot and all
+thirteen exact payloads. That visual trial is excluded from timing summaries.
+The harness restores its acquired input source on completion or failure.
+The operator stops the fixture, closes only its window, and restores the previous
+foreground window. It never replaces the installed companion for this check.
+
+```sh
+EPOS_NATIVE_SCHEDULING_CONFIG=<private-directory/config.json> \
+swift test -c release -Xswiftc -DDEBUG --filter NativePreviewSchedulingTests
+python3 scripts/analyze-native-preview.py <private-directory>
+```
+
+Use acknowledgment timestamps to reconstruct stale intervals, including revisions
+superseded while a native request is pending. These measure completion of native
+calls, not display scanout. Compare every pair, final latency, reply latency,
+call count and native CPU use. Freeze these practical screening limits before
+collecting results. Every pair must improve stale interval p95 by at least 20 ms.
+The paired release increase must have a median no greater than 5 ms, with no pair
+above 10 ms. Additional native CPU must have a median no greater than two
+percentage points of one core, with no pair above five points. The median paired
+increase in mark reply p95 must remain within 5 ms. These budgets reject trading
+visible responsiveness for meaningful foreground work or a slower release; they
+are experimental acceptance choices, not native API limits.
+
+Publication lateness p95 must stay within 10 ms in every trial and differ by no
+more than 5 ms within each pair. Both pending-release repeats must observe an
+unfinished transport call in both arms. Exact bytes, successful native replies and
+nonoverlapping commands are mandatory. A timing or coverage miss is inconclusive;
+a delivery or native refusal fails the run. At most one fresh paired run may
+resolve timing noise before reporting the comparison as inconclusive. Screenshots,
+cleanup verification and the independent review remain required even when the
+analyzer's timing screen passes.
+
+Native CPU counters are Mach ticks and must be scaled by `mach_timebase_info`.
+The harness records that timebase and process start time with each sample.
+Apple's [task accounting implementation](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/task.c)
+and [resource accounting export](https://github.com/apple-oss-distributions/xnu/blob/main/osfmk/kern/bsd_kern.c)
+establish the counter units. An independent `getrusage` calibration is retained
+with the local experiment evidence.
+
+## Native result, October 20
+
+The authorized foreground Ghostty comparison completed all six pairs and the
+separate visual trial using the installed companion. Every paired screening gate
+passed. All thirteen native commits delivered the exact expected bytes. Screenshots
+show the last marked phrase in place before release and the same text committed
+afterward. The fixture stopped, its Ghostty process exited, and the original
+ChatGPT window, ABC input source and Epos running state were restored.
+
+| Measurement | 100 ms delay | Zero delay |
+| --- | ---: | ---: |
+| Median of trial stale-interval p95, ms | 116.85 | 14.89 |
+| Median native mark reply p95, ms | 7.95 | 8.04 |
+| Median release-to-commit completion, ms | 3.63 | 5.31 |
+| Median combined native CPU, percent of one core | 8.58 | 10.15 |
+| Total native marks across six trials | 78 | 105 |
+
+Every pair improved stale-interval p95 by at least 100 ms. The greater mark count
+stayed within the predefined CPU and reply-latency budgets. This supports removing
+the default 100 ms scheduling delay while retaining serialized native replies and
+coalescing. Production now defaults to zero additional scheduling delay.
+
+These timestamps measure acknowledged native operations. They do not measure
+display scanout or Speech recognition latency. The bounded synthetic workloads
+do not certify overall replacement readiness or sustained microphone behavior.
+Local evidence is retained under `.build/native-delay-20261020/native-run1/`,
+including raw trials, analyzer output, terminal digests, screenshots and cleanup.
