@@ -11,6 +11,14 @@ PROBE = Path(__file__).resolve().parents[1]
 
 
 class InstallerTests(unittest.TestCase):
+    def test_native_signed_content_hash_is_available(self):
+        script = (PROBE / "install").read_text().split('if [[ "$verify_only" == false ]]; then', 1)[0]
+        with tempfile.TemporaryDirectory(prefix="epos-native-signature-check-") as directory:
+            check = Path(directory) / "check"
+            check.write_text(script + '\nverified_content_hash /usr/bin/true\n')
+            result = subprocess.run(["/bin/bash", str(check)], capture_output=True, text=True, check=True)
+        self.assertRegex(result.stdout.strip(), r"^[0-9a-f]{40}$")
+
     def run_install(self, mode, verify_only=False):
         with tempfile.TemporaryDirectory(prefix="epos-companion-install-check-") as directory:
             root = Path(directory)
@@ -87,7 +95,7 @@ if [[ "$1" == --verify && "$2" == --strict ]]; then
   if [[ "$3" == */installed/* && "$EPOS_INSTALL_CHECK_MODE" == invalid-installed && ! -e "$EPOS_INSTALL_CHECK_ROOT/replaced" ]]; then exit 1; fi
   if [[ "$3" == *epos-companion-stage.* && "$EPOS_INSTALL_CHECK_MODE" == invalid-staged ]]; then exit 1; fi
 fi
-if [[ "$1" == -dvv ]]; then
+if [[ "$1" == -dvvv ]]; then
   if [[ "$EPOS_INSTALL_CHECK_MODE" == missing-hash ]]; then exit 0; fi
   if [[ "$2" == */installed/* && "$EPOS_INSTALL_CHECK_MODE" != unchanged && "$EPOS_INSTALL_CHECK_MODE" != invalid-installed ]]; then
     echo CDHash=old >&2

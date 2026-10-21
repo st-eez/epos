@@ -44,7 +44,7 @@ resolve_identity() {
 
 verified_content_hash() {
   codesign --verify --strict "$1" >/dev/null 2>&1 || return 1
-  codesign -dvv "$1" 2>&1 | sed -n 's/^CDHash=//p'
+  codesign -dvvv "$1" 2>&1 | sed -n 's/^CDHash=//p'
 }
 
 poll_registration() {
