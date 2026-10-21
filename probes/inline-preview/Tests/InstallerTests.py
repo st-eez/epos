@@ -83,6 +83,16 @@ exit 64
                 "codesign": r'''#!/bin/bash
 echo "codesign $*" >> "$EPOS_INSTALL_CHECK_ROOT/calls"
 if [[ "$EPOS_INSTALL_CHECK_MODE" == signing-failure && "$1" == --force ]]; then exit 42; fi
+if [[ "$1" == --verify && "$2" == --strict ]]; then
+  if [[ "$3" == */installed/* && "$EPOS_INSTALL_CHECK_MODE" == invalid-installed && ! -e "$EPOS_INSTALL_CHECK_ROOT/replaced" ]]; then exit 1; fi
+  if [[ "$3" == *epos-companion-stage.* && "$EPOS_INSTALL_CHECK_MODE" == invalid-staged ]]; then exit 1; fi
+fi
+if [[ "$1" == -dvv ]]; then
+  if [[ "$EPOS_INSTALL_CHECK_MODE" == missing-hash ]]; then exit 0; fi
+  if [[ "$2" == */installed/* && "$EPOS_INSTALL_CHECK_MODE" != unchanged && "$EPOS_INSTALL_CHECK_MODE" != invalid-installed ]]; then
+    echo CDHash=old >&2
+  else echo CDHash=new >&2; fi
+fi
 exit 0
 ''',
                 "ditto": r'''#!/bin/bash
@@ -144,6 +154,28 @@ fi
         selection = next(i for i, call in enumerate(calls) if " select " in call)
         readiness = max(i for i, call in enumerate(calls) if " ready " in call)
         self.assertGreater(selection, readiness)
+
+    def test_identical_signed_companion_preserves_its_process_and_bundle(self):
+        result, calls, executable, _ = self.run_install("unchanged")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(executable, "original")
+        self.assertFalse(any(call.startswith(("pkill ", "ditto ", "killall ")) for call in calls))
+        self.assertFalse(any(" select " in call for call in calls))
+        self.assertIn("preserving its running input sessions", result.stdout)
+
+    def test_unverified_or_missing_hash_cannot_skip_replacement(self):
+        for mode in ("invalid-installed", "missing-hash"):
+            with self.subTest(mode=mode):
+                result, calls, executable, _ = self.run_install(mode)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(executable, "new executable")
+                self.assertTrue(any(call.startswith("pkill ") for call in calls))
+
+    def test_invalid_staged_signature_stops_before_disrupting_input_sessions(self):
+        result, calls, executable, _ = self.run_install("invalid-staged")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(executable, "original")
+        self.assertFalse(any(call.startswith(("pkill ", "ditto ")) for call in calls))
 
     def test_new_source_chosen_during_install_is_preserved(self):
         result, calls, _, _ = self.run_install("selected-user-changed")

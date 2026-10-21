@@ -42,6 +42,11 @@ resolve_identity() {
   fi
 }
 
+verified_content_hash() {
+  codesign --verify --strict "$1" >/dev/null 2>&1 || return 1
+  codesign -dvv "$1" 2>&1 | sed -n 's/^CDHash=//p'
+}
+
 poll_registration() {
   local deadline=$((SECONDS + ${1:-30}))
   while (( SECONDS < deadline )); do
@@ -121,16 +126,22 @@ if [[ "$verify_only" == false ]]; then
   codesign -dv --verbose=2 "$staged_bundle" 2>&1 | sed 's/^/  /'
 
   echo "== install =="
-  mkdir -p "$HOME/Library/Input Methods"
-  prior_selection="$(tisctl current)"
-  if [[ "$prior_selection" == "$source_id" ]]; then
-    restore_layout="$(tisctl layout)"
+  staged_hash="$(verified_content_hash "$staged_bundle")"
+  installed_hash="$(verified_content_hash "$installed_bundle" || true)"
+  if [[ -n "$staged_hash" && "$staged_hash" == "$installed_hash" ]]; then
+    echo "signed companion unchanged; preserving its running input sessions"
+  else
+    mkdir -p "$HOME/Library/Input Methods"
+    prior_selection="$(tisctl current)"
+    if [[ "$prior_selection" == "$source_id" ]]; then
+      restore_layout="$(tisctl layout)"
+    fi
+    /usr/bin/pkill -x EposProbe >/dev/null 2>&1 || true
+    find "$installed_bundle" -depth -delete 2>/dev/null || true
+    /usr/bin/ditto "$staged_bundle" "$installed_bundle"
+    codesign --verify --strict "$installed_bundle"
+    echo "installed at $installed_bundle"
   fi
-  /usr/bin/pkill -x EposProbe >/dev/null 2>&1 || true
-  find "$installed_bundle" -depth -delete 2>/dev/null || true
-  /usr/bin/ditto "$staged_bundle" "$installed_bundle"
-  codesign --verify --strict "$installed_bundle"
-  echo "installed at $installed_bundle"
 
   echo "== live registration =="
   if [[ "$same_metadata" == false ]]; then

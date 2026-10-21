@@ -21,7 +21,11 @@ replaces the installed app, and installs the inline preview companion. It restor
 the prior bundle if replacement fails. First registration of the companion can
 require a logout or input source consent.
 Companion upgrades use temporary staging and unregister the old generated build
-copy to avoid competing registered bundles. When input metadata is unchanged
+copy to avoid competing registered bundles. When the installed and rebuilt
+companions both verify and have the same code-directory hash, the installer
+keeps the installed bundle and its running input sessions. An app-only update
+therefore does not stop the companion or disconnect an activated text field.
+When input metadata is unchanged
 and the keyboard method is registered, the installer keeps that registration and skips
 input-agent restarts. It checks all matching sources for an enabled, selectable
 keyboard method before and after replacement. A registered but disabled source

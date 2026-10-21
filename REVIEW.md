@@ -6,6 +6,10 @@
 applications. Changes require Deep review, including target identity, focus
 changes, composition ownership, and suppression of duplicate writes.
 
+`probes/inline-preview/install` changes the installed input method and its live
+client sessions. Installer changes require Deep review and verification in the
+target application after installation.
+
 ## Evidence
 
 Use the checks in [development](docs/development.md). Distinguish simulated
