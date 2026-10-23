@@ -139,7 +139,7 @@ final class RecordingSession {
             ? { [dogfood, recordingID] buffer in dogfood.write(buffer, recordingID: recordingID) }
             : nil
         audio.onCaptureFailure = { [weak self] error in
-            guard let self, self.phase == .held, self.microphoneOpen else { return }
+            guard let self, self.phase != .finished, self.microphoneOpen else { return }
             self.log.error("recording cut short: microphone capture failed (\(String(describing: error)))")
             self.reliability?.emit(.captureInterrupted)
             self.onEvent(self, .captureFailed)
@@ -586,9 +586,9 @@ final class RecordingSession {
     }
 
     private func stopMicrophone() {
+        audio.stop()
         microphoneOpen = false
         preRoll.stopAccepting()
-        audio.stop()
     }
 
     private func clearAudioCallbacks() {

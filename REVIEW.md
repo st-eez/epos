@@ -2,6 +2,10 @@
 
 ## Deep
 
+`Sources/Epos/Audio/` captures production microphone input. Changes require Deep
+review, including render-thread safety, bounded buffering, format conversion,
+route recovery, and draining the last captured frames on release.
+
 `Sources/Epos/Inject/` is production code that authorizes writes into other
 applications. Changes require Deep review, including target identity, focus
 changes, composition ownership, and suppression of duplicate writes.

@@ -67,6 +67,40 @@ final class CoordinatorAudioLifecycleTests: XCTestCase {
         await coordinator.transcriptionTask?.value
     }
 
+    func testAudioCapturedBeforeReleaseDrainsBeforeRecognizerFinishes() async throws {
+        for waitForRecognizer in [false, true] {
+            let audio = FakeMicrophoneCapture()
+            let transcriber = FakeTranscriber()
+            let format = try XCTUnwrap(AVAudioFormat(standardFormatWithSampleRate: 16_000, channels: 1))
+            let tail = try XCTUnwrap(AVAudioPCMBuffer(pcmFormat: format, frameCapacity: 80))
+            tail.frameLength = 80
+            audio.finalBufferOnStop = tail
+            let coordinator = makeCoordinator(audio: audio, transcriber: transcriber)
+            coordinator.startRecording()
+            if waitForRecognizer {
+                let deadline = ContinuousClock.now + .seconds(1)
+                while !transcriber.didStart, ContinuousClock.now < deadline { await Task.yield() }
+                XCTAssertTrue(transcriber.didStart)
+            }
+            coordinator.finishRecording()
+            await coordinator.transcriptionTask?.value
+            XCTAssertEqual(transcriber.acceptedBufferCount, 1)
+            XCTAssertEqual(transcriber.buffersAtFirstFinish, 1)
+        }
+    }
+
+    func testCaptureFailureDiscoveredAtReleaseShowsMicLost() async {
+        let audio = FakeMicrophoneCapture()
+        audio.failureOnStop = AudioCaptureError.inputBacklogOverflow
+        let coordinator = makeCoordinator(audio: audio)
+        coordinator.startRecording()
+        coordinator.finishRecording()
+        XCTAssertTrue(coordinator.microphoneUnavailable)
+        await coordinator.transcriptionTask?.value
+        XCTAssertEqual(coordinator.state, .idle)
+        XCTAssertEqual(audio.stopCount, 1)
+    }
+
     /// Voice processing can only be switched while the audio engine is stopped, so
     /// the setting is read at each fn press rather than latched at launch. A stale
     /// read here is invisible in the UI and only shows up as the user's music being

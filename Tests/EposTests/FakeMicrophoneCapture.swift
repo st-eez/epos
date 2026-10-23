@@ -32,6 +32,8 @@ final class FakeMicrophoneCapture: MicrophoneCapture {
     private(set) var lastInputDeviceUID: String?
     private(set) var inputDeviceChangeCount = 0
     var deviceChangeError: Error?
+    var finalBufferOnStop: AVAudioPCMBuffer?
+    var failureOnStop: Error?
 
     func start(targetFormat: AVAudioFormat, echoCancellation: Bool, inputDeviceUID: String?) throws {
         if let startError {
@@ -50,9 +52,10 @@ final class FakeMicrophoneCapture: MicrophoneCapture {
     }
 
     func stop() {
-        if isCapturing {
-            stopCount += 1
-        }
+        guard isCapturing else { return }
+        stopCount += 1
         isCapturing = false
+        if let finalBufferOnStop { onBuffer?(finalBufferOnStop) }
+        if let failureOnStop { onCaptureFailure?(failureOnStop) }
     }
 }
