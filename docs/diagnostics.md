@@ -147,6 +147,11 @@ speaker playback, tell Steve its purpose and duration and wait for his go.
 Check the actual output device and Epos's selected microphone before an acoustic
 test. A file played to headphones does not establish microphone capture. Keep
 route mistakes and speech from other people separate from controlled trials.
+Check background music and other playback before each acoustic comparison.
+Pause it only with Steve's permission. If playback state cannot be read, ask
+whether it is paused. Exclude trials with competing audio from latency and
+accuracy comparisons; a correct delivery does not make their recognition
+measurements comparable.
 Use bounded native text tests for delivery, with independent field or terminal
 evidence. Keep native IME results separate from keystroke results. Do not ask
 Steve to dictate-test the app.
