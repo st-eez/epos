@@ -7,9 +7,9 @@ import Foundation
 /// opens the mic synchronously inside `startRecording` and `swift test` must not
 /// touch the machine's real input device.
 public protocol MicrophoneCapture: AnyObject {
-    /// Converted buffer in the target format. Fires on the serial audio worker.
+    /// Converted buffer in the target format. Fires on the engine's audio thread.
     var onBuffer: ((AVAudioPCMBuffer) -> Void)? { get set }
-    /// Pre-conversion buffer in the mic's native format. Fires on the serial audio worker.
+    /// Pre-conversion buffer in the mic's native format. Fires on the audio thread.
     var onRawBuffer: ((AVAudioPCMBuffer) -> Void)? { get set }
     var onAmplitude: ((Float) -> Void)? { get set }
     /// An in-flight capture died and could not be recovered. Delivered on the main
@@ -28,17 +28,18 @@ public protocol MicrophoneCapture: AnyObject {
 
 /// Captures microphone audio via `AVAudioEngine` and emits PCM buffers in the format the
 /// downstream `SpeechTranscriber` expects (obtained from `Transcriber.bestAudioFormat`).
-/// Callbacks fire on a serial worker; consumers must be thread-safe.
+/// Callbacks fire on the engine's audio thread; consumers must be thread-safe.
 ///
 /// Unchecked-Sendable for one reason: the `AVAudioEngineConfigurationChange` observer is
 /// posted on an arbitrary thread and has to reach this instance. It hops to the main actor
 /// before touching anything, so every mutable field here stays main-thread confined —
 /// `start`/`stop` are called from the coordinator, which is `@MainActor`.
 public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
-    /// Converted buffer in `targetFormat`. Fires on the serial audio worker.
-    /// Set before `start()`; the value is snapshotted there for the session.
+    /// Converted buffer in `targetFormat`. Fires on the engine's audio thread.
+    /// Set before `start()`; the value is snapshotted there for the session's tap.
     public var onBuffer: ((AVAudioPCMBuffer) -> Void)?
-    /// Pre-conversion buffer on the serial audio worker, for opt-in sample capture.
+    /// Pre-conversion buffer in the mic's native format. Fires on the engine's audio
+    /// thread. Used only when opt-in audio sample capture is enabled.
     public var onRawBuffer: ((AVAudioPCMBuffer) -> Void)?
     public var onAmplitude: ((Float) -> Void)?
     /// See `MicrophoneCapture.onCaptureFailure`. Called on the main actor.
@@ -50,9 +51,9 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     /// Releasing an `AVAudioEngine` while CoreAudio's HAL IO thread is still rendering
     /// nulls the cached IOProc pointer → SIGSEGV on the audio thread (the rapid
     /// release-during-finalize crash). `stop()` only stops the engine and removes the
-    /// input stream; the next `start()` attaches a fresh sink and converter.
+    /// tap; the next `start()` reinstalls a fresh tap + converter on the same engine.
     private let engine = AVAudioEngine()
-    private var inputStream: SinkAudioInput?
+    private var converter: AVAudioConverter?
     private var isRunning = false
     /// Frozen for the hold. Recovery resolves the same UID to a fresh hardware ID.
     private var activeConfiguration: AudioCaptureInputConfiguration?
@@ -152,44 +153,35 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         }
     }
 
-    /// Stops the engine and drains captured frames before returning. Idempotent.
+    /// Stop capture: halt the engine and remove the tap, keeping the engine allocated
+    /// (see the `engine` property note). Idempotent. The next `start` reinstalls.
     public func stop() {
         guard isRunning else { return }
         Self.log.info("capture stopping")
-        let failure = closeInputPath()
-        if let failure { onCaptureFailure?(failure) }
+        closeInputPath()
         Self.log.info("capture stopped")
     }
 
     /// Shared unwind for a finished capture and a failed open or recovery. An open
     /// can enable voice processing before it throws, without reaching isRunning.
-    @discardableResult
-    private func closeInputPath() -> Error? {
+    private func closeInputPath() {
         isRunning = false
         activeConfiguration = nil
         activeInputDeviceID = nil
-        let failure = stopInputStream()
+        engine.stop()                          // synchronous; quiesces the HAL IO thread
+        engine.inputNode.removeTap(onBus: 0)   // safe only after the engine has stopped
+        converter = nil
         // Leave voice processing off between recordings. The engine is long-lived and
         // never released, so a voice-processing unit left enabled here stays alive for
         // the whole run of the app — and its ducking is not gated on speech, so every
         // other sound on the machine stays attenuated long after the hold ends. Stopping
         // the engine is not enough to release it; the mode has to be turned off.
         applyVoiceProcessing(enabled: false)
-        return failure
     }
 
-    private func stopInputStream() -> Error? {
-        engine.stop()
-        var failure: Error?
-        if let inputStream {
-            failure = inputStream.stop()
-            engine.disconnectNodeInput(inputStream.node)
-            engine.detach(inputStream.node)
-        }
-        inputStream = nil
-        return failure
-    }
-
+    /// Build the converter, install the tap, and start the engine. Shared by `start`
+    /// and the recovery after an input-device change, so both paths configure the
+    /// input path identically.
     private func openInputPath(configuration: AudioCaptureInputConfiguration) throws {
         let deviceID = try configuration.configureDevice(
             applyVoiceProcessing: applyVoiceProcessing,
@@ -206,35 +198,58 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
             throw AudioCaptureError.converterUnavailable
         }
 
+        let rateRatio = targetFormat.sampleRate / inputFormat.sampleRate
+
+        // Snapshot the callbacks now so the realtime audio thread reads stable locals
+        // instead of these mutable properties (written on the main thread), closing
+        // the cross-thread data race on the closure pointers. The tap captures only
+        // value locals — no `self` — so there is nothing to tear out from under it.
         let onRawBuffer = self.onRawBuffer
         let onAmplitude = self.onAmplitude
         let onBuffer = self.onBuffer
-        var nextAmplitude = ContinuousClock.now
 
-        let processBuffer: (AVAudioPCMBuffer) throws -> Void = { buffer in
+        // Defensive: clear any tap left by a prior aborted session before reinstalling
+        // (the engine is long-lived now, so a stale tap would survive across calls).
+        inputNode.removeTap(onBus: 0)
+        inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
             onRawBuffer?(buffer)
 
-            if ContinuousClock.now >= nextAmplitude {
-                if let amplitude = Self.rms(of: buffer) { onAmplitude?(amplitude) }
-                nextAmplitude = .now + .milliseconds(100)
+            if let amplitude = Self.rms(of: buffer) {
+                onAmplitude?(amplitude)
             }
 
-            let output = try Self.convert(buffer, with: converter)
-            if output.frameLength > 0 { onBuffer?(output) }
-        }
-        guard let inputStream = SinkAudioInput(format: inputFormat, onBuffer: processBuffer, onFinish: {
-            try Self.finishConversion(converter, onBuffer: { onBuffer?($0) })
-        }, onFailure: { [weak self] stream, error in
-            Task { @MainActor in
-                guard let self, self.inputStream === stream, self.isRunning else { return }
-                self.closeInputPath()
-                Self.log.error("audio input failed: \(String(describing: error))")
-                self.onCaptureFailure?(error)
+            // +1 frame: the SRC resampler can emit one extra frame on buffers where
+            // accumulated fractional phase rolls over, beyond ceil(in * ratio).
+            let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * rateRatio)) + 1
+            guard capacity > 0,
+                  let output = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: capacity) else {
+                return
             }
-        }) else { throw AudioCaptureError.invalidInputBuffer }
-        self.inputStream = inputStream
-        engine.attach(inputStream.node)
-        engine.connect(inputNode, to: inputStream.node, format: inputFormat)
+
+            // Box holds the input buffer for a single hand-off; nil-out after first use.
+            // Reference type avoids `var` mutation in the @Sendable converter input block.
+            let pending = InputBox(buffer)
+            var convError: NSError?
+            // Return `.noDataNow` (not `.endOfStream`) so the converter retains its SRC
+            // filter state across calls instead of flushing/resetting every buffer.
+            let status = converter.convert(to: output, error: &convError) { _, inputStatus in
+                guard let next = pending.take() else {
+                    inputStatus.pointee = .noDataNow
+                    return nil
+                }
+                inputStatus.pointee = .haveData
+                return next
+            }
+
+            if status == .error {
+                if let convError {
+                    Self.log.error("convert failed: \(String(describing: convError))")
+                }
+                return
+            }
+
+            onBuffer?(output)
+        }
 
         do {
             engine.prepare()
@@ -244,6 +259,7 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
             throw AudioCaptureError.engineFailed(error)
         }
 
+        self.converter = converter
         activeInputDeviceID = deviceID
         Self.log.info("capture started: input \(inputFormat.sampleRate)Hz/\(inputFormat.channelCount)ch -> target \(targetFormat.sampleRate)Hz/\(targetFormat.channelCount)ch voiceProcessing=\(inputNode.isVoiceProcessingEnabled)")
     }
@@ -258,11 +274,8 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
     private func handleConfigurationChange() {
         guard isRunning, let configuration = activeConfiguration else { return }
         Self.log.info("input configuration changed during capture; restarting engine")
-        if let failure = stopInputStream() {
-            closeInputPath()
-            onCaptureFailure?(failure)
-            return
-        }
+        engine.stop()
+        engine.inputNode.removeTap(onBus: 0)
         do {
             try openInputPath(configuration: configuration)
             Self.log.info("capture resumed on the reconfigured input")
@@ -272,44 +285,6 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
                 "capture restart failed after input configuration change: \(String(describing: error))"
             )
             onCaptureFailure?(error)
-        }
-    }
-
-    static func convert(_ buffer: AVAudioPCMBuffer, with converter: AVAudioConverter) throws -> AVAudioPCMBuffer {
-        let format = converter.outputFormat
-        let rateRatio = format.sampleRate / buffer.format.sampleRate
-        // Fractional resampler phase can emit one frame beyond the rounded ratio.
-        let capacity = AVAudioFrameCount(ceil(Double(buffer.frameLength) * rateRatio)) + 1
-        guard let output = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: capacity) else {
-            throw AudioCaptureError.bufferAllocationFailed
-        }
-        let pending = InputBox(buffer)
-        var error: NSError?
-        let status = converter.convert(to: output, error: &error) { _, inputStatus in
-            guard let next = pending.take() else {
-                inputStatus.pointee = .noDataNow
-                return nil
-            }
-            inputStatus.pointee = .haveData
-            return next
-        }
-        if status == .error { throw AudioCaptureError.conversionFailed(error) }
-        return output
-    }
-
-    static func finishConversion(_ converter: AVAudioConverter, onBuffer: (AVAudioPCMBuffer) -> Void) throws {
-        while true {
-            guard let output = AVAudioPCMBuffer(pcmFormat: converter.outputFormat, frameCapacity: 4_096) else {
-                throw AudioCaptureError.bufferAllocationFailed
-            }
-            var error: NSError?
-            let status = converter.convert(to: output, error: &error) { _, inputStatus in
-                inputStatus.pointee = .endOfStream
-                return nil
-            }
-            if status == .error { throw AudioCaptureError.conversionFailed(error) }
-            if output.frameLength > 0 { onBuffer(output) }
-            guard status == .haveData, output.frameLength > 0 else { return }
         }
     }
 
@@ -360,10 +335,6 @@ enum AudioCaptureError: Error {
     case zeroSampleRate
     case converterUnavailable
     case engineFailed(Error)
-    case inputBacklogOverflow
-    case invalidInputBuffer
-    case bufferAllocationFailed
-    case conversionFailed(Error?)
 }
 
 /// Initial open and recovery share the frozen choices, but never cache a hardware ID.

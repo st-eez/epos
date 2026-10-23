@@ -37,18 +37,10 @@ by SpeechAnalyzer. A mono target explicitly selects channel zero from a
 multichannel input. This handles the discrete channel layout produced by Apple's
 voice processing without an implicit downmix to silence.
 
-An AVAudioSinkNode receives the hardware's small input batches. Its render callback
-copies PCM into a preallocated ring. A serial worker drains batches of at least
-10 ms for conversion and recognition, and sends amplitude updates at most ten
-times per second. Stopping capture drains the ring and flushes the converter
-before closing startup audio. A full or malformed input ring, allocation failure,
-or conversion failure ends capture through `Mic lost`, including at release.
-
 The microphone starts before asynchronous analyzer setup. A three second queue
 preserves startup audio until the analyzer attaches. If setup exceeds that cap,
 the queue discards the oldest audio and logs the truncation. The transcriber's
-input queue holds at most 512 buffers, about five seconds at the capture batch
-threshold. Overflowing it reports recognition failure.
+input queue also has a limit; overflowing it reports recognition failure.
 
 A fresh SpeechAnalyzer and SpeechTranscriber serve each recording. The preset
 requests volatile results, fast results, and confidence attributes. Recognition
