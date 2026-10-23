@@ -1,38 +1,105 @@
-import AppKit
+import AVFoundation
 
-/// The dictation's audio protocol, two synthesized bells chosen by ear:
-/// START — E4 (the tonic of the user's reference track) with the minor third
-/// glowing inside the strike: "mic is hot".
-/// END — B3, the fifth below, shorter and quieter, with the E above as a
-/// faint partial: "recording closed", played at fn release — symmetric and
-/// immediate. Delivery failures stay visual (the red notice).
-/// Both are synthesized at first use into in-memory WAVs (no bundled asset).
-/// Fire and forget: a failed synthesis means silence, never a failed start.
-@MainActor
 enum RecordingCue {
     private static let sampleRate = 48_000.0
+    @MainActor private static let playback = Playback()
 
-    private static let startSound = makeStartSound()
-    private static let endSound = makeEndSound()
-
+    @MainActor
     static func playStart() {
-        play(startSound)
+        guard IndicatorWindowPolicy.canPresentWindows else { return }
+        playback.playStart()
     }
 
+    @MainActor
     static func playEnd() {
-        play(endSound)
+        guard IndicatorWindowPolicy.canPresentWindows else { return }
+        playback.playEnd()
     }
 
-    private static func play(_ sound: NSSound?) {
-        guard IndicatorWindowPolicy.canPresentWindows, let sound else { return }
-        // A restart beats a dropped cue when recordings come back-to-back.
-        if sound.isPlaying { sound.stop() }
-        sound.play()
+    @MainActor
+    static func captureStopped() {
+        guard IndicatorWindowPolicy.canPresentWindows else { return }
+        playback.captureStopped()
+    }
+
+    @MainActor
+    final class Playback {
+        private enum Bell { case start, end }
+        private struct PreparedSound: @unchecked Sendable {
+            let player: AVAudioPlayer
+        }
+        private let queue = DispatchQueue(label: "epos.recording-cues", qos: .userInitiated)
+        private var generation: UInt64 = 0
+        private var capturing = false
+        private var startSound: AVAudioPlayer?
+        private var endSound: AVAudioPlayer?
+        private let makeStart: @Sendable () -> AVAudioPlayer?
+        private let makeEnd: @Sendable () -> AVAudioPlayer?
+
+        init(
+            makeStart: @escaping @Sendable () -> AVAudioPlayer? = { makeStartSound() },
+            makeEnd: @escaping @Sendable () -> AVAudioPlayer? = { makeEndSound() }
+        ) {
+            self.makeStart = makeStart
+            self.makeEnd = makeEnd
+        }
+
+        func playStart() {
+            capturing = true
+            generation &+= 1
+            discard(endSound)
+            endSound = nil
+            enqueue(.start)
+        }
+
+        func captureStopped() {
+            guard capturing else { return }
+            capturing = false
+            generation &+= 1
+            discard(startSound)
+            startSound = nil
+        }
+
+        func playEnd() {
+            enqueue(.end)
+        }
+
+        private func enqueue(_ bell: Bell) {
+            let token = generation
+            let makeSound = bell == .start ? makeStart : makeEnd
+            queue.async { [weak self] in
+                guard let sound = makeSound(), sound.prepareToPlay() else { return }
+                let prepared = PreparedSound(player: sound)
+                Task { @MainActor in self?.playPrepared(prepared, bell: bell, token: token) }
+            }
+        }
+
+        private func playPrepared(_ sound: PreparedSound, bell: Bell, token: UInt64) {
+            guard generation == token else {
+                discard(sound.player)
+                return
+            }
+            switch bell {
+            case .start:
+                discard(startSound)
+                startSound = sound.player
+            case .end:
+                discard(endSound)
+                endSound = sound.player
+            }
+            sound.player.play()
+        }
+
+        private func discard(_ player: AVAudioPlayer?) {
+            guard let player else { return }
+            let sound = PreparedSound(player: player)
+            queue.async { sound.player.stop() }
+        }
     }
 
     /// Internal so tests can pin that the synthesized WAVs actually parse.
-    static func makeStartSound() -> NSSound? {
-        NSSound(data: wavData(samples: bellSamples(
+    static func makeStartSound() -> AVAudioPlayer? {
+        try? AVAudioPlayer(data: wavData(samples: bellSamples(
             fundamental: 329.63,  // E4
             duration: 0.28,
             amplitude: 0.38,
@@ -40,8 +107,8 @@ enum RecordingCue {
         )))
     }
 
-    static func makeEndSound() -> NSSound? {
-        NSSound(data: wavData(samples: bellSamples(
+    static func makeEndSound() -> AVAudioPlayer? {
+        try? AVAudioPlayer(data: wavData(samples: bellSamples(
             fundamental: 246.94,  // B3 — settling a fifth below home
             duration: 0.22,
             amplitude: 0.30,

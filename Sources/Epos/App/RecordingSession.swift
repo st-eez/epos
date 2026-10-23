@@ -589,6 +589,7 @@ final class RecordingSession {
         microphoneOpen = false
         preRoll.stopAccepting()
         audio.stop()
+        RecordingCue.captureStopped()
     }
 
     private func clearAudioCallbacks() {

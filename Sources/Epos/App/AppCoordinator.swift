@@ -585,9 +585,9 @@ public final class AppCoordinator: ObservableObject {
         guard state == .recording else { return }
         state = .finalizing
         finalizationPhase = .finalizingSpeech
-        RecordingCue.playEnd()
         cues.hideEdgeGlow()
         recordingSession?.release()
+        RecordingCue.playEnd()
     }
 
     func cancelDeferredStart() {

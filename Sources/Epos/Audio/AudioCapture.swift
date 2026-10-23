@@ -179,9 +179,6 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
         applyVoiceProcessing(enabled: false)
     }
 
-    /// Build the converter, install the tap, and start the engine. Shared by `start`
-    /// and the recovery after an input-device change, so both paths configure the
-    /// input path identically.
     private func openInputPath(configuration: AudioCaptureInputConfiguration) throws {
         let deviceID = try configuration.configureDevice(
             applyVoiceProcessing: applyVoiceProcessing,
@@ -200,16 +197,10 @@ public final class AudioCapture: MicrophoneCapture, @unchecked Sendable {
 
         let rateRatio = targetFormat.sampleRate / inputFormat.sampleRate
 
-        // Snapshot the callbacks now so the realtime audio thread reads stable locals
-        // instead of these mutable properties (written on the main thread), closing
-        // the cross-thread data race on the closure pointers. The tap captures only
-        // value locals — no `self` — so there is nothing to tear out from under it.
         let onRawBuffer = self.onRawBuffer
         let onAmplitude = self.onAmplitude
         let onBuffer = self.onBuffer
 
-        // Defensive: clear any tap left by a prior aborted session before reinstalling
-        // (the engine is long-lived now, so a stale tap would survive across calls).
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { buffer, _ in
             onRawBuffer?(buffer)

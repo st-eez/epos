@@ -46,14 +46,6 @@ public final class Transcriber: SpeechTranscribing, @unchecked Sendable {
     /// generous escape hatch for an Apple-framework hang, not a tuning knob.
     static let finishTimeout: Duration = .seconds(10)
 
-    /// Bound on how many un-analyzed audio buffers the input stream may hold.
-    /// `AudioCapture` taps 4096 frames at 48 kHz and converts each one, so a buffer is
-    /// ~85 ms of audio however it is resampled: 512 queued buffers is ~44 s the analyzer
-    /// has not consumed — far past any real push-to-talk hold plus the pre-roll burst.
-    /// Under the default `.unlimited` policy an analyzer that stopped draining retained
-    /// every buffer of the recording forever. Reaching this bound therefore means the
-    /// analyzer is wedged, not that the user talked a long time, and the session is
-    /// failed rather than grown without limit.
     static let maxQueuedInputBuffers = 512
 
     private let lock = NSLock()

@@ -14,7 +14,10 @@ transcript. While finalizing, it shows a spinner, then disappears when the sessi
 completes. Error notices expand at the screen edge so their text remains readable.
 
 The start sound plays after the microphone opens. The release sound plays when
-capture closes. A failed sound synthesis does not stop dictation. There is no
+capture closes. A serial background queue synthesizes and prepares both sounds.
+The main thread checks that a cue still belongs to the current recording before
+starting it. Sound preparation runs alongside recognition and finalization.
+A failed sound synthesis does not stop dictation. There is no
 sound preference in the menu.
 
 ## Edge glow
