@@ -1,21 +1,21 @@
 # Epos review
 
-## Deep
+## What to check
 
-`Sources/Epos/Audio/` captures production microphone input. Changes require Deep
-review, including render-thread safety, bounded buffering, format conversion,
+`Sources/Epos/Audio/` captures production microphone input. Review checks
+render-thread safety, bounded buffering, format conversion,
 route recovery, and draining the last captured frames on release.
 
-`Sources/Epos/UI/RecordingCue.swift` plays production recording cues. Changes
-require Deep review, including callback latency and ordered playback.
+`Sources/Epos/UI/RecordingCue.swift` plays production recording cues. Review
+checks callback latency and ordered playback.
 
 `Sources/Epos/Inject/` is production code that authorizes writes into other
-applications. Changes require Deep review, including target identity, focus
+applications. Review checks target identity, focus
 changes, composition ownership, and suppression of duplicate writes.
 
-`probes/inline-preview/install` changes the installed input method and its live
-client sessions. Installer changes require Deep review and verification in the
-target application after installation.
+- Deep: `probes/inline-preview/install`, which changes the installed input
+  method and its live client sessions. Verify it in the target application
+  after installation.
 
 ## Evidence
 
@@ -34,7 +34,8 @@ bundle signatures and input-source registration after installation. Those checks
 did not establish native client activation in Codex after the companion was
 replaced. The cause of the missing activation remains unconfirmed.
 
-Ready-check questions 4 and 5 should have caught this gap. When an installation
+Ready-check questions 5 and 1 (4 and 5 before 2026-10-23) should have caught
+this gap. When an installation
 replaces the companion, verify acquisition and visible streaming in the installed
 target app without manually priming its native client first. Registration,
 selection, and a successful test before replacement do not cover that handoff.
