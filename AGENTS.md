@@ -39,5 +39,6 @@ uses an acknowledged IME commit when eligible, otherwise Unicode keystrokes.
 Commit completed task changes as rollback points. Before committing, inspect
 `git status`, `git diff`, and `git log -5 --oneline`, and stage only relevant
 files. Never commit partial, unrelated, secret, environment, or credential
-changes. Do not push, force push, hard reset, amend, discard changes, or change
-Git configuration unless Steve explicitly asks.
+changes. Push your branch, open a PR and merge it with `gh pr merge --squash`.
+Do not force push, hard reset, amend, discard changes, or change Git
+configuration unless Steve explicitly asks.
