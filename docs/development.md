@@ -93,3 +93,6 @@ permissions, and microphone route changes. Check that failed delivery is visible
 and does not modify a different field. Measure latency and resource use against
 the [baseline acceptance criteria](../specs/baseline.md#acceptance--baseline-done).
 Unit tests cannot establish those macOS integration outcomes.
+
+Put test windows and any visible check Steve authorized on Kosmos workspaces 8,
+9 or 0, never 1 to 4, and move none of his windows to make room.

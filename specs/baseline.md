@@ -24,6 +24,7 @@ Hold the dictation shortcut, which defaults to fn, to record and preview volatil
 - Single locale per install (start with `en-US`); locale switching is a post-baseline concern.
 - Target footprint: under ~50 MB resident while idle, under ~100 MB while transcribing. Bakeoff measured `SpeechTranscriber` at ~27 MB RSS.
 - Keep modules focused by responsibility (see `AGENTS.md`) rather than policing one global budget. The core dictation path held to the original ~2,000 LOC target; the correction layer, opt-in audio capture, and diagnostic sink shipped on top of it (see "Shipped Since Baseline"), so the whole app now runs larger. Cut scope at the module level.
+- Every app streams text into its field through inline preview, so repair an app's native path instead of excluding it or showing its preview only in the HUD.
 
 ## Non-Goals (baseline)
 
